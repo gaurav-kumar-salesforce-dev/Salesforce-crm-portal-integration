@@ -344,6 +344,16 @@ function objectFromId(id) {
   }[prefix] || '';
 }
 
+function normalizePicklistValues(field) {
+  return (field.picklistValues || [])
+    .filter(item => item.active)
+    .map(item => ({
+      value: item.value,
+      label: item.label || item.value,
+      validFor: item.validFor || ''
+    }));
+}
+
 async function buildLookupLabels(record, fields) {
   const lookups = fields
     .filter((field) => field.type === 'reference' && record[field.name])
@@ -715,7 +725,9 @@ app.get('/api/:object/fields', async (req, res) => {
         createable: field.createable,
         nillable: field.nillable,
         referenceTo: field.referenceTo || [],
-        picklistValues: field.picklistValues?.filter(item => item.active).map(item => item.value) || []
+        controllerName: field.controllerName || '',
+        controllerValues: field.controllerValues || {},
+        picklistValues: normalizePicklistValues(field)
       }));
     res.json({ fields });
   } catch (err) {
@@ -1096,7 +1108,9 @@ app.get('/api/:object/:id', async (req, res) => {
         nillable: field.nillable,
         referenceTo: field.referenceTo || [],
         relationshipName: field.relationshipName || '',
-        picklistValues: field.picklistValues?.filter(item => item.active).map(item => item.value) || []
+        controllerName: field.controllerName || '',
+        controllerValues: field.controllerValues || {},
+        picklistValues: normalizePicklistValues(field)
       }));
     const lookupLabels = await buildLookupLabels(record, fields);
     res.json({ record, fields, lookupLabels });
