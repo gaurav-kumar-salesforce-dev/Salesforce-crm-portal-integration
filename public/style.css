@@ -1178,6 +1178,41 @@ select.form-ctrl { cursor: pointer; }
 select.form-ctrl.multi-select { min-height: 96px; }
 textarea.form-ctrl { resize: vertical; min-height: 80px; line-height: 1.5; }
 
+.form-section,
+.detail-section {
+  margin-bottom: 16px;
+}
+
+.form-section-title,
+.detail-section-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 10px;
+  margin-bottom: 12px;
+  border-radius: var(--r-sm);
+  background: var(--surface-2);
+  color: var(--text-1);
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.form-section-title svg,
+.detail-section-title svg {
+  width: 14px;
+  height: 14px;
+  fill: currentColor;
+}
+
+.readonly-field .form-ctrl,
+.readonly-field input,
+.readonly-field select,
+.readonly-field textarea {
+  background: var(--surface-2);
+  color: var(--text-2);
+  cursor: not-allowed;
+}
+
 .form-check {
   justify-content: flex-start;
   min-height: 40px;

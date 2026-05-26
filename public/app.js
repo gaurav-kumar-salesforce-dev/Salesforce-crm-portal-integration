@@ -46,6 +46,73 @@ const OBJECT_META = {
   }
 };
 
+const OBJECT_FIELD_LAYOUTS = {
+  Account: [
+    { title: 'Account Information', fields: [
+      'Name', { name: 'OwnerId', readOnly: true }, 'Type', 'ParentId', 'Customer #', 'Phone',
+      'Payment Terms', 'Website', 'Sage ID', 'Compliance Status', 'Riggio Vendor Account Number',
+      'Tax-Exempt', 'Tax-Exempt Expiration', 'Industry', 'Industry (Custom)', 'Customer Status',
+      'Territory', 'Division', 'Relationship Status'
+    ] },
+    { title: 'Description Information', fields: ['Description'] },
+    { title: 'Address Information', fields: [
+      'BillingCountry', 'ShippingCountry', 'BillingStreet', 'ShippingStreet', 'BillingCity',
+      'BillingState', 'BillingPostalCode', 'ShippingCity', 'ShippingState', 'ShippingPostalCode'
+    ] }
+  ],
+  Contact: [
+    { title: 'Contact Information', fields: [
+      'Salutation', { name: 'OwnerId', readOnly: true }, 'FirstName', 'LastName', 'AccountId',
+      'Email', 'Title', 'Phone', 'Customer #', 'Mobile', 'Primary', 'LinkedIn Profile'
+    ] },
+    { title: 'Address Information', fields: ['MailingCountry', 'MailingStreet', 'MailingCity', 'MailingState', 'MailingPostalCode'] },
+    { title: 'System Information', fields: [{ name: 'CreatedById', readOnly: true }] }
+  ],
+  Lead: [
+    { title: 'Lead Information', fields: [
+      { name: 'OwnerId', readOnly: true }, 'Phone', 'Salutation', 'Mobile', 'FirstName', 'LastName',
+      'Company', 'Fax', 'Title', 'Email', 'LeadSource', 'Website', 'Industry', 'Status',
+      'AnnualRevenue', 'Rating', 'NumberOfEmployees'
+    ] },
+    { title: 'Address', fields: ['Country', 'Street', 'City', 'State', 'PostalCode'] },
+    { title: 'Additional Information', fields: [
+      'Product Interest', 'SIC Code', 'Current Generator(s)', 'Primary', 'Number of Locations',
+      { name: 'CreatedById', readOnly: true }, { name: 'LastModifiedById', readOnly: true }, 'Description'
+    ] }
+  ],
+  Case: [
+    { title: 'Case Information', fields: [
+      { name: 'OwnerId', readOnly: true }, 'Status', { name: 'CaseNumber', readOnly: true }, 'Priority',
+      'ContactId', { name: 'Contact Phone', readOnly: true }, 'AccountId', { name: 'Contact Email', readOnly: true },
+      'Type', 'Origin', 'Reason', 'WebEmail', 'SuppliedEmail', 'WebCompany', 'SuppliedCompany',
+      'WebName', 'SuppliedName', 'WebPhone', 'SuppliedPhone', { name: 'CreatedDate', readOnly: true },
+      { name: 'ClosedDate', readOnly: true }, 'Product', 'Engineering Req Number', 'Potential Liability',
+      'SLA Violation', { name: 'CreatedById', readOnly: true }, { name: 'LastModifiedById', readOnly: true },
+      'Subject', 'Description', 'Internal Comments'
+    ] }
+  ],
+  Opportunity: [
+    { title: 'Opportunity Information', fields: [
+      'Name', { name: 'OwnerId', readOnly: true }, 'AccountId', 'CloseDate', 'Amount', 'StageName',
+      'Invoice Number', 'Pricebook2Id', 'Date Invoice Sent', 'Customer PO', 'Total Hours (Job)',
+      { name: 'Vendor Total Cost', readOnly: true }, { name: 'Riggio Total Cost for Parts (Actual)', readOnly: true }
+    ] },
+    { title: 'Additional Information', fields: ['NextStep', 'LeadSource'] },
+    { title: 'Description Information', fields: ['SOW', 'Description', { name: 'CreatedById', readOnly: true }, { name: 'LastModifiedById', readOnly: true }, 'Probability'] }
+  ],
+  Campaign: [
+    { title: 'Campaign Information', fields: [
+      { name: 'OwnerId', readOnly: true }, { name: 'NumberOfLeads', readOnly: true }, 'Name',
+      { name: 'NumberOfConvertedLeads', readOnly: true }, 'IsActive', { name: 'NumberOfContacts', readOnly: true },
+      'Type', { name: 'NumberOfResponses', readOnly: true }, 'Status', { name: 'NumberOfOpportunities', readOnly: true },
+      'StartDate', { name: 'NumberOfWonOpportunities', readOnly: true }, 'EndDate',
+      { name: 'AmountWonOpportunities', readOnly: true }, 'ExpectedRevenue', { name: 'AmountAllOpportunities', readOnly: true },
+      'BudgetedCost', 'ActualCost', 'ExpectedResponse', 'NumberSent', 'ParentId', 'Event',
+      { name: 'CreatedById', readOnly: true }, { name: 'LastModifiedById', readOnly: true }, 'Description'
+    ] }
+  ]
+};
+
 let currentObject = 'Account';
 let currentRecords = [];
 let currentColumns = [];
@@ -674,17 +741,19 @@ async function openRecordModal(title, record, fields = null) {
   $('modalObjIcon').innerHTML = objectIcon(currentObject);
   $('modalTitle').textContent = title;
   const fullFields = fields || await getEditableFields(record);
-  $('modalBody').innerHTML = `
-    <div class="form-grid">
-      ${fullFields.map((field) => renderFieldControl(field.name || field, record, field)).join('')}
-    </div>
-  `;
+  const sections = getLayoutSections(currentObject, fullFields);
+  $('modalBody').innerHTML = sections.length
+    ? renderFormSections(sections, record)
+    : `<div class="form-grid">${fullFields.map((field) => renderFieldControl(field.name || field, record, field)).join('')}</div>`;
   $('modalOverlay').classList.add('open');
 }
 
 async function getEditableFields(record) {
   try {
     const data = await api(`/api/${currentObject}/fields`);
+    const layoutSections = getLayoutSections(currentObject, data.fields || []);
+    if (layoutSections.length) return layoutSections.flatMap((section) => section.fields);
+
     const fields = data.fields
       .filter((field) => editingRecord ? field.updateable : field.createable)
       .filter((field) => !['Id', 'IsDeleted', 'CreatedDate', 'CreatedById', 'LastModifiedDate', 'LastModifiedById', 'SystemModstamp', 'LastViewedDate', 'LastReferencedDate'].includes(field.name))
@@ -696,25 +765,78 @@ async function getEditableFields(record) {
   }
 }
 
+function getLayoutSections(objectName, fields = []) {
+  const layout = OBJECT_FIELD_LAYOUTS[objectName];
+  if (!layout) return [];
+  const fieldList = (fields || []).map((field) => typeof field === 'string' ? { name: field, label: labelFor(field) } : field);
+  const resolved = layout.map((section) => ({
+    title: section.title,
+    fields: section.fields
+      .map((entry) => resolveLayoutField(entry, fieldList))
+      .filter(Boolean)
+  })).filter((section) => section.fields.length);
+  return resolved;
+}
+
+function resolveLayoutField(entry, fields) {
+  const config = typeof entry === 'string' ? { name: entry } : entry;
+  const wanted = normalizeFieldKey(config.name);
+  const field = fields.find((item) => {
+    const aliases = [
+      item.name,
+      item.label,
+      item.name?.replace(/Id$/, ''),
+      labelFor(item.name || '')
+    ].map(normalizeFieldKey);
+    return aliases.includes(wanted);
+  });
+  if (!field) return null;
+  return {
+    ...field,
+    readOnly: Boolean(config.readOnly),
+    layoutLabel: config.label
+  };
+}
+
+function normalizeFieldKey(value = '') {
+  return String(value).toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+
+function renderFormSections(sections, record) {
+  return sections.map((section) => `
+    <section class="form-section">
+      <div class="form-section-title">${utilityIconSvg('chevronDown')}<span>${escapeHtml(section.title)}</span></div>
+      <div class="form-grid">
+        ${section.fields.map((field) => renderFieldControl(field.name, record, field)).join('')}
+      </div>
+    </section>
+  `).join('');
+}
+
 function renderFieldControl(field, record, fieldMeta = {}) {
   fieldMeta = typeof fieldMeta === 'string' ? { name: field, label: labelFor(field) } : fieldMeta;
   const lookup = OBJECT_META[currentObject].lookups?.[field] || (fieldMeta.referenceTo?.length ? { object: fieldMeta.referenceTo[0], label: fieldMeta.label || labelFor(field) } : null);
-  const label = fieldMeta.label || lookup?.label || labelFor(field);
+  const label = fieldMeta.layoutLabel || fieldMeta.label || lookup?.label || labelFor(field);
   const value = record[field] ?? '';
   const type = fieldMeta.type || 'string';
   const required = fieldMeta.nillable === false ? '<span class="form-req">*</span>' : '';
   const spanClass = shouldSpanField(field, type) ? 'span-2' : '';
+  const readOnly = Boolean(fieldMeta.readOnly)
+    || (editingRecord && fieldMeta.updateable === false)
+    || (!editingRecord && fieldMeta.createable === false);
+  const disabled = readOnly ? 'disabled data-readonly="true"' : '';
+  const readonlyClass = readOnly ? ' readonly-field' : '';
 
   if (lookup) {
-    const displayValue = getValue(record, field.replace(/Id$/, '.Name')) || '';
+    const displayValue = getLookupDisplayValue(field, record, fieldMeta);
     return `
-      <div class="form-group">
+      <div class="form-group${readonlyClass}">
         <label class="form-label" for="field-${field}-search">${escapeHtml(label)}${required}</label>
         <div class="lookup-wrap">
           <input class="form-ctrl" id="field-${field}-search" value="${escapeHtml(displayValue)}"
                  placeholder="Search ${escapeHtml(lookup.object)}..." autocomplete="off"
-                 oninput="lookupSearch('${field}', '${lookup.object}', this.value)">
-          <input type="hidden" id="field-${field}" name="${field}" value="${escapeHtml(record[field] || '')}">
+                 oninput="lookupSearch('${field}', '${lookup.object}', this.value)" ${disabled}>
+          <input type="hidden" id="field-${field}" name="${field}" value="${escapeHtml(record[field] || '')}" ${disabled}>
           <div class="lookup-results" id="lookup-${field}"></div>
         </div>
       </div>
@@ -723,9 +845,9 @@ function renderFieldControl(field, record, fieldMeta = {}) {
 
   if (type === 'picklist') {
     return `
-      <div class="form-group ${spanClass}">
+      <div class="form-group ${spanClass}${readonlyClass}">
         <label class="form-label" for="field-${field}">${escapeHtml(label)}${required}</label>
-        <select class="form-ctrl" id="field-${field}" name="${field}">
+        <select class="form-ctrl" id="field-${field}" name="${field}" ${disabled}>
           <option value=""></option>
           ${renderPicklistOptions(fieldMeta.picklistValues, value)}
         </select>
@@ -736,9 +858,9 @@ function renderFieldControl(field, record, fieldMeta = {}) {
   if (type === 'multipicklist') {
     const selectedValues = String(value || '').split(';').filter(Boolean);
     return `
-      <div class="form-group ${spanClass}">
+      <div class="form-group ${spanClass}${readonlyClass}">
         <label class="form-label" for="field-${field}">${escapeHtml(label)}${required}</label>
-        <select class="form-ctrl multi-select" id="field-${field}" name="${field}" multiple>
+        <select class="form-ctrl multi-select" id="field-${field}" name="${field}" multiple ${disabled}>
           ${renderPicklistOptions(fieldMeta.picklistValues, selectedValues)}
         </select>
       </div>
@@ -747,18 +869,18 @@ function renderFieldControl(field, record, fieldMeta = {}) {
 
   if (type === 'textarea' || type === 'encryptedtextarea' || type === 'address') {
     return `
-      <div class="form-group span-2">
+      <div class="form-group span-2${readonlyClass}">
         <label class="form-label" for="field-${field}">${escapeHtml(label)}${required}</label>
-        <textarea class="form-ctrl" id="field-${field}" name="${field}">${escapeHtml(formatEditableValue(value, type))}</textarea>
+        <textarea class="form-ctrl" id="field-${field}" name="${field}" ${disabled}>${escapeHtml(formatEditableValue(value, type))}</textarea>
       </div>
     `;
   }
 
   if (type === 'boolean') {
     return `
-      <div class="form-group ${spanClass}">
+      <div class="form-group ${spanClass}${readonlyClass}">
         <label class="check-item form-check">
-          <input type="checkbox" id="field-${field}" name="${field}" ${value ? 'checked' : ''}>
+          <input type="checkbox" id="field-${field}" name="${field}" ${value ? 'checked' : ''} ${disabled}>
           <span>${escapeHtml(label)}${required}</span>
         </label>
       </div>
@@ -779,9 +901,9 @@ function renderFieldControl(field, record, fieldMeta = {}) {
   }[type] || 'text';
 
   return `
-    <div class="form-group ${spanClass}">
+    <div class="form-group ${spanClass}${readonlyClass}">
       <label class="form-label" for="field-${field}">${escapeHtml(label)}${required}</label>
-      <input class="form-ctrl" id="field-${field}" name="${field}" type="${inputType}" value="${escapeHtml(formatEditableValue(value, type))}">
+      <input class="form-ctrl" id="field-${field}" name="${field}" type="${inputType}" value="${escapeHtml(formatEditableValue(value, type))}" ${disabled}>
     </div>
   `;
 }
@@ -795,6 +917,16 @@ function renderPicklistOptions(values = [], selected) {
 
 function shouldSpanField(field, type) {
   return ['Description', 'Website'].includes(field) || ['textarea', 'encryptedtextarea', 'multipicklist', 'address'].includes(type);
+}
+
+function getLookupDisplayValue(field, record = {}, fieldMeta = {}) {
+  const lookup = detailLookupLabels[field];
+  if (lookup?.name && (!lookup.id || lookup.id === record[field])) return lookup.name;
+
+  const relationshipName = fieldMeta.relationshipName || field.replace(/Id$/, '');
+  return getValue(record, `${relationshipName}.Name`)
+    || getValue(record, field.replace(/Id$/, '.Name'))
+    || '';
 }
 
 function formatEditableValue(value, type) {
@@ -923,9 +1055,7 @@ function renderRecordDetailPage(objectName, record, fields, displayFields, title
             ${renderRelatedPanel(objectName)}
           </div>
           <div id="recordDetailsPanel" class="record-tab-panel" style="display:none">
-            <div class="detail-grid">
-              ${displayFields.map((field) => renderDetailField(objectName, record, field)).join('')}
-            </div>
+            ${renderConfiguredDetailSections(objectName, record, fields, displayFields)}
           </div>
         </section>
         <aside class="record-side">
@@ -944,6 +1074,22 @@ function renderRecordDetailPage(objectName, record, fields, displayFields, title
       </div>
     </div>
   `;
+}
+
+function renderConfiguredDetailSections(objectName, record, fields, fallbackFields) {
+  const sections = getLayoutSections(objectName, fields);
+  if (!sections.length) {
+    return `<div class="detail-grid">${fallbackFields.map((field) => renderDetailField(objectName, record, field)).join('')}</div>`;
+  }
+
+  return sections.map((section) => `
+    <section class="detail-section">
+      <div class="detail-section-title">${utilityIconSvg('chevronDown')}<span>${escapeHtml(section.title)}</span></div>
+      <div class="detail-grid">
+        ${section.fields.map((field) => renderDetailField(objectName, record, field)).join('')}
+      </div>
+    </section>
+  `).join('');
 }
 
 function getSummaryFields(objectName) {
@@ -990,7 +1136,7 @@ function editCurrentDetailRecord() {
   openRecordModal(
     `Edit ${detailRecordState.objectName}`,
     detailRecordState.record,
-    detailRecordState.fields.filter((field) => field.updateable)
+    detailRecordState.fields
   );
 }
 
@@ -1536,6 +1682,7 @@ async function sendCampaignEmail() {
 async function saveRecord() {
   const body = {};
   $('modalBody').querySelectorAll('[name]').forEach((input) => {
+    if (input.disabled || input.dataset.readonly === 'true') return;
     if (input.type === 'checkbox') {
       body[input.name] = input.checked;
       return;

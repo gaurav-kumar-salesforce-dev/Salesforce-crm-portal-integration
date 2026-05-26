@@ -194,6 +194,11 @@ const OBJECTS = {
     orderBy     : 'CreatedDate DESC',
     searchFields: ['Name', 'Type', 'Status']
   },
+  Pricebook2: {
+    fields      : 'Id, Name, IsActive, Description',
+    orderBy     : 'Name',
+    searchFields: ['Name', 'Description']
+  },
   User: {
     fields      : 'Id, Name, Email, Username, Title, IsActive',
     orderBy     : 'Name',
@@ -1088,6 +1093,7 @@ app.get('/api/:object/:id', async (req, res) => {
         type: field.type,
         updateable: field.updateable,
         createable: field.createable,
+        nillable: field.nillable,
         referenceTo: field.referenceTo || [],
         relationshipName: field.relationshipName || '',
         picklistValues: field.picklistValues?.filter(item => item.active).map(item => item.value) || []
