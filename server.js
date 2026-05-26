@@ -189,6 +189,11 @@ const OBJECTS = {
     orderBy     : 'LastName',
     searchFields: ['LastName', 'FirstName', 'Email', 'Phone', 'Company']
   },
+  Campaign: {
+    fields      : 'Id, Name, Type, Status, StartDate, EndDate, IsActive, Description, NumberOfContacts, NumberOfLeads, NumberOfResponses',
+    orderBy     : 'CreatedDate DESC',
+    searchFields: ['Name', 'Type', 'Status']
+  },
   User: {
     fields      : 'Id, Name, Email, Username, Title, IsActive',
     orderBy     : 'Name',
@@ -196,13 +201,17 @@ const OBJECTS = {
   }
 };
 
+function escapeSOQL(value) {
+  return String(value || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+}
+
 function buildWhereClause(objectName, search, extraWhere) {
   const cfg = OBJECTS[objectName];
   const conditions = [];
 
   if (search && search.trim()) {
     // Escape single quotes to prevent SOQL injection
-    const safe = search.replace(/'/g, "\\'");
+    const safe = escapeSOQL(search);
     const parts = cfg.searchFields.map(f => `${f} LIKE '%${safe}%'`);
     conditions.push(`(${parts.join(' OR ')})`);
   }
@@ -226,15 +235,142 @@ function buildCountSOQL(objectName, search, extraWhere) {
   return `SELECT COUNT() FROM ${objectName}${buildWhereClause(objectName, search, extraWhere)}`;
 }
 
+function stripHtml(value = '') {
+  return String(value)
+    .replace(/<!\[CDATA\[/g, '')
+    .replace(/\]\]>/g, '')
+    .replace(/<style[\s\S]*?<\/style>/gi, '')
+    .replace(/<script[\s\S]*?<\/script>/gi, '')
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/p>/gi, '\n\n')
+    .replace(/<[^>]+>/g, '')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .trim();
+}
+
+function cleanTemplateBody(value = '') {
+  return String(value)
+    .replace(/<!\[CDATA\[/g, '')
+    .replace(/\]\]>/g, '');
+}
+
+function buildTemplateContext(recipient = {}, campaign = {}, sender = {}, organization = {}) {
+  const replacements = {
+    'Contact.Name': recipient.type === 'Contact' ? recipient.name : '',
+    'Contact.FirstName': recipient.type === 'Contact' ? recipient.firstName || '' : '',
+    'Contact.LastName': recipient.type === 'Contact' ? recipient.lastName || '' : '',
+    'Contact.Email': recipient.type === 'Contact' ? recipient.email || '' : '',
+    'Contact.Title': recipient.type === 'Contact' ? recipient.title || '' : '',
+    'Lead.Name': recipient.type === 'Lead' ? recipient.name : '',
+    'Lead.FirstName': recipient.type === 'Lead' ? recipient.firstName || '' : '',
+    'Lead.LastName': recipient.type === 'Lead' ? recipient.lastName || '' : '',
+    'Lead.Email': recipient.type === 'Lead' ? recipient.email || '' : '',
+    'Lead.Title': recipient.type === 'Lead' ? recipient.title || '' : '',
+    'Lead.Company': recipient.type === 'Lead' ? recipient.company || '' : '',
+    'Recipient.Name': recipient.name || '',
+    'Recipient.FirstName': recipient.firstName || '',
+    'Recipient.LastName': recipient.lastName || '',
+    'Recipient.Email': recipient.email || '',
+    'Recipient.Title': recipient.title || '',
+    'Campaign.Name': campaign.Name || '',
+    'Campaign.Type': campaign.Type || '',
+    'Campaign.Status': campaign.Status || '',
+    'Campaign.StartDate': campaign.StartDate || '',
+    'Campaign.EndDate': campaign.EndDate || '',
+    'Sender.Name': sender.Name || sender.name || '',
+    'Sender.FirstName': sender.FirstName || '',
+    'Sender.LastName': sender.LastName || '',
+    'Sender.Email': sender.Email || sender.email || '',
+    'Sender.Title': sender.Title || sender.title || '',
+    'User.Name': sender.Name || sender.name || '',
+    'User.FirstName': sender.FirstName || '',
+    'User.LastName': sender.LastName || '',
+    'User.Email': sender.Email || sender.email || '',
+    'Organization.Name': organization.Name || ''
+  };
+
+  return replacements;
+}
+
+function mergeTemplate(value = '', recipient = {}, campaign = {}, sender = {}, organization = {}) {
+  const replacements = buildTemplateContext(recipient, campaign, sender, organization);
+  return String(value || '')
+    .replace(/\{\{\{([\w.]+)\}\}\}/g, (match, key) =>
+      Object.prototype.hasOwnProperty.call(replacements, key) ? replacements[key] : match)
+    .replace(/\{\{([\w.]+)\}\}/g, (match, key) =>
+      Object.prototype.hasOwnProperty.call(replacements, key) ? replacements[key] : match)
+    .replace(/\{!([\w.]+)\}/g, (match, key) =>
+      Object.prototype.hasOwnProperty.call(replacements, key) ? replacements[key] : match);
+}
+
+function normalizeCampaignMember(record) {
+  const isContact = Boolean(record.ContactId);
+  const person = isContact ? record.Contact : record.Lead;
+  return {
+    id: record.Id,
+    status: record.Status,
+    type: isContact ? 'Contact' : 'Lead',
+    personId: record.ContactId || record.LeadId,
+    name: person?.Name || '',
+    firstName: person?.FirstName || '',
+    lastName: person?.LastName || '',
+    email: person?.Email || '',
+    phone: person?.Phone || '',
+    title: person?.Title || '',
+    company: isContact ? person?.Account?.Name || '' : person?.Company || ''
+  };
+}
+
 // ─── Error Handler ────────────────────────────────────────────
 function handleSFError(err, res, context) {
   const sfErr = err.response?.data;
-  const msg   = Array.isArray(sfErr)
-    ? sfErr[0]?.message
-    : sfErr?.error_description || err.message;
+  const msg = formatSalesforceError(sfErr) || err.message;
 
   console.error(`❌ ${context}:`, sfErr || err.message);
   res.status(err.response?.status || 500).json({ error: msg || 'Salesforce API error' });
+}
+
+function formatSalesforceError(value) {
+  if (!value) return '';
+  if (typeof value === 'string') return value;
+  if (Array.isArray(value)) return value.map(formatSalesforceError).filter(Boolean).join('; ');
+  if (value.message) return value.message;
+  if (value.error_description) return value.error_description;
+  if (value.errors) return formatSalesforceError(value.errors);
+  if (value.outputValues?.errors) return formatSalesforceError(value.outputValues.errors);
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return '';
+  }
+}
+
+function extractActionFailures(result) {
+  const items = Array.isArray(result) ? result : result?.outputs || result?.results || [];
+  return items
+    .filter((item) => item && item.isSuccess === false)
+    .map((item) => formatSalesforceError(item.errors || item.outputValues?.errors || item))
+    .filter(Boolean);
+}
+
+async function getEmailMergeContext() {
+  const me = await sfGet('/chatter/users/me');
+  const [userData, orgData] = await Promise.all([
+    sfGet('/query', {
+      q: `SELECT Id, Name, FirstName, LastName, Email, Title FROM User WHERE Id = '${escapeSOQL(me.id)}' LIMIT 1`
+    }),
+    sfGet('/query', {
+      q: 'SELECT Id, Name FROM Organization LIMIT 1'
+    })
+  ]);
+  return {
+    sender: userData.records?.[0] || { Name: me.name, Email: me.email, Title: me.title },
+    organization: orgData.records?.[0] || {}
+  };
 }
 
 // ─── Routes ───────────────────────────────────────────────────
@@ -477,7 +613,8 @@ app.get('/api/search/global', async (req, res) => {
     `Contact(Id, Name, Email, Title),`,
     `Opportunity(Id, Name, StageName, Amount),`,
     `Case(Id, CaseNumber, Subject, Status),`,
-    `Lead(Id, Name, Email, Company)`,
+    `Lead(Id, Name, Email, Company),`,
+    `Campaign(Id, Name, Status, Type)`,
     `LIMIT 40`
   ].join(' ');
 
@@ -502,6 +639,211 @@ app.get('/api/meta/:object/picklist/:field', async (req, res) => {
   }
 });
 
+app.get('/api/campaigns/:id/members', async (req, res) => {
+  const campaignId = escapeSOQL(req.params.id);
+  try {
+    const soql = `
+      SELECT Id, Status, ContactId, LeadId,
+        Contact.Id, Contact.FirstName, Contact.LastName, Contact.Name, Contact.Email, Contact.Phone, Contact.Title, Contact.Account.Name,
+        Lead.Id, Lead.FirstName, Lead.LastName, Lead.Name, Lead.Email, Lead.Phone, Lead.Title, Lead.Company
+      FROM CampaignMember
+      WHERE CampaignId = '${campaignId}'
+      ORDER BY CreatedDate DESC
+      LIMIT 500
+    `;
+    const data = await sfGet('/query', { q: soql.replace(/\s+/g, ' ').trim() });
+    res.json({ records: (data.records || []).map(normalizeCampaignMember), totalSize: data.totalSize || 0 });
+  } catch (err) {
+    handleSFError(err, res, `Campaign members ${req.params.id}`);
+  }
+});
+
+app.get('/api/campaigns/:id/candidates/:object', async (req, res) => {
+  const { id, object } = req.params;
+  if (!['Contact', 'Lead'].includes(object)) return res.status(400).json({ error: 'Object must be Contact or Lead' });
+
+  try {
+    const search = String(req.query.search || '').trim();
+    const cfg = OBJECTS[object];
+    const where = buildWhereClause(object, search, object === 'Lead' ? "IsConverted = false" : '');
+    const soql = `SELECT ${cfg.fields} FROM ${object}${where} ORDER BY ${cfg.orderBy} LIMIT 100`;
+    const [people, members] = await Promise.all([
+      sfGet('/query', { q: soql }),
+      sfGet('/query', {
+        q: `SELECT ContactId, LeadId FROM CampaignMember WHERE CampaignId = '${escapeSOQL(id)}' LIMIT 2000`
+      })
+    ]);
+    const existing = new Set((members.records || []).map((record) => record.ContactId || record.LeadId).filter(Boolean));
+    res.json({
+      records: (people.records || []).map((record) => ({
+        ...record,
+        alreadyMember: existing.has(record.Id)
+      }))
+    });
+  } catch (err) {
+    handleSFError(err, res, `Campaign ${req.params.id} candidates ${object}`);
+  }
+});
+
+app.post('/api/campaigns/:id/members', async (req, res) => {
+  const { id } = req.params;
+  const { object, ids = [], status } = req.body || {};
+  if (!['Contact', 'Lead'].includes(object)) return res.status(400).json({ error: 'Object must be Contact or Lead' });
+
+  const uniqueIds = [...new Set(ids.map(String).filter(Boolean))].slice(0, 200);
+  if (!uniqueIds.length) return res.status(400).json({ error: 'Select at least one record' });
+
+  try {
+    const idList = uniqueIds.map((recordId) => `'${escapeSOQL(recordId)}'`).join(',');
+    const idField = object === 'Contact' ? 'ContactId' : 'LeadId';
+    const existingData = await sfGet('/query', {
+      q: `SELECT ${idField} FROM CampaignMember WHERE CampaignId = '${escapeSOQL(id)}' AND ${idField} IN (${idList})`
+    });
+    const existing = new Set((existingData.records || []).map((record) => record[idField]).filter(Boolean));
+    const records = uniqueIds
+      .filter((recordId) => !existing.has(recordId))
+      .map((recordId) => ({
+        attributes: { type: 'CampaignMember' },
+        CampaignId: id,
+        [idField]: recordId,
+        ...(status ? { Status: status } : {})
+      }));
+
+    if (!records.length) {
+      return res.json({ success: true, created: 0, skipped: uniqueIds.length, results: [] });
+    }
+
+    const result = await sfPost('/composite/sobjects', { allOrNone: false, records });
+    const results = Array.isArray(result) ? result : result.results || [];
+    res.json({
+      success: true,
+      created: results.filter((item) => item.success).length,
+      skipped: existing.size,
+      results
+    });
+  } catch (err) {
+    handleSFError(err, res, `Add campaign members ${id}`);
+  }
+});
+
+app.get('/api/campaigns/:id/email-templates', async (req, res) => {
+  try {
+    const data = await sfGet('/query', {
+      q: "SELECT Id, Name, DeveloperName, Subject, TemplateType, IsActive, FolderName FROM EmailTemplate WHERE IsActive = true ORDER BY Name LIMIT 200"
+    });
+    res.json({ records: data.records || [] });
+  } catch (err) {
+    handleSFError(err, res, `Email templates for campaign ${req.params.id}`);
+  }
+});
+
+app.post('/api/campaigns/:id/email-preview', async (req, res) => {
+  const { templateId, memberIds = [] } = req.body || {};
+  if (!templateId) return res.status(400).json({ error: 'Select an email template' });
+
+  try {
+    const [campaign, template, context] = await Promise.all([
+      sfGet(`/sobjects/Campaign/${req.params.id}`),
+      sfGet(`/sobjects/EmailTemplate/${templateId}`),
+      getEmailMergeContext()
+    ]);
+    let recipient = {};
+    if (memberIds.length) {
+      const memberData = await sfGet('/query', {
+        q: `
+          SELECT Id, Status, ContactId, LeadId,
+            Contact.FirstName, Contact.LastName, Contact.Name, Contact.Email,
+            Lead.FirstName, Lead.LastName, Lead.Name, Lead.Email
+          FROM CampaignMember
+          WHERE Id = '${escapeSOQL(memberIds[0])}'
+          LIMIT 1
+        `.replace(/\s+/g, ' ').trim()
+      });
+      recipient = normalizeCampaignMember(memberData.records?.[0] || {});
+    }
+
+    const html = cleanTemplateBody(template.HtmlValue || template.Body || '');
+    const mergedHtml = mergeTemplate(html, recipient, campaign, context.sender, context.organization);
+    const subject = mergeTemplate(template.Subject || '', recipient, campaign, context.sender, context.organization);
+    res.json({
+      subject,
+      html: mergedHtml,
+      text: stripHtml(mergedHtml),
+      recipient
+    });
+  } catch (err) {
+    handleSFError(err, res, `Email preview ${req.params.id}`);
+  }
+});
+
+app.post('/api/campaigns/:id/send-email', async (req, res) => {
+  const { templateId, memberIds = [] } = req.body || {};
+  const selectedIds = [...new Set(memberIds.map(String).filter(Boolean))].slice(0, 100);
+  if (!templateId) return res.status(400).json({ error: 'Select an email template' });
+  if (!selectedIds.length) return res.status(400).json({ error: 'Select at least one campaign member' });
+
+  try {
+    const [campaign, template, context] = await Promise.all([
+      sfGet(`/sobjects/Campaign/${req.params.id}`),
+      sfGet(`/sobjects/EmailTemplate/${templateId}`),
+      getEmailMergeContext()
+    ]);
+    const memberIdList = selectedIds.map((id) => `'${escapeSOQL(id)}'`).join(',');
+    const memberData = await sfGet('/query', {
+      q: `
+        SELECT Id, Status, ContactId, LeadId,
+          Contact.FirstName, Contact.LastName, Contact.Name, Contact.Email,
+          Lead.FirstName, Lead.LastName, Lead.Name, Lead.Email
+        FROM CampaignMember
+        WHERE Id IN (${memberIdList})
+      `.replace(/\s+/g, ' ').trim()
+    });
+    const members = (memberData.records || []).map(normalizeCampaignMember).filter((member) => member.email);
+    if (!members.length) return res.status(400).json({ error: 'Selected members do not have email addresses' });
+
+    const templateBody = cleanTemplateBody(template.HtmlValue || template.Body || '');
+    const isHtmlTemplate = Boolean(template.HtmlValue);
+    const mergedMessages = members.map((member) => {
+      const mergedBody = mergeTemplate(templateBody, member, campaign, context.sender, context.organization);
+      const subject = mergeTemplate(template.Subject || campaign.Name || 'Campaign email', member, campaign, context.sender, context.organization);
+      return {
+        member,
+        subject,
+        body: mergedBody,
+        textBody: stripHtml(mergedBody),
+        input: {
+        emailAddresses: member.email,
+          emailSubject: subject,
+        emailBody: isHtmlTemplate ? mergedBody : stripHtml(mergedBody),
+        sendRichBody: isHtmlTemplate,
+        useLineBreaks: !isHtmlTemplate,
+        senderType: 'CurrentUser',
+        recipientId: member.personId,
+        relatedRecordId: campaign.Id,
+        logEmailOnSend: true
+        }
+      };
+    });
+    const inputs = mergedMessages.map((message) => message.input);
+
+    const result = await sfPost('/actions/standard/emailSimple', { inputs });
+    const failures = extractActionFailures(result);
+    if (failures.length) {
+      return res.status(400).json({ error: failures.join('; '), result });
+    }
+
+    res.json({
+      success: true,
+      sent: inputs.length,
+      logged: inputs.length,
+      logWarning: '',
+      result
+    });
+  } catch (err) {
+    handleSFError(err, res, `Send campaign email ${req.params.id}`);
+  }
+});
+
 // List records
 app.get('/api/:object', async (req, res) => {
   const { object } = req.params;
@@ -517,9 +859,10 @@ app.get('/api/:object', async (req, res) => {
       sfGet('/query', { q: soql }),
       sfGet('/query', { q: countSOQL })
     ]);
+    const countValue = Number(countData.records?.[0]?.expr0);
     res.json({
       ...data,
-      totalSize: countData.records?.[0]?.expr0 || 0,
+      totalSize: countValue > 0 ? countValue : data.totalSize || 0,
       page,
       pageSize
     });
@@ -607,7 +950,8 @@ app.get('/api/search/global', async (req, res) => {
     `Contact(Id, Name, Email, Title),`,
     `Opportunity(Id, Name, StageName, Amount),`,
     `Case(Id, CaseNumber, Subject, Status),`,
-    `Lead(Id, Name, Email, Company)`,
+    `Lead(Id, Name, Email, Company),`,
+    `Campaign(Id, Name, Status, Type)`,
     `LIMIT 40`
   ].join(' ');
 
