@@ -321,7 +321,101 @@ function normalizeCampaignMember(record) {
     email: person?.Email || '',
     phone: person?.Phone || '',
     title: person?.Title || '',
-    company: isContact ? person?.Account?.Name || '' : person?.Company || ''
+    company: isContact ? person?.Account?.Name || '' : person?.Company || '',
+    accountId: isContact ? person?.AccountId || '' : ''
+  };
+}
+
+function objectFromId(id) {
+  const prefix = String(id || '').slice(0, 3);
+  return {
+    '001': 'Account',
+    '003': 'Contact',
+    '006': 'Opportunity',
+    '500': 'Case',
+    '00Q': 'Lead',
+    '701': 'Campaign',
+    '005': 'User'
+  }[prefix] || '';
+}
+
+async function buildLookupLabels(record, fields) {
+  const lookups = fields
+    .filter((field) => field.type === 'reference' && record[field.name])
+    .map((field) => ({
+      field: field.name,
+      id: record[field.name],
+      object: objectFromId(record[field.name]) || field.referenceTo?.[0]
+    }))
+    .filter((item) => item.object);
+
+  const labels = {};
+  await Promise.all(lookups.map(async (lookup) => {
+    try {
+      const data = await sfGet('/query', {
+        q: `SELECT Id, Name FROM ${lookup.object} WHERE Id = '${escapeSOQL(lookup.id)}' LIMIT 1`
+      });
+      labels[lookup.field] = {
+        id: lookup.id,
+        object: lookup.object,
+        name: data.records?.[0]?.Name || lookup.id
+      };
+    } catch {
+      labels[lookup.field] = {
+        id: lookup.id,
+        object: lookup.object,
+        name: lookup.id
+      };
+    }
+  }));
+
+  return labels;
+}
+
+function normalizeActivity(record, source) {
+  if (source === 'EmailMessage') {
+    return {
+      id: record.Id,
+      type: 'Email',
+      subject: record.Subject || 'Email',
+      actor: record.FromName || record.FromAddress || '',
+      target: record.ToAddress || '',
+      when: record.MessageDate || record.CreatedDate,
+      status: record.Status || '',
+      isClosed: true,
+      body: stripHtml(record.TextBody || '')
+    };
+  }
+
+  if (source === 'Event') {
+    return {
+      id: record.Id,
+      type: 'Event',
+      subject: record.Subject || 'Event',
+      actor: record.Owner?.Name || '',
+      target: record.Who?.Name || '',
+      targetId: record.WhoId || '',
+      targetObject: objectFromId(record.WhoId),
+      when: record.StartDateTime || record.CreatedDate,
+      end: record.EndDateTime || '',
+      status: record.Location || '',
+      isClosed: record.StartDateTime ? new Date(record.StartDateTime).getTime() < Date.now() : false,
+      body: record.Description || ''
+    };
+  }
+
+  return {
+    id: record.Id,
+    type: record.TaskSubtype || 'Task',
+    subject: record.Subject || 'Task',
+    actor: record.Owner?.Name || '',
+    target: record.Who?.Name || '',
+    targetId: record.WhoId || '',
+    targetObject: objectFromId(record.WhoId),
+    when: record.ActivityDate || record.CreatedDate,
+    status: record.Status || '',
+    isClosed: Boolean(record.IsClosed),
+    body: record.Description || ''
   };
 }
 
@@ -644,7 +738,7 @@ app.get('/api/campaigns/:id/members', async (req, res) => {
   try {
     const soql = `
       SELECT Id, Status, ContactId, LeadId,
-        Contact.Id, Contact.FirstName, Contact.LastName, Contact.Name, Contact.Email, Contact.Phone, Contact.Title, Contact.Account.Name,
+        Contact.Id, Contact.FirstName, Contact.LastName, Contact.Name, Contact.Email, Contact.Phone, Contact.Title, Contact.AccountId, Contact.Account.Name,
         Lead.Id, Lead.FirstName, Lead.LastName, Lead.Name, Lead.Email, Lead.Phone, Lead.Title, Lead.Company
       FROM CampaignMember
       WHERE CampaignId = '${campaignId}'
@@ -655,6 +749,87 @@ app.get('/api/campaigns/:id/members', async (req, res) => {
     res.json({ records: (data.records || []).map(normalizeCampaignMember), totalSize: data.totalSize || 0 });
   } catch (err) {
     handleSFError(err, res, `Campaign members ${req.params.id}`);
+  }
+});
+
+app.delete('/api/campaigns/:id/members/:memberId', async (req, res) => {
+  const { id, memberId } = req.params;
+  try {
+    const data = await sfGet('/query', {
+      q: `SELECT Id FROM CampaignMember WHERE Id = '${escapeSOQL(memberId)}' AND CampaignId = '${escapeSOQL(id)}' LIMIT 1`
+    });
+    if (!data.records?.length) return res.status(404).json({ error: 'Campaign member not found' });
+
+    await sfDelete(`/sobjects/CampaignMember/${memberId}`);
+    res.json({ success: true });
+  } catch (err) {
+    handleSFError(err, res, `Delete campaign member ${memberId}`);
+  }
+});
+
+app.get('/api/:object/:id/activity', async (req, res) => {
+  const { object, id } = req.params;
+  if (!OBJECTS[object]) return res.status(400).json({ error: `Unknown object: ${object}` });
+  if (!['Campaign', 'Contact', 'Lead'].includes(object)) return res.json({ records: [], warnings: [] });
+
+  const recordId = escapeSOQL(id);
+  const isPersonRecord = ['Contact', 'Lead'].includes(object);
+  const taskEventWhere = isPersonRecord ? `WhoId = '${recordId}'` : `WhatId = '${recordId}'`;
+  const emailWhere = `RelatedToId = '${recordId}'`;
+
+  try {
+    const queries = [
+      {
+        source: 'EmailMessage',
+        q: `
+          SELECT Id, Subject, FromName, FromAddress, ToAddress, MessageDate, CreatedDate, Status, TextBody
+          FROM EmailMessage
+          WHERE ${emailWhere}
+          ORDER BY MessageDate DESC, CreatedDate DESC
+          LIMIT 50
+        `
+      },
+      {
+        source: 'Task',
+        q: `
+          SELECT Id, Subject, Status, IsClosed, Priority, ActivityDate, CreatedDate, TaskSubtype, Description,
+            WhoId, Who.Name, WhatId, Owner.Name
+          FROM Task
+          WHERE ${taskEventWhere}
+          ORDER BY CreatedDate DESC
+          LIMIT 50
+        `
+      },
+      {
+        source: 'Event',
+        q: `
+          SELECT Id, Subject, StartDateTime, EndDateTime, CreatedDate, Location, Description,
+            WhoId, Who.Name, WhatId, Owner.Name
+          FROM Event
+          WHERE ${taskEventWhere}
+          ORDER BY StartDateTime DESC
+          LIMIT 50
+        `
+      }
+    ];
+    const results = await Promise.allSettled(
+      queries.map((item) => sfGet('/query', { q: item.q.replace(/\s+/g, ' ').trim() }))
+    );
+    const records = results.flatMap((result, index) => {
+      if (result.status !== 'fulfilled') return [];
+      return (result.value.records || []).map((record) => normalizeActivity(record, queries[index].source));
+    });
+
+    records.sort((a, b) => new Date(b.when || 0) - new Date(a.when || 0));
+    res.json({
+      records: records.slice(0, 50),
+      warnings: results
+        .filter((result) => result.status === 'rejected')
+        .map((result) => formatSalesforceError(result.reason?.response?.data) || result.reason?.message)
+        .filter(Boolean)
+    });
+  } catch (err) {
+    handleSFError(err, res, `${object} activity ${id}`);
   }
 });
 
@@ -887,9 +1062,11 @@ app.get('/api/:object/:id', async (req, res) => {
         updateable: field.updateable,
         createable: field.createable,
         referenceTo: field.referenceTo || [],
+        relationshipName: field.relationshipName || '',
         picklistValues: field.picklistValues?.filter(item => item.active).map(item => item.value) || []
       }));
-    res.json({ record, fields });
+    const lookupLabels = await buildLookupLabels(record, fields);
+    res.json({ record, fields, lookupLabels });
   } catch (err) {
     handleSFError(err, res, `GET ${object}/${id}`);
   }

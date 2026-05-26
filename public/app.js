@@ -66,11 +66,13 @@ let viewingDetail = false;
 let detailRecordState = null;
 let activeCampaign = null;
 let campaignMembers = [];
+let recordActivities = [];
 let campaignMemberSelection = new Set();
 let memberCandidateObject = 'Contact';
 let memberCandidateSelection = new Set();
 let currentCampaignCandidates = [];
 let emailTemplates = [];
+let detailLookupLabels = {};
 
 const $ = (id) => document.getElementById(id);
 
@@ -827,6 +829,7 @@ async function openRecordDetail(objectName, id) {
     const data = await api(`/api/${objectName}/${id}`);
     const record = data.record || {};
     const fields = data.fields || [];
+    detailLookupLabels = data.lookupLabels || {};
     const title = record.Name || record.Subject || record.CaseNumber || record.Email || id;
     const displayFields = fields
       .filter((field) => record[field.name] !== null && record[field.name] !== undefined && field.name !== 'attributes')
@@ -840,7 +843,9 @@ async function openRecordDetail(objectName, id) {
     renderRecordDetailPage(objectName, record, fields, displayFields, title, id);
     if (objectName === 'Campaign') {
       activeCampaign = record;
-      await loadCampaignMembers(id);
+      await Promise.all([loadCampaignMembers(id), loadRecordActivity(objectName, id)]);
+    } else if (['Contact', 'Lead'].includes(objectName)) {
+      await loadRecordActivity(objectName, id);
     }
   } catch (err) {
     $('content').innerHTML = `
@@ -898,9 +903,14 @@ function renderRecordDetailPage(objectName, record, fields, displayFields, title
         </section>
         <aside class="record-side">
           <div class="activity-card">
-            <div class="activity-head"><h3>Activity</h3></div>
-            <div class="activity-empty">
-              <p>Emails sent from this portal are logged to the Contact or Lead activity timeline in Salesforce.</p>
+            <div class="activity-head">
+              <h3>Activity</h3>
+              ${['Campaign', 'Contact', 'Lead'].includes(objectName) ? `<button class="cell-button-link" onclick="loadRecordActivity('${objectName}', '${id}')">Refresh</button>` : ''}
+            </div>
+            <div id="activityTimeline">
+              ${['Campaign', 'Contact', 'Lead'].includes(objectName)
+                ? '<div class="activity-empty"><p>Loading activities...</p></div>'
+                : '<div class="activity-empty"><p>Open Salesforce Activity Timeline for this record.</p></div>'}
             </div>
           </div>
         </aside>
@@ -962,8 +972,13 @@ function renderDetailField(objectName, record, field) {
   const label = field.label || labelFor(field.name);
   let display = formatDetailValue(value, field.type);
 
-  if (field.type === 'reference' && value && field.referenceTo?.[0] && OBJECT_META[field.referenceTo[0]]) {
-    display = `<button class="cell-button-link" onclick="openRecordDetail('${field.referenceTo[0]}', '${value}')">${escapeHtml(value)}</button>`;
+  if (field.type === 'reference' && value) {
+    const lookup = detailLookupLabels[field.name] || {};
+    const targetObject = lookup.object || field.referenceTo[0];
+    const labelValue = lookup.name || getValue(record, `${field.relationshipName}.Name`) || value;
+    display = OBJECT_META[targetObject]
+      ? `<button class="cell-button-link" onclick="openRecordDetail('${targetObject}', '${value}')">${escapeHtml(labelValue)}</button>`
+      : escapeHtml(labelValue);
   }
 
   return `
@@ -1060,6 +1075,7 @@ function renderCampaignMembers() {
           <th>Name</th>
           <th>Company</th>
           <th>Email</th>
+          <th>Action</th>
         </tr>
       </thead>
       <tbody>
@@ -1069,13 +1085,167 @@ function renderCampaignMembers() {
             <td><span class="badge badge-neutral">${escapeHtml(member.type)}</span></td>
             <td>${escapeHtml(member.status || '-')}</td>
             <td><button class="cell-button-link" onclick="openRecordDetail('${member.type}', '${member.personId}')">${escapeHtml(member.name || '-')}</button></td>
-            <td>${escapeHtml(member.company || '-')}</td>
+            <td>${renderCampaignMemberCompany(member)}</td>
             <td>${member.email ? `<a class="cell-email" href="mailto:${escapeHtml(member.email)}">${escapeHtml(member.email)}</a>` : '<span class="cell-empty">-</span>'}</td>
+            <td>
+              <button class="row-action del" title="Remove campaign member" aria-label="Remove campaign member" onclick="removeCampaignMember('${member.id}')">
+                <svg viewBox="0 0 20 20" width="15" height="15" fill="currentColor">
+                  <path fill-rule="evenodd" d="M8 2a1 1 0 00-.894.553L6.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-2.382l-.724-1.447A1 1 0 0012 2H8zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm5-1a1 1 0 00-1 1v6a1 1 0 102 0V8a1 1 0 00-1-1z" clip-rule="evenodd"/>
+                </svg>
+              </button>
+            </td>
           </tr>
         `).join('')}
       </tbody>
     </table>
   `;
+}
+
+function renderCampaignMemberCompany(member) {
+  if (!member.company) return '<span class="cell-empty">-</span>';
+  if (member.accountId) {
+    return `<button class="cell-button-link" onclick="openRecordDetail('Account', '${member.accountId}')">${escapeHtml(member.company)}</button>`;
+  }
+  return escapeHtml(member.company);
+}
+
+async function removeCampaignMember(memberId) {
+  const member = campaignMembers.find((item) => item.id === memberId);
+  if (!member || !activeCampaign?.Id) return;
+  if (!confirm(`Remove ${member.name || 'this member'} from this campaign?`)) return;
+
+  try {
+    await api(`/api/campaigns/${activeCampaign.Id}/members/${memberId}`, { method: 'DELETE' });
+    campaignMembers = campaignMembers.filter((item) => item.id !== memberId);
+    campaignMemberSelection.delete(memberId);
+    renderCampaignMembers();
+    toast('Campaign member removed', 'ok');
+  } catch (err) {
+    toast(err.message, 'err');
+  }
+}
+
+async function loadRecordActivity(objectName, recordId) {
+  const timeline = $('activityTimeline');
+  if (!timeline) return;
+  timeline.innerHTML = '<div class="activity-empty"><p>Loading activities...</p></div>';
+  try {
+    const data = await api(`/api/${objectName}/${recordId}/activity`);
+    recordActivities = data.records || [];
+    renderRecordActivity(data.warnings || []);
+  } catch (err) {
+    timeline.innerHTML = `<div class="error-state compact"><p>${escapeHtml(err.message)}</p></div>`;
+  }
+}
+
+function renderRecordActivity(warnings = []) {
+  const timeline = $('activityTimeline');
+  if (!timeline) return;
+
+  const upcoming = recordActivities.filter(isUpcomingActivity);
+  const past = recordActivities.filter((item) => !isUpcomingActivity(item));
+  const firstPast = past[0] || recordActivities[0];
+
+  if (!recordActivities.length) {
+    timeline.innerHTML = `
+      ${renderActivityToolbar()}
+      ${renderUpcomingSection([])}
+      <div class="activity-no-past">No past activity. Past meetings and tasks marked as done show up here.</div>
+      ${warnings.length ? `<div class="activity-empty"><p>${escapeHtml(warnings[0])}</p></div>` : ''}
+    `;
+    return;
+  }
+
+  timeline.innerHTML = `
+    ${renderActivityToolbar()}
+    ${renderUpcomingSection(upcoming)}
+    ${past.length ? `
+      <div class="activity-month">
+        <span>${escapeHtml(formatActivityMonth(firstPast.when))}</span>
+        <span>This Month</span>
+      </div>
+      <div class="activity-list">${past.map(renderActivityItem).join('')}</div>
+      <div class="activity-end">No more past activities to load.</div>
+    ` : '<div class="activity-no-past">No past activity. Past meetings and tasks marked as done show up here.</div>'}
+  `;
+}
+
+function renderActivityToolbar() {
+  return `
+    <div class="activity-actions">
+      <button class="activity-action activity-action-event" title="New Event">Cal</button>
+      <button class="activity-action activity-action-task" title="New Task">Task</button>
+      <button class="activity-action activity-action-call" title="Log Call">Call</button>
+      <button class="activity-action activity-action-email" title="Email">@</button>
+    </div>
+    <div class="activity-filter">All time &bull; All activities &bull; All types</div>
+  `;
+}
+
+function renderUpcomingSection(items) {
+  return `
+    <div class="activity-section-title">⌄ Upcoming &amp; Overdue</div>
+    ${items.length
+      ? `<div class="activity-list">${items.map(renderActivityItem).join('')}</div>`
+      : `<div class="activity-empty standard-empty">
+          <p>No activities to show.</p>
+          <p>Get started by sending an email, scheduling a task, and more.</p>
+        </div>`}
+  `;
+}
+
+function renderActivityItem(item) {
+  const target = item.targetId && item.targetObject && OBJECT_META[item.targetObject]
+    ? `<button class="cell-button-link" onclick="openRecordDetail('${item.targetObject}', '${item.targetId}')">${escapeHtml(item.target)}</button>`
+    : escapeHtml(item.target || '');
+  const meta = [formatActivityTime(item.when), item.status].filter(Boolean).join(' | ');
+  const body = item.body ? `<div class="activity-body">${escapeHtml(String(item.body).slice(0, 180))}</div>` : '';
+  const actionText = target
+    ? `${escapeHtml(item.actor || 'Salesforce')} logged activity for ${target}`
+    : `${escapeHtml(item.actor || 'Salesforce')} logged activity`;
+
+  return `
+    <div class="activity-item">
+      <div class="activity-icon">${activityIconLabel(item.type)}</div>
+      <div class="activity-content">
+        <div class="activity-title-row">
+          <span class="activity-title">${escapeHtml(item.subject || item.type)}</span>
+          <span>${escapeHtml(meta)}</span>
+        </div>
+        <div class="activity-meta">
+          ${actionText}
+        </div>
+        ${body}
+      </div>
+    </div>
+  `;
+}
+
+function activityIconLabel(type) {
+  const text = String(type || '').toLowerCase();
+  if (text.includes('email')) return '@';
+  if (text.includes('event')) return 'Cal';
+  if (text.includes('call')) return 'Call';
+  return 'Task';
+}
+
+function formatActivityTime(value) {
+  if (!value) return '';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  return date.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+}
+
+function formatActivityMonth(value) {
+  const date = value ? new Date(value) : new Date();
+  return date.toLocaleString(undefined, { month: 'long', year: 'numeric' });
+}
+
+function isUpcomingActivity(item) {
+  if (item.isClosed) return false;
+  const when = item.when ? new Date(item.when) : null;
+  if (!when || Number.isNaN(when.getTime())) return false;
+  return when.getTime() >= new Date().setHours(0, 0, 0, 0);
 }
 
 function toggleCampaignMemberSelection(id, checked) {
