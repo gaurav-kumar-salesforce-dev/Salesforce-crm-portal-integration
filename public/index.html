@@ -6,7 +6,7 @@
   <title>SF Manager — Salesforce Integration</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="style.css?v=4">
 </head>
 <body>
 
@@ -23,6 +23,11 @@
         <span class="brand-name">SF Manager</span>
         <span class="brand-sub">CRM Integration</span>
       </div>
+      <button class="sidebar-collapse-btn" id="sidebarCollapseBtn" onclick="toggleSidebarCompact()" aria-label="Collapse sidebar" title="Collapse sidebar">
+        <svg viewBox="0 0 20 20" width="16" height="16" fill="currentColor">
+          <path fill-rule="evenodd" d="M12.7 4.3a1 1 0 010 1.4L8.42 10l4.3 4.3a1 1 0 01-1.42 1.4l-5-5a1 1 0 010-1.4l5-5a1 1 0 011.4 0z" clip-rule="evenodd"/>
+        </svg>
+      </button>
     </div>
 
     <div class="sidebar-section-label">OBJECTS</div>
@@ -382,6 +387,6 @@
 
   <div class="toast-stack" id="toastStack"></div>
 
-  <script src="app.js?v=7"></script>
+  <script src="app.js?v=12"></script>
 </body>
 </html>

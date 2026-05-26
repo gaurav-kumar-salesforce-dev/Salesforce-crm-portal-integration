@@ -504,16 +504,21 @@ function applyLocalView() {
 
 function renderTable() {
   const recordsToRender = getRecordsToRender();
+  const table = $('dataTable');
+  const tableCard = $('tableCard');
+  const objectClass = `object-table-${currentObject.toLowerCase()}`;
+  table.className = `data-table object-table ${objectClass}`;
+  tableCard.dataset.object = currentObject;
 
   $('thead').innerHTML = `
     <tr>
       ${currentColumns.map((field) => `
-        <th class="${sortState.field === field ? 'sorted' : ''}" onclick="sortBy('${field}')">
+        <th class="${sortState.field === field ? 'sorted' : ''} ${fieldColumnClass(field)}" onclick="sortBy('${field}')">
           ${labelFor(field)}
           <span class="sort-arrow">${sortState.field === field ? (sortState.direction === 'asc' ? '^' : 'v') : '-'}</span>
         </th>
       `).join('')}
-      <th>Actions</th>
+      <th class="actions-col">Actions</th>
     </tr>
   `;
 
@@ -532,7 +537,7 @@ function renderTable() {
 
   $('tbody').innerHTML = recordsToRender.map((record) => `
     <tr onclick="openRecordDetail('${currentObject}', '${record.Id}')">
-      ${currentColumns.map((field) => `<td>${formatValue(field, getValue(record, field), record)}</td>`).join('')}
+      ${currentColumns.map((field) => `<td class="${fieldColumnClass(field)}">${formatValue(field, getValue(record, field), record)}</td>`).join('')}
       <td class="actions-col">
         <div class="row-acts">
           <button class="row-action edit" title="Edit" aria-label="Edit" onclick="event.stopPropagation(); openEdit('${record.Id}')">
@@ -550,6 +555,10 @@ function renderTable() {
       </td>
     </tr>
   `).join('');
+}
+
+function fieldColumnClass(field) {
+  return `col-${String(field).toLowerCase().replace(/[^a-z0-9]+/g, '-')}`;
 }
 
 function getRecordsToRender() {
@@ -669,6 +678,16 @@ function toggleSidebar() {
   $('sidebar').classList.toggle('open');
 }
 
+function toggleSidebarCompact() {
+  const collapsed = document.body.classList.toggle('sidebar-collapsed');
+  localStorage.setItem('sfmSidebarCollapsed', collapsed ? 'true' : 'false');
+  const button = $('sidebarCollapseBtn');
+  if (button) {
+    button.title = collapsed ? 'Expand sidebar' : 'Collapse sidebar';
+    button.setAttribute('aria-label', button.title);
+  }
+}
+
 function closeSidebar() {
   $('sidebar').classList.remove('open');
 }
@@ -746,6 +765,7 @@ async function openRecordModal(title, record, fields = null) {
     ? renderFormSections(sections, record)
     : `<div class="form-grid">${fullFields.map((field) => renderFieldControl(field.name || field, record, field)).join('')}</div>`;
   $('modalOverlay').classList.add('open');
+  setupDependentPicklists(fullFields);
 }
 
 async function getEditableFields(record) {
@@ -780,8 +800,21 @@ function getLayoutSections(objectName, fields = []) {
 
 function resolveLayoutField(entry, fields) {
   const config = typeof entry === 'string' ? { name: entry } : entry;
-  const wanted = normalizeFieldKey(config.name);
-  const field = fields.find((item) => {
+  const field = findLayoutField(config.name, fields);
+  if (!field) return null;
+  return {
+    ...field,
+    readOnly: Boolean(config.readOnly),
+    layoutLabel: config.label || getAddressFieldLabel(config.name, field)
+  };
+}
+
+function findLayoutField(name, fields) {
+  const addressCodeName = getAddressCodeFieldName(name, fields);
+  if (addressCodeName) return fields.find((item) => item.name === addressCodeName);
+
+  const wanted = normalizeFieldKey(name);
+  return fields.find((item) => {
     const aliases = [
       item.name,
       item.label,
@@ -790,12 +823,22 @@ function resolveLayoutField(entry, fields) {
     ].map(normalizeFieldKey);
     return aliases.includes(wanted);
   });
-  if (!field) return null;
-  return {
-    ...field,
-    readOnly: Boolean(config.readOnly),
-    layoutLabel: config.label
-  };
+}
+
+function getAddressCodeFieldName(name, fields) {
+  const text = String(name || '');
+  const match = text.match(/^(.*?)(Country|State)$/);
+  if (!match || text.endsWith('Code')) return '';
+  const codeName = `${match[1]}${match[2]}Code`;
+  const codeField = fields.find((field) => field.name === codeName);
+  return codeField && codeField.type === 'picklist' ? codeName : '';
+}
+
+function getAddressFieldLabel(layoutName, field) {
+  const text = String(layoutName || '');
+  if (field?.name?.endsWith('CountryCode')) return labelFor(text.replace(/Country$/, 'Country'));
+  if (field?.name?.endsWith('StateCode')) return labelFor(text.replace(/State$/, 'State/Province'));
+  return '';
 }
 
 function normalizeFieldKey(value = '') {
@@ -817,8 +860,8 @@ function renderFieldControl(field, record, fieldMeta = {}) {
   fieldMeta = typeof fieldMeta === 'string' ? { name: field, label: labelFor(field) } : fieldMeta;
   const lookup = OBJECT_META[currentObject].lookups?.[field] || (fieldMeta.referenceTo?.length ? { object: fieldMeta.referenceTo[0], label: fieldMeta.label || labelFor(field) } : null);
   const label = fieldMeta.layoutLabel || fieldMeta.label || lookup?.label || labelFor(field);
-  const value = record[field] ?? '';
   const type = fieldMeta.type || 'string';
+  const value = record[field] ?? getDefaultFieldValue(field, fieldMeta, type);
   const required = fieldMeta.nillable === false ? '<span class="form-req">*</span>' : '';
   const spanClass = shouldSpanField(field, type) ? 'span-2' : '';
   const readOnly = Boolean(fieldMeta.readOnly)
@@ -847,7 +890,7 @@ function renderFieldControl(field, record, fieldMeta = {}) {
     return `
       <div class="form-group ${spanClass}${readonlyClass}">
         <label class="form-label" for="field-${field}">${escapeHtml(label)}${required}</label>
-        <select class="form-ctrl" id="field-${field}" name="${field}" ${disabled}>
+        <select class="form-ctrl" id="field-${field}" name="${field}" ${dependentPicklistAttrs(fieldMeta)} ${disabled}>
           <option value=""></option>
           ${renderPicklistOptions(fieldMeta.picklistValues, value)}
         </select>
@@ -910,9 +953,78 @@ function renderFieldControl(field, record, fieldMeta = {}) {
 
 function renderPicklistOptions(values = [], selected) {
   const selectedSet = Array.isArray(selected) ? new Set(selected.map(String)) : new Set([String(selected || '')]);
-  return (values || []).map((value) => `
-    <option value="${escapeHtml(value)}" ${selectedSet.has(String(value)) ? 'selected' : ''}>${escapeHtml(value)}</option>
-  `).join('');
+  return (values || []).map((item) => {
+    const value = typeof item === 'object' ? item.value : item;
+    const label = typeof item === 'object' ? item.label || item.value : item;
+    const validFor = typeof item === 'object' ? item.validFor || '' : '';
+    return `
+    <option value="${escapeHtml(value)}" data-valid-for="${escapeHtml(validFor)}" ${selectedSet.has(String(value)) ? 'selected' : ''}>${escapeHtml(label)}</option>
+  `;
+  }).join('');
+}
+
+function dependentPicklistAttrs(fieldMeta = {}) {
+  const controllerName = getPicklistControllerName(fieldMeta);
+  if (!controllerName) return '';
+  return `data-controller="${escapeHtml(controllerName)}" data-controller-values="${escapeHtml(JSON.stringify(fieldMeta.controllerValues || {}))}"`;
+}
+
+function getPicklistControllerName(fieldMeta = {}) {
+  if (fieldMeta.controllerName) return fieldMeta.controllerName;
+  if (fieldMeta.name?.endsWith('StateCode')) return fieldMeta.name.replace(/StateCode$/, 'CountryCode');
+  return '';
+}
+
+function setupDependentPicklists(fields = []) {
+  const fieldList = flattenFormFields(fields);
+  const dependents = fieldList.filter((field) => getPicklistControllerName(field));
+  dependents.forEach((field) => {
+    const controllerName = getPicklistControllerName(field);
+    const controller = $(`field-${controllerName}`);
+    const dependent = $(`field-${field.name}`);
+    if (!controller || !dependent) return;
+    controller.addEventListener('change', () => filterDependentPicklist(dependent, controller.value));
+    filterDependentPicklist(dependent, controller.value);
+  });
+}
+
+function flattenFormFields(fields = []) {
+  return (fields || []).flatMap((item) => item?.fields ? item.fields : [item]);
+}
+
+function filterDependentPicklist(select, controllerValue) {
+  const controllerValues = JSON.parse(select.dataset.controllerValues || '{}');
+  const controllerIndex = controllerValues[controllerValue];
+  let selectedStillVisible = !select.value;
+
+  [...select.options].forEach((option) => {
+    if (!option.value) {
+      option.hidden = false;
+      return;
+    }
+    const validFor = option.dataset.validFor || '';
+    const visible = controllerIndex === undefined || !validFor || isValidForController(validFor, controllerIndex);
+    option.hidden = !visible;
+    if (visible && option.value === select.value) selectedStillVisible = true;
+  });
+
+  if (!selectedStillVisible) select.value = '';
+}
+
+function isValidForController(validFor, index) {
+  const bytes = atob(validFor);
+  const byte = bytes.charCodeAt(Math.floor(index / 8));
+  return Boolean(byte & (0x80 >> (index % 8)));
+}
+
+function getDefaultFieldValue(field, fieldMeta, type) {
+  if (editingRecord || type !== 'picklist' || !field.endsWith('CountryCode')) return '';
+  const country = (fieldMeta.picklistValues || []).find((item) => {
+    const value = typeof item === 'object' ? item.value : item;
+    const label = typeof item === 'object' ? item.label : item;
+    return value === 'US' || String(label).toLowerCase() === 'united states';
+  });
+  return typeof country === 'object' ? country.value : country || '';
 }
 
 function shouldSpanField(field, type) {
@@ -1144,6 +1256,9 @@ function renderDetailField(objectName, record, field) {
   const value = record[field.name];
   const label = field.label || labelFor(field.name);
   let display = formatDetailValue(value, field.type);
+  if (field.type === 'picklist' && value) {
+    display = escapeHtml(getPicklistLabel(field.picklistValues, value));
+  }
 
   if (field.type === 'reference' && value) {
     const lookup = detailLookupLabels[field.name] || {};
@@ -1160,6 +1275,13 @@ function renderDetailField(objectName, record, field) {
       <div class="detail-value">${display}</div>
     </div>
   `;
+}
+
+function getPicklistLabel(values = [], selected) {
+  if (selected === null || selected === undefined || selected === '') return '';
+  const match = (values || []).find((item) => String(typeof item === 'object' ? item.value : item) === String(selected));
+  if (!match) return String(selected);
+  return String(typeof match === 'object' ? match.label || match.value : match);
 }
 
 function formatDetailValue(value, type = '') {
@@ -1825,6 +1947,14 @@ document.addEventListener('click', (event) => {
 
 document.addEventListener('DOMContentLoaded', () => {
   listContentHtml = $('content').innerHTML;
+  if (localStorage.getItem('sfmSidebarCollapsed') === 'true') {
+    document.body.classList.add('sidebar-collapsed');
+    const button = $('sidebarCollapseBtn');
+    if (button) {
+      button.title = 'Expand sidebar';
+      button.setAttribute('aria-label', 'Expand sidebar');
+    }
+  }
   refreshSidebarIcons();
   checkConnection().then(async (connection) => {
     if (connection?.success) {
