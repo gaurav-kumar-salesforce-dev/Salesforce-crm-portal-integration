@@ -32,6 +32,12 @@ const OBJECT_META = {
     columns: ['Name', 'Email', 'Phone', 'Company', 'Status', 'Title', 'LeadSource'],
     editable: ['FirstName', 'LastName', 'Email', 'Phone', 'Company', 'Status', 'Title', 'LeadSource']
   },
+  Campaign: {
+    title: 'Campaigns',
+    icon: 'campaign',
+    columns: ['Name', 'Type', 'Status', 'StartDate', 'EndDate', 'IsActive', 'NumberOfContacts', 'NumberOfLeads'],
+    editable: ['Name', 'Type', 'Status', 'StartDate', 'EndDate', 'IsActive', 'Description']
+  },
   User: {
     title: 'Users',
     icon: 'user',
@@ -55,6 +61,16 @@ let sortState = { field: null, direction: 'asc' };
 let currentPage = 1;
 let pageSize = 25;
 let totalRecords = 0;
+let listContentHtml = '';
+let viewingDetail = false;
+let detailRecordState = null;
+let activeCampaign = null;
+let campaignMembers = [];
+let campaignMemberSelection = new Set();
+let memberCandidateObject = 'Contact';
+let memberCandidateSelection = new Set();
+let currentCampaignCandidates = [];
+let emailTemplates = [];
 
 const $ = (id) => document.getElementById(id);
 
@@ -78,6 +94,7 @@ function objectIcon(objectName) {
     opportunity: 'Opp',
     case: 'Case',
     lead: 'Lead',
+    campaign: 'Camp',
     user: 'User'
   };
   return `<span class="object-icon object-icon-${key}">${labels[key] || key.slice(0, 4)}</span>`;
@@ -90,7 +107,8 @@ function objectFromId(id) {
     '003': 'Contact',
     '006': 'Opportunity',
     '500': 'Case',
-    '00Q': 'Lead'
+    '00Q': 'Lead',
+    '701': 'Campaign'
   }[prefix] || currentObject;
 }
 
@@ -469,6 +487,7 @@ function applySort() {
 }
 
 async function switchObject(objectName) {
+  if (viewingDetail) restoreListContent(false);
   currentObject = objectName;
   currentRecords = [];
   currentPage = 1;
@@ -482,6 +501,20 @@ async function switchObject(objectName) {
   closeSidebar();
   await loadListViews();
   await loadData();
+}
+
+function restoreListContent(shouldLoad = true) {
+  if (!listContentHtml) return;
+  $('content').innerHTML = listContentHtml;
+  viewingDetail = false;
+  detailRecordState = null;
+  document.querySelectorAll('.nav-item').forEach((item) => {
+    item.classList.toggle('active', item.dataset.obj === currentObject);
+  });
+  if (shouldLoad) {
+    renderListViewSelect();
+    loadData();
+  }
 }
 
 function updateBadge(objectName, count) {
@@ -783,12 +816,13 @@ async function openRecordDetail(objectName, id) {
   if (!id || !OBJECT_META[objectName]) return;
 
   try {
-    $('detailObjIcon').innerHTML = objectIcon(objectName);
-    $('detailEditBtn').style.display = 'inline-flex';
-    $('detailTitle').textContent = 'Loading record...';
-    $('detailSub').textContent = objectName;
-    $('detailBody').innerHTML = '<div class="state-box">Loading details...</div>';
-    $('detailOverlay').classList.add('open');
+    $('content').innerHTML = `
+      <div class="state-box">
+        <div class="spinner-ring"><div></div><div></div><div></div><div></div></div>
+        <p>Loading record detail...</p>
+      </div>
+    `;
+    viewingDetail = true;
 
     const data = await api(`/api/${objectName}/${id}`);
     const record = data.record || {};
@@ -798,24 +832,129 @@ async function openRecordDetail(objectName, id) {
       .filter((field) => record[field.name] !== null && record[field.name] !== undefined && field.name !== 'attributes')
       .slice(0, 80);
 
-    $('detailTitle').textContent = title;
-    $('detailSub').textContent = `${objectName} • ${id}`;
-    $('detailBody').innerHTML = `
-      <div class="detail-grid">
-        ${displayFields.map((field) => renderDetailField(objectName, record, field)).join('')}
+    currentObject = objectName;
+    detailRecordState = { objectName, id, record, fields };
+    document.querySelectorAll('.nav-item').forEach((item) => {
+      item.classList.toggle('active', item.dataset.obj === objectName);
+    });
+    renderRecordDetailPage(objectName, record, fields, displayFields, title, id);
+    if (objectName === 'Campaign') {
+      activeCampaign = record;
+      await loadCampaignMembers(id);
+    }
+  } catch (err) {
+    $('content').innerHTML = `
+      <div class="state-box error-state">
+        <h3>Could not load record</h3>
+        <p>${escapeHtml(err.message)}</p>
+        <button class="btn btn-ghost" onclick="restoreListContent()">Back to List</button>
       </div>
     `;
-    $('detailEditBtn').onclick = () => {
-      currentObject = objectName;
-      editingRecord = record;
-      closeDetailModal();
-      openRecordModal(`Edit ${objectName}`, record, fields.filter((field) => field.updateable));
-    };
-  } catch (err) {
-    $('detailTitle').textContent = 'Could not load record';
-    $('detailSub').textContent = objectName;
-    $('detailBody').innerHTML = `<div class="error-state"><h3>Error</h3><p>${escapeHtml(err.message)}</p></div>`;
   }
+}
+
+function renderRecordDetailPage(objectName, record, fields, displayFields, title, id) {
+  const summaryFields = getSummaryFields(objectName).filter((field) => getValue(record, field) !== undefined).slice(0, 4);
+  $('content').innerHTML = `
+    <div class="record-page">
+      <div class="record-hero">
+        <div class="record-title-row">
+          <div class="page-title-group">
+            <div class="page-icon">${objectIcon(objectName)}</div>
+            <div>
+              <div class="record-kicker">${escapeHtml(objectName)}</div>
+              <h1 class="page-title">${escapeHtml(title)}</h1>
+            </div>
+          </div>
+          <div class="page-actions">
+            <button class="btn btn-ghost" onclick="restoreListContent()">Back</button>
+            <button class="btn btn-primary" onclick="editCurrentDetailRecord()">Edit</button>
+          </div>
+        </div>
+        <div class="record-summary">
+          ${summaryFields.map((field) => `
+            <div>
+              <span>${escapeHtml(labelFor(field))}</span>
+              <strong>${formatValue(field, getValue(record, field), record)}</strong>
+            </div>
+          `).join('')}
+        </div>
+      </div>
+
+      <div class="record-layout">
+        <section class="record-main">
+          <div class="record-tabs">
+            <button class="record-tab active" id="tabRelatedBtn" onclick="showRecordTab('related')">Related</button>
+            <button class="record-tab" id="tabDetailsBtn" onclick="showRecordTab('details')">Details</button>
+          </div>
+          <div id="recordRelatedPanel" class="record-tab-panel">
+            ${renderRelatedPanel(objectName)}
+          </div>
+          <div id="recordDetailsPanel" class="record-tab-panel" style="display:none">
+            <div class="detail-grid">
+              ${displayFields.map((field) => renderDetailField(objectName, record, field)).join('')}
+            </div>
+          </div>
+        </section>
+        <aside class="record-side">
+          <div class="activity-card">
+            <div class="activity-head"><h3>Activity</h3></div>
+            <div class="activity-empty">
+              <p>Emails sent from this portal are logged to the Contact or Lead activity timeline in Salesforce.</p>
+            </div>
+          </div>
+        </aside>
+      </div>
+    </div>
+  `;
+}
+
+function getSummaryFields(objectName) {
+  return {
+    Account: ['Type', 'Industry', 'Phone', 'BillingCity'],
+    Contact: ['Title', 'Email', 'Phone', 'Account.Name'],
+    Lead: ['Company', 'Status', 'Email', 'Phone'],
+    Opportunity: ['StageName', 'Amount', 'CloseDate', 'Probability'],
+    Case: ['Status', 'Priority', 'Type', 'CreatedDate'],
+    Campaign: ['Type', 'Status', 'StartDate', 'EndDate'],
+    User: ['Email', 'Username', 'Title']
+  }[objectName] || OBJECT_META[objectName]?.columns || [];
+}
+
+function renderRelatedPanel(objectName) {
+  if (objectName === 'Campaign') return renderCampaignMembersShell();
+  return `
+    <div class="related-panel no-margin">
+      <div class="related-head">
+        <div>
+          <h3>Related Records</h3>
+          <p>Open related records from lookup links in Details.</p>
+        </div>
+      </div>
+      <div class="table-empty">
+        <h3>No portal related list configured</h3>
+        <p>Use the Details tab or Salesforce Activity Timeline for this record.</p>
+      </div>
+    </div>
+  `;
+}
+
+function showRecordTab(name) {
+  $('recordRelatedPanel').style.display = name === 'related' ? 'block' : 'none';
+  $('recordDetailsPanel').style.display = name === 'details' ? 'block' : 'none';
+  $('tabRelatedBtn').classList.toggle('active', name === 'related');
+  $('tabDetailsBtn').classList.toggle('active', name === 'details');
+}
+
+function editCurrentDetailRecord() {
+  if (!detailRecordState) return;
+  currentObject = detailRecordState.objectName;
+  editingRecord = detailRecordState.record;
+  openRecordModal(
+    `Edit ${detailRecordState.objectName}`,
+    detailRecordState.record,
+    detailRecordState.fields.filter((field) => field.updateable)
+  );
 }
 
 function renderDetailField(objectName, record, field) {
@@ -870,6 +1009,264 @@ function closeDetailModal() {
   $('detailEditBtn').style.display = 'inline-flex';
 }
 
+function renderCampaignMembersShell() {
+  return `
+    <div class="related-panel">
+      <div class="related-head">
+        <div>
+          <h3>Campaign Members</h3>
+          <p id="campaignMemberSummary">Loading members...</p>
+        </div>
+        <div class="related-actions">
+          <button class="btn btn-ghost" onclick="openCampaignMemberModal('Lead')">Add Leads</button>
+          <button class="btn btn-ghost" onclick="openCampaignMemberModal('Contact')">Add Contacts</button>
+          <button class="btn btn-primary" onclick="openCampaignEmailModal()">Send Mass Email</button>
+        </div>
+      </div>
+      <div class="mini-table-wrap" id="campaignMembersTable"></div>
+    </div>
+  `;
+}
+
+async function loadCampaignMembers(campaignId) {
+  const table = $('campaignMembersTable');
+  if (!table) return;
+  table.innerHTML = '<div class="state-box compact">Loading campaign members...</div>';
+  try {
+    const data = await api(`/api/campaigns/${campaignId}/members`);
+    campaignMembers = data.records || [];
+    campaignMemberSelection = new Set(campaignMembers.filter((member) => member.email).map((member) => member.id));
+    renderCampaignMembers();
+  } catch (err) {
+    table.innerHTML = `<div class="error-state compact"><p>${escapeHtml(err.message)}</p></div>`;
+  }
+}
+
+function renderCampaignMembers() {
+  const table = $('campaignMembersTable');
+  if (!table) return;
+  $('campaignMemberSummary').textContent = `${campaignMembers.length} members, ${campaignMembers.filter((member) => member.email).length} with email`;
+  if (!campaignMembers.length) {
+    table.innerHTML = '<div class="table-empty"><h3>No campaign members yet</h3><p>Add contacts or leads to this campaign.</p></div>';
+    return;
+  }
+  table.innerHTML = `
+    <table class="mini-table">
+      <thead>
+        <tr>
+          <th><input type="checkbox" aria-label="Select all email recipients" ${campaignMemberSelection.size ? 'checked' : ''} onchange="toggleAllCampaignMembers(this.checked)"></th>
+          <th>Type</th>
+          <th>Status</th>
+          <th>Name</th>
+          <th>Company</th>
+          <th>Email</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${campaignMembers.map((member) => `
+          <tr>
+            <td><input type="checkbox" value="${member.id}" ${campaignMemberSelection.has(member.id) ? 'checked' : ''} ${member.email ? '' : 'disabled'} onchange="toggleCampaignMemberSelection('${member.id}', this.checked)"></td>
+            <td><span class="badge badge-neutral">${escapeHtml(member.type)}</span></td>
+            <td>${escapeHtml(member.status || '-')}</td>
+            <td><button class="cell-button-link" onclick="openRecordDetail('${member.type}', '${member.personId}')">${escapeHtml(member.name || '-')}</button></td>
+            <td>${escapeHtml(member.company || '-')}</td>
+            <td>${member.email ? `<a class="cell-email" href="mailto:${escapeHtml(member.email)}">${escapeHtml(member.email)}</a>` : '<span class="cell-empty">-</span>'}</td>
+          </tr>
+        `).join('')}
+      </tbody>
+    </table>
+  `;
+}
+
+function toggleCampaignMemberSelection(id, checked) {
+  if (checked) campaignMemberSelection.add(id);
+  else campaignMemberSelection.delete(id);
+}
+
+function toggleAllCampaignMembers(checked) {
+  campaignMemberSelection = new Set(checked ? campaignMembers.filter((member) => member.email).map((member) => member.id) : []);
+  renderCampaignMembers();
+}
+
+async function openCampaignMemberModal(objectName) {
+  if (!activeCampaign?.Id) return;
+  memberCandidateObject = objectName;
+  memberCandidateSelection = new Set();
+  $('campaignMemberTitle').textContent = `Add ${objectName}s to Campaign`;
+  $('campaignMemberSearch').value = '';
+  $('campaignMemberOverlay').classList.add('open');
+  await loadCampaignCandidates('');
+}
+
+function closeCampaignMemberModal() {
+  $('campaignMemberOverlay').classList.remove('open');
+}
+
+function searchCampaignCandidates(value) {
+  clearTimeout(lookupTimer);
+  lookupTimer = setTimeout(() => loadCampaignCandidates(value), 300);
+}
+
+async function loadCampaignCandidates(search) {
+  const box = $('campaignMemberCandidates');
+  box.innerHTML = '<div class="state-box compact">Loading records...</div>';
+  try {
+    const data = await api(`/api/campaigns/${activeCampaign.Id}/candidates/${memberCandidateObject}?search=${encodeURIComponent(search || '')}`);
+    const records = data.records || [];
+    currentCampaignCandidates = records;
+    $('campaignMemberSelectedCount').textContent = `${memberCandidateSelection.size} selected`;
+    box.innerHTML = renderCampaignCandidateTable(records);
+  } catch (err) {
+    box.innerHTML = `<div class="error-state compact"><p>${escapeHtml(err.message)}</p></div>`;
+  }
+}
+
+function renderCampaignCandidateTable(records) {
+  if (!records.length) return '<div class="table-empty"><h3>No records found</h3><p>Try another search.</p></div>';
+  const isContact = memberCandidateObject === 'Contact';
+  const selectable = records.filter((record) => !record.alreadyMember);
+  const allVisibleSelected = selectable.length > 0 && selectable.every((record) => memberCandidateSelection.has(record.Id));
+  return `
+    <table class="mini-table">
+      <thead>
+        <tr>
+          <th><input type="checkbox" aria-label="Select all visible records" ${allVisibleSelected ? 'checked' : ''} onchange="toggleAllCandidateSelection(this.checked)"></th>
+          <th>Name</th>
+          <th>${isContact ? 'Account' : 'Company'}</th>
+          <th>Phone</th>
+          <th>Email</th>
+          <th>${isContact ? 'Title' : 'Status'}</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${records.map((record) => `
+          <tr class="${record.alreadyMember ? 'muted-row' : ''}">
+            <td><input type="checkbox" value="${record.Id}" ${memberCandidateSelection.has(record.Id) ? 'checked' : ''} ${record.alreadyMember ? 'disabled' : ''} onchange="toggleCandidateSelection('${record.Id}', this.checked)"></td>
+            <td>${escapeHtml(record.Name || '-')}</td>
+            <td>${escapeHtml(isContact ? record.Account?.Name || '-' : record.Company || '-')}</td>
+            <td>${escapeHtml(record.Phone || '-')}</td>
+            <td>${record.Email ? `<a class="cell-email" href="mailto:${escapeHtml(record.Email)}">${escapeHtml(record.Email)}</a>` : '<span class="cell-empty">-</span>'}</td>
+            <td>${escapeHtml((isContact ? record.Title : record.Status) || (record.alreadyMember ? 'Already member' : '-'))}</td>
+          </tr>
+        `).join('')}
+      </tbody>
+    </table>
+  `;
+}
+
+function toggleCandidateSelection(id, checked) {
+  if (checked) memberCandidateSelection.add(id);
+  else memberCandidateSelection.delete(id);
+  $('campaignMemberSelectedCount').textContent = `${memberCandidateSelection.size} selected`;
+}
+
+function toggleAllCandidateSelection(checked) {
+  currentCampaignCandidates
+    .filter((record) => !record.alreadyMember)
+    .forEach((record) => {
+      if (checked) memberCandidateSelection.add(record.Id);
+      else memberCandidateSelection.delete(record.Id);
+    });
+  $('campaignMemberSelectedCount').textContent = `${memberCandidateSelection.size} selected`;
+  $('campaignMemberCandidates').innerHTML = renderCampaignCandidateTable(currentCampaignCandidates);
+}
+
+async function addSelectedCampaignMembers() {
+  const ids = [...memberCandidateSelection];
+  if (!ids.length) {
+    toast('Select at least one record', 'err');
+    return;
+  }
+  try {
+    $('addCampaignMembersBtn').disabled = true;
+    const result = await api(`/api/campaigns/${activeCampaign.Id}/members`, {
+      method: 'POST',
+      body: JSON.stringify({ object: memberCandidateObject, ids })
+    });
+    toast(`${result.created || 0} members added`, 'ok');
+    closeCampaignMemberModal();
+    await loadCampaignMembers(activeCampaign.Id);
+  } catch (err) {
+    toast(err.message, 'err');
+  } finally {
+    $('addCampaignMembersBtn').disabled = false;
+  }
+}
+
+async function openCampaignEmailModal() {
+  if (!activeCampaign?.Id) return;
+  if (!campaignMemberSelection.size) {
+    toast('Select campaign members with email first', 'err');
+    return;
+  }
+  $('campaignEmailOverlay').classList.add('open');
+  $('emailTemplateSelect').innerHTML = '<option value="">Loading templates...</option>';
+  $('emailRecipientCount').textContent = `${campaignMemberSelection.size} recipients`;
+  $('emailPreviewSubject').textContent = 'Select a template to preview.';
+  $('emailPreviewBody').innerHTML = '';
+  try {
+    const data = await api(`/api/campaigns/${activeCampaign.Id}/email-templates`);
+    emailTemplates = data.records || [];
+    $('emailTemplateSelect').innerHTML = `
+      <option value="">Select template...</option>
+      ${emailTemplates.map((template) => `<option value="${template.Id}">${escapeHtml(template.Name)}${template.Subject ? ` - ${escapeHtml(template.Subject)}` : ''}</option>`).join('')}
+    `;
+  } catch (err) {
+    $('emailTemplateSelect').innerHTML = '<option value="">Could not load templates</option>';
+    $('emailPreviewBody').innerHTML = `<div class="error-state compact"><p>${escapeHtml(err.message)}</p></div>`;
+  }
+}
+
+function closeCampaignEmailModal() {
+  $('campaignEmailOverlay').classList.remove('open');
+}
+
+async function loadCampaignEmailPreview() {
+  const templateId = $('emailTemplateSelect').value;
+  if (!templateId) {
+    $('emailPreviewSubject').textContent = 'Select a template to preview.';
+    $('emailPreviewBody').innerHTML = '';
+    return;
+  }
+  $('emailPreviewSubject').textContent = 'Loading preview...';
+  $('emailPreviewBody').innerHTML = '';
+  try {
+    const data = await api(`/api/campaigns/${activeCampaign.Id}/email-preview`, {
+      method: 'POST',
+      body: JSON.stringify({ templateId, memberIds: [...campaignMemberSelection] })
+    });
+    $('emailPreviewSubject').textContent = data.subject || '(No subject)';
+    $('emailPreviewBody').innerHTML = data.html || `<pre>${escapeHtml(data.text || '')}</pre>`;
+  } catch (err) {
+    $('emailPreviewSubject').textContent = 'Preview failed';
+    $('emailPreviewBody').innerHTML = `<div class="error-state compact"><p>${escapeHtml(err.message)}</p></div>`;
+  }
+}
+
+async function sendCampaignEmail() {
+  const templateId = $('emailTemplateSelect').value;
+  if (!templateId) {
+    toast('Select an email template', 'err');
+    return;
+  }
+  try {
+    $('sendCampaignEmailBtn').disabled = true;
+    const result = await api(`/api/campaigns/${activeCampaign.Id}/send-email`, {
+      method: 'POST',
+      body: JSON.stringify({ templateId, memberIds: [...campaignMemberSelection] })
+    });
+    const logText = result.logWarning
+      ? ` Activity log warning: ${result.logWarning}`
+      : ` ${result.logged || 0} activities logged.`;
+    toast(`${result.sent || 0} emails sent.${logText}`, result.logWarning ? 'info' : 'ok');
+    closeCampaignEmailModal();
+  } catch (err) {
+    toast(err.message, 'err');
+  } finally {
+    $('sendCampaignEmailBtn').disabled = false;
+  }
+}
+
 async function saveRecord() {
   const body = {};
   $('modalBody').querySelectorAll('[name]').forEach((input) => {
@@ -900,7 +1297,11 @@ async function saveRecord() {
       toast('Record created', 'ok');
     }
     closeModal();
-    await loadData();
+    if (viewingDetail && detailRecordState) {
+      await openRecordDetail(detailRecordState.objectName, detailRecordState.id);
+    } else {
+      await loadData();
+    }
   } catch (err) {
     toast(err.message, 'err');
   } finally {
@@ -1010,6 +1411,7 @@ document.addEventListener('click', (event) => {
 });
 
 document.addEventListener('DOMContentLoaded', () => {
+  listContentHtml = $('content').innerHTML;
   checkConnection().then(async (connection) => {
     if (connection?.success) {
       await loadListViews();
