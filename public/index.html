@@ -1,0 +1,321 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SF Manager — Salesforce Integration</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+  <!-- ── Sidebar ─────────────────────────────────────── -->
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-brand">
+      <div class="brand-icon">
+        <svg viewBox="0 0 24 24" width="20" height="20" fill="none">
+          <ellipse cx="12" cy="12" rx="10" ry="7" fill="white" opacity="0.9"/>
+          <ellipse cx="12" cy="10" rx="7" ry="5" fill="#0176D3"/>
+        </svg>
+      </div>
+      <div class="brand-text">
+        <span class="brand-name">SF Manager</span>
+        <span class="brand-sub">CRM Integration</span>
+      </div>
+    </div>
+
+    <div class="sidebar-section-label">OBJECTS</div>
+    <nav class="sidebar-nav" id="sidebarNav">
+      <a class="nav-item active" data-obj="Account" onclick="switchObject('Account')">
+        <span class="nav-icon">
+          <svg viewBox="0 0 20 20" width="16" height="16" fill="currentColor">
+            <path d="M3 4a1 1 0 011-1h12a1 1 0 011 1v12a1 1 0 01-1 1H4a1 1 0 01-1-1V4zm2 2v8h10V6H5zm2 2h6v1H7V8zm0 3h4v1H7v-1z"/>
+          </svg>
+        </span>
+        <span class="nav-label">Accounts</span>
+        <span class="nav-badge" id="badge-Account">—</span>
+      </a>
+      <a class="nav-item" data-obj="Contact" onclick="switchObject('Contact')">
+        <span class="nav-icon">
+          <svg viewBox="0 0 20 20" width="16" height="16" fill="currentColor">
+            <path d="M10 10a4 4 0 100-8 4 4 0 000 8zm-7 8a7 7 0 0114 0H3z"/>
+          </svg>
+        </span>
+        <span class="nav-label">Contacts</span>
+        <span class="nav-badge" id="badge-Contact">—</span>
+      </a>
+      <a class="nav-item" data-obj="Opportunity" onclick="switchObject('Opportunity')">
+        <span class="nav-icon">
+          <svg viewBox="0 0 20 20" width="16" height="16" fill="currentColor">
+            <path d="M8.433 7.418c.155-.103.346-.196.567-.267v1.698a2.305 2.305 0 01-.567-.267C8.07 8.34 8 8.114 8 8c0-.114.07-.34.433-.582zM11 12.849v-1.698c.22.071.412.164.567.267.364.243.433.468.433.582 0 .114-.07.34-.433.582a2.305 2.305 0 01-.567.267z"/>
+            <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm1-13a1 1 0 10-2 0v.092a4.535 4.535 0 00-1.676.662C6.602 6.234 6 7.009 6 8c0 .99.602 1.765 1.324 2.246.48.32 1.054.545 1.676.662v1.941c-.391-.127-.68-.317-.843-.504a1 1 0 10-1.51 1.31c.562.649 1.413 1.076 2.353 1.253V15a1 1 0 102 0v-.092a4.535 4.535 0 001.676-.662C13.398 13.766 14 12.991 14 12c0-.99-.602-1.765-1.324-2.246A4.535 4.535 0 0011 9.092V7.151c.391.127.68.317.843.504a1 1 0 101.511-1.31c-.563-.649-1.413-1.076-2.354-1.253V5z" clip-rule="evenodd"/>
+          </svg>
+        </span>
+        <span class="nav-label">Opportunities</span>
+        <span class="nav-badge" id="badge-Opportunity">—</span>
+      </a>
+      <a class="nav-item" data-obj="Case" onclick="switchObject('Case')">
+        <span class="nav-icon">
+          <svg viewBox="0 0 20 20" width="16" height="16" fill="currentColor">
+            <path fill-rule="evenodd" d="M4 4a2 2 0 012-2h4.586A2 2 0 0112 2.586L15.414 6A2 2 0 0116 7.414V16a2 2 0 01-2 2H6a2 2 0 01-2-2V4zm2 6a1 1 0 011-1h6a1 1 0 110 2H7a1 1 0 01-1-1zm1 3a1 1 0 100 2h6a1 1 0 100-2H7z" clip-rule="evenodd"/>
+          </svg>
+        </span>
+        <span class="nav-label">Cases</span>
+        <span class="nav-badge" id="badge-Case">—</span>
+      </a>
+      <a class="nav-item" data-obj="Lead" onclick="switchObject('Lead')">
+        <span class="nav-icon">
+          <svg viewBox="0 0 20 20" width="16" height="16" fill="currentColor">
+            <path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z"/>
+          </svg>
+        </span>
+        <span class="nav-label">Leads</span>
+        <span class="nav-badge" id="badge-Lead">—</span>
+      </a>
+    </nav>
+
+    <div class="sidebar-footer">
+      <div class="conn-status" id="connStatus">
+        <span class="conn-dot"></span>
+        <span class="conn-text">Connecting...</span>
+      </div>
+    </div>
+  </aside>
+
+  <!-- ── Main ──────────────────────────────────────────── -->
+  <div class="main-wrap" id="mainWrap">
+
+    <!-- Topbar -->
+    <header class="topbar">
+      <button class="hamburger" onclick="toggleSidebar()" aria-label="Toggle menu">
+        <span></span><span></span><span></span>
+      </button>
+
+      <div class="global-search-container">
+        <div class="global-search-box">
+          <svg class="search-icon" viewBox="0 0 20 20" width="16" height="16" fill="currentColor">
+            <path fill-rule="evenodd" d="M8 4a4 4 0 100 8 4 4 0 000-8zM2 8a6 6 0 1110.89 3.476l4.817 4.817a1 1 0 01-1.414 1.414l-4.816-4.816A6 6 0 012 8z" clip-rule="evenodd"/>
+          </svg>
+          <input
+            type="text"
+            id="globalSearch"
+            placeholder="Search accounts, contacts, opportunities, cases, leads..."
+            autocomplete="off"
+            oninput="handleGlobalSearch(this.value)"
+            onkeydown="handleSearchKeydown(event)"
+          >
+          <kbd class="search-kbd">⌘K</kbd>
+        </div>
+        <div class="global-results" id="globalResults"></div>
+      </div>
+
+      <div class="topbar-right">
+        <button class="btn btn-primary" id="authBtn" onclick="connectSalesforce()" style="display:none">
+          Connect Salesforce
+        </button>
+        <div class="topbar-instance" title="Connected Instance">
+          <svg viewBox="0 0 20 20" width="14" height="14" fill="currentColor" style="color:var(--accent)">
+            <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/>
+          </svg>
+          <span>Dev Edition</span>
+        </div>
+        <div class="profile-menu">
+          <button class="avatar" id="profileButton" onclick="toggleProfileMenu()">SF</button>
+          <div class="profile-popover" id="profilePopover">
+            <div class="profile-name" id="profileName">Salesforce User</div>
+            <div class="profile-email" id="profileEmail">Connected</div>
+            <button class="profile-action" onclick="openUserInfo()">User Information</button>
+            <button class="profile-action" onclick="connectSalesforce()">Reconnect</button>
+            <button class="profile-action danger" onclick="logoutSalesforce()">Logout</button>
+          </div>
+        </div>
+      </div>
+    </header>
+
+    <!-- Content -->
+    <main class="content" id="content">
+
+      <!-- Page Header -->
+      <div class="page-header">
+        <div class="page-title-group">
+          <div class="page-icon" id="pageIcon">🏢</div>
+          <div>
+            <h1 class="page-title" id="pageTitle">Accounts</h1>
+            <p class="page-sub" id="pageSub">Loading records from Salesforce...</p>
+          </div>
+        </div>
+        <div class="page-actions">
+          <button class="btn btn-ghost" onclick="loadData()">
+            <svg viewBox="0 0 20 20" width="15" height="15" fill="currentColor">
+              <path fill-rule="evenodd" d="M4 2a1 1 0 011 1v2.101a7.002 7.002 0 0111.601 2.566 1 1 0 11-1.885.666A5.002 5.002 0 005.999 7H9a1 1 0 010 2H4a1 1 0 01-1-1V3a1 1 0 011-1zm.008 9.057a1 1 0 011.276.61A5.002 5.002 0 0014.001 13H11a1 1 0 110-2h5a1 1 0 011 1v5a1 1 0 11-2 0v-2.101a7.002 7.002 0 01-11.601-2.566 1 1 0 01.61-1.276z" clip-rule="evenodd"/>
+            </svg>
+            Refresh
+          </button>
+          <button class="btn btn-primary" onclick="openCreate()">
+            <svg viewBox="0 0 20 20" width="15" height="15" fill="currentColor">
+              <path fill-rule="evenodd" d="M10 5a1 1 0 011 1v3h3a1 1 0 110 2h-3v3a1 1 0 11-2 0v-3H6a1 1 0 110-2h3V6a1 1 0 011-1z" clip-rule="evenodd"/>
+            </svg>
+            New
+          </button>
+        </div>
+      </div>
+
+      <!-- Filter/Search Bar -->
+      <div class="toolbar" id="toolbar">
+        <div class="obj-search">
+          <svg viewBox="0 0 20 20" width="14" height="14" fill="currentColor">
+            <path fill-rule="evenodd" d="M8 4a4 4 0 100 8 4 4 0 000-8zM2 8a6 6 0 1110.89 3.476l4.817 4.817a1 1 0 01-1.414 1.414l-4.816-4.816A6 6 0 012 8z" clip-rule="evenodd"/>
+          </svg>
+          <input type="text" id="objSearch" placeholder="Search this list..."
+                 oninput="handleObjSearch(this.value)">
+        </div>
+        <select class="list-view-select" id="listViewSelect" onchange="handleListViewChange(this.value)">
+          <option value="all">All Records</option>
+        </select>
+        <button class="btn btn-ghost" onclick="openListViewModal()">New List View</button>
+        <div class="filter-pills" id="filterPills"></div>
+        <div class="toolbar-right">
+          <span class="rec-count" id="recCount">—</span>
+        </div>
+      </div>
+
+      <!-- States -->
+      <div class="state-box" id="stateLoading">
+        <div class="spinner-ring"><div></div><div></div><div></div><div></div></div>
+        <p>Fetching records from Salesforce...</p>
+      </div>
+
+      <div class="state-box error-state" id="stateError" style="display:none">
+        <div class="error-emoji">⚠️</div>
+        <h3 id="errMsg">Something went wrong</h3>
+        <p id="errDetail">Please check your credentials and try again.</p>
+        <button class="btn btn-primary" onclick="loadData()">Retry</button>
+      </div>
+
+      <!-- Table -->
+      <div class="table-card" id="tableCard" style="display:none">
+        <div class="table-scroll">
+          <table class="data-table" id="dataTable">
+            <thead id="thead"></thead>
+            <tbody id="tbody"></tbody>
+          </table>
+        </div>
+        <div class="pagination-bar" id="paginationBar">
+          <div class="page-size">
+            <span>Rows</span>
+            <select id="pageSizeSelect" onchange="changePageSize(this.value)">
+              <option value="10">10</option>
+              <option value="25" selected>25</option>
+              <option value="50">50</option>
+              <option value="100">100</option>
+            </select>
+          </div>
+          <div class="page-controls">
+            <button class="btn btn-ghost" id="prevPageBtn" onclick="changePage(-1)">Previous</button>
+            <span class="page-status" id="pageStatus">Page 1</span>
+            <button class="btn btn-ghost" id="nextPageBtn" onclick="changePage(1)">Next</button>
+          </div>
+        </div>
+      </div>
+
+    </main>
+  </div>
+
+  <div class="overlay" id="listViewOverlay" onclick="overlayClick(event, 'listViewOverlay', closeListViewModal)">
+    <div class="modal modal-sm">
+      <div class="modal-head">
+        <h2>Create List View</h2>
+        <button class="close-btn" onclick="closeListViewModal()">
+          <svg viewBox="0 0 20 20" width="18" height="18" fill="currentColor">
+            <path fill-rule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clip-rule="evenodd"/>
+          </svg>
+        </button>
+      </div>
+      <div class="modal-body" id="listViewBody"></div>
+      <div class="modal-foot">
+        <button class="btn btn-ghost" onclick="closeListViewModal()">Cancel</button>
+        <button class="btn btn-primary" onclick="saveLocalListView()">Save View</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="overlay" id="detailOverlay" onclick="overlayClick(event, 'detailOverlay', closeDetailModal)">
+    <div class="modal detail-modal">
+      <div class="modal-head">
+        <div class="modal-title-group">
+          <div class="modal-obj-icon" id="detailObjIcon"></div>
+          <div>
+            <h2 id="detailTitle">Record Detail</h2>
+            <div class="detail-sub" id="detailSub"></div>
+          </div>
+        </div>
+        <button class="close-btn" onclick="closeDetailModal()">
+          <svg viewBox="0 0 20 20" width="18" height="18" fill="currentColor">
+            <path fill-rule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clip-rule="evenodd"/>
+          </svg>
+        </button>
+      </div>
+      <div class="modal-body" id="detailBody"></div>
+      <div class="modal-foot">
+        <button class="btn btn-ghost" onclick="closeDetailModal()">Close</button>
+        <button class="btn btn-primary" id="detailEditBtn">Edit</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Create/Edit Modal ──────────────────────────────── -->
+  <div class="overlay" id="modalOverlay" onclick="overlayClick(event, 'modalOverlay', closeModal)">
+    <div class="modal" id="modal">
+      <div class="modal-head">
+        <div class="modal-title-group">
+          <div class="modal-obj-icon" id="modalObjIcon">🏢</div>
+          <h2 id="modalTitle">New Account</h2>
+        </div>
+        <button class="close-btn" onclick="closeModal()">
+          <svg viewBox="0 0 20 20" width="18" height="18" fill="currentColor">
+            <path fill-rule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clip-rule="evenodd"/>
+          </svg>
+        </button>
+      </div>
+      <div class="modal-body" id="modalBody"></div>
+      <div class="modal-foot">
+        <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
+        <button class="btn btn-primary" id="saveBtn" onclick="saveRecord()">
+          <span id="saveBtnText">Save</span>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Delete Confirm Modal ───────────────────────────── -->
+  <div class="overlay" id="delOverlay" onclick="overlayClick(event, 'delOverlay', closeDeleteModal)">
+    <div class="modal modal-sm" id="delModal">
+      <div class="modal-head">
+        <h2 style="color:var(--danger)">Delete Record?</h2>
+        <button class="close-btn" onclick="closeDeleteModal()">
+          <svg viewBox="0 0 20 20" width="18" height="18" fill="currentColor">
+            <path fill-rule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clip-rule="evenodd"/>
+          </svg>
+        </button>
+      </div>
+      <div class="modal-body">
+        <div class="del-warning">
+          <div class="del-icon">🗑️</div>
+          <p>This action is <strong>permanent</strong> and cannot be undone. The record will be deleted from Salesforce.</p>
+          <p id="delRecordName" class="del-record-name"></p>
+        </div>
+      </div>
+      <div class="modal-foot">
+        <button class="btn btn-ghost" onclick="closeDeleteModal()">Cancel</button>
+        <button class="btn btn-danger" id="confirmDelBtn" onclick="confirmDelete()">Delete</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Toast ─────────────────────────────────────────── -->
+  <div class="toast-stack" id="toastStack"></div>
+
+  <script src="app.js?v=6"></script>
+</body>
+</html>
