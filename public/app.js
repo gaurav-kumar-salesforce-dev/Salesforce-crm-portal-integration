@@ -46,6 +46,73 @@ const OBJECT_META = {
   }
 };
 
+const OBJECT_FIELD_LAYOUTS = {
+  Account: [
+    { title: 'Account Information', fields: [
+      'Name', { name: 'OwnerId', readOnly: true }, 'Type', 'ParentId', 'Customer #', 'Phone',
+      'Payment Terms', 'Website', 'Sage ID', 'Compliance Status', 'Riggio Vendor Account Number',
+      'Tax-Exempt', 'Tax-Exempt Expiration', 'Industry', 'Industry (Custom)', 'Customer Status',
+      'Territory', 'Division', 'Relationship Status'
+    ] },
+    { title: 'Description Information', fields: ['Description'] },
+    { title: 'Address Information', fields: [
+      'BillingCountry', 'ShippingCountry', 'BillingStreet', 'ShippingStreet', 'BillingCity',
+      'BillingState', 'BillingPostalCode', 'ShippingCity', 'ShippingState', 'ShippingPostalCode'
+    ] }
+  ],
+  Contact: [
+    { title: 'Contact Information', fields: [
+      'Salutation', { name: 'OwnerId', readOnly: true }, 'FirstName', 'LastName', 'AccountId',
+      'Email', 'Title', 'Phone', 'Customer #', 'Mobile', 'Primary', 'LinkedIn Profile'
+    ] },
+    { title: 'Address Information', fields: ['MailingCountry', 'MailingStreet', 'MailingCity', 'MailingState', 'MailingPostalCode'] },
+    { title: 'System Information', fields: [{ name: 'CreatedById', readOnly: true }] }
+  ],
+  Lead: [
+    { title: 'Lead Information', fields: [
+      { name: 'OwnerId', readOnly: true }, 'Phone', 'Salutation', 'Mobile', 'FirstName', 'LastName',
+      'Company', 'Fax', 'Title', 'Email', 'LeadSource', 'Website', 'Industry', 'Status',
+      'AnnualRevenue', 'Rating', 'NumberOfEmployees'
+    ] },
+    { title: 'Address', fields: ['Country', 'Street', 'City', 'State', 'PostalCode'] },
+    { title: 'Additional Information', fields: [
+      'Product Interest', 'SIC Code', 'Current Generator(s)', 'Primary', 'Number of Locations',
+      { name: 'CreatedById', readOnly: true }, { name: 'LastModifiedById', readOnly: true }, 'Description'
+    ] }
+  ],
+  Case: [
+    { title: 'Case Information', fields: [
+      { name: 'OwnerId', readOnly: true }, 'Status', { name: 'CaseNumber', readOnly: true }, 'Priority',
+      'ContactId', { name: 'Contact Phone', readOnly: true }, 'AccountId', { name: 'Contact Email', readOnly: true },
+      'Type', 'Origin', 'Reason', 'WebEmail', 'SuppliedEmail', 'WebCompany', 'SuppliedCompany',
+      'WebName', 'SuppliedName', 'WebPhone', 'SuppliedPhone', { name: 'CreatedDate', readOnly: true },
+      { name: 'ClosedDate', readOnly: true }, 'Product', 'Engineering Req Number', 'Potential Liability',
+      'SLA Violation', { name: 'CreatedById', readOnly: true }, { name: 'LastModifiedById', readOnly: true },
+      'Subject', 'Description', 'Internal Comments'
+    ] }
+  ],
+  Opportunity: [
+    { title: 'Opportunity Information', fields: [
+      'Name', { name: 'OwnerId', readOnly: true }, 'AccountId', 'CloseDate', 'Amount', 'StageName',
+      'Invoice Number', 'Pricebook2Id', 'Date Invoice Sent', 'Customer PO', 'Total Hours (Job)',
+      { name: 'Vendor Total Cost', readOnly: true }, { name: 'Riggio Total Cost for Parts (Actual)', readOnly: true }
+    ] },
+    { title: 'Additional Information', fields: ['NextStep', 'LeadSource'] },
+    { title: 'Description Information', fields: ['SOW', 'Description', { name: 'CreatedById', readOnly: true }, { name: 'LastModifiedById', readOnly: true }, 'Probability'] }
+  ],
+  Campaign: [
+    { title: 'Campaign Information', fields: [
+      { name: 'OwnerId', readOnly: true }, { name: 'NumberOfLeads', readOnly: true }, 'Name',
+      { name: 'NumberOfConvertedLeads', readOnly: true }, 'IsActive', { name: 'NumberOfContacts', readOnly: true },
+      'Type', { name: 'NumberOfResponses', readOnly: true }, 'Status', { name: 'NumberOfOpportunities', readOnly: true },
+      'StartDate', { name: 'NumberOfWonOpportunities', readOnly: true }, 'EndDate',
+      { name: 'AmountWonOpportunities', readOnly: true }, 'ExpectedRevenue', { name: 'AmountAllOpportunities', readOnly: true },
+      'BudgetedCost', 'ActualCost', 'ExpectedResponse', 'NumberSent', 'ParentId', 'Event',
+      { name: 'CreatedById', readOnly: true }, { name: 'LastModifiedById', readOnly: true }, 'Description'
+    ] }
+  ]
+};
+
 let currentObject = 'Account';
 let currentRecords = [];
 let currentColumns = [];
@@ -73,6 +140,7 @@ let memberCandidateSelection = new Set();
 let currentCampaignCandidates = [];
 let emailTemplates = [];
 let detailLookupLabels = {};
+let expandedActivityIds = new Set();
 
 const $ = (id) => document.getElementById(id);
 
@@ -90,16 +158,42 @@ function objectLocalViews() {
 
 function objectIcon(objectName) {
   const key = OBJECT_META[objectName]?.icon || String(objectName).toLowerCase();
-  const labels = {
-    account: 'Acct',
-    contact: 'Cont',
-    opportunity: 'Opp',
-    case: 'Case',
-    lead: 'Lead',
-    campaign: 'Camp',
-    user: 'User'
+  return `<span class="object-icon object-icon-${key}" aria-hidden="true">${standardIconSvg(key)}</span>`;
+}
+
+function standardIconSvg(key) {
+  const icons = {
+    account: '<svg viewBox="0 0 24 24"><path d="M4 20V6l8-3 8 3v14h-5v-6H9v6H4zm3-2h2v-4H7v4zm0-6h2V9H7v3zm4 0h2V9h-2v3zm4 0h2V9h-2v3z"/></svg>',
+    contact: '<svg viewBox="0 0 24 24"><path d="M12 12a4 4 0 100-8 4 4 0 000 8zm-7 8a7 7 0 0114 0H5zm11-9.2a5.8 5.8 0 00-8 0 7.6 7.6 0 018 0z"/></svg>',
+    opportunity: '<svg viewBox="0 0 24 24"><path d="M8 3h8l2 4v5a6 6 0 11-12 0V7l2-4zm1.2 2L8 7h8l-1.2-2H9.2zM12 9a3 3 0 00-1 5.83V17h2v-2.17A3 3 0 0012 9zm0 1.6a1.4 1.4 0 110 2.8 1.4 1.4 0 010-2.8z"/></svg>',
+    case: '<svg viewBox="0 0 24 24"><path d="M9 5V3h6v2h4a2 2 0 012 2v11a2 2 0 01-2 2H5a2 2 0 01-2-2V7a2 2 0 012-2h4zm2 0h2V4h-2v1zm-6 5h14V7H5v3z"/></svg>',
+    lead: '<svg viewBox="0 0 24 24"><path d="M12 3l2.4 5 5.5.8-4 3.9.9 5.5-4.8-2.6-4.8 2.6.9-5.5-4-3.9 5.5-.8L12 3z"/></svg>',
+    campaign: '<svg viewBox="0 0 24 24"><path d="M12 3a9 9 0 109 9 9 9 0 00-9-9zm0 3a6 6 0 11-6 6 6 6 0 016-6zm0 2.5a3.5 3.5 0 103.5 3.5A3.5 3.5 0 0012 8.5z"/></svg>',
+    user: '<svg viewBox="0 0 24 24"><path d="M12 12a4 4 0 100-8 4 4 0 000 8zm-6 8a6 6 0 0112 0H6z"/></svg>'
   };
-  return `<span class="object-icon object-icon-${key}">${labels[key] || key.slice(0, 4)}</span>`;
+  return icons[key] || '<svg viewBox="0 0 24 24"><path d="M4 4h16v16H4z"/></svg>';
+}
+
+function utilityIconSvg(key) {
+  const icons = {
+    chevronDown: '<svg viewBox="0 0 20 20"><path d="M5.2 7.6L10 12.4l4.8-4.8 1.2 1.2-6 6-6-6 1.2-1.2z"/></svg>',
+    chevronRight: '<svg viewBox="0 0 20 20"><path d="M7.6 4l6 6-6 6-1.2-1.2 4.8-4.8-4.8-4.8L7.6 4z"/></svg>',
+    task: '<svg viewBox="0 0 24 24"><path d="M5 4h14a2 2 0 012 2v12a2 2 0 01-2 2H5a2 2 0 01-2-2V6a2 2 0 012-2zm3 5l-1.4 1.4L10 13.8l7-7L15.6 5.4 10 11 8 9z"/></svg>',
+    call: '<svg viewBox="0 0 24 24"><path d="M7 4l3 3-2 2c1.2 2.4 3.1 4.3 5.5 5.5l2-2 3 3-1.7 3c-.4.7-1.2 1-2 .8C9.9 18.6 5.4 14.1 4.2 9.2c-.2-.8.1-1.6.8-2L7 4z"/></svg>',
+    event: '<svg viewBox="0 0 24 24"><path d="M7 2h2v3h6V2h2v3h2a2 2 0 012 2v12a2 2 0 01-2 2H5a2 2 0 01-2-2V7a2 2 0 012-2h2V2zm12 8H5v9h14v-9z"/></svg>',
+    email: '<svg viewBox="0 0 24 24"><path d="M4 5h16a2 2 0 012 2v10a2 2 0 01-2 2H4a2 2 0 01-2-2V7a2 2 0 012-2zm8 8l8-5.2V7l-8 5-8-5v.8L12 13z"/></svg>',
+    settings: '<svg viewBox="0 0 24 24"><path d="M19.4 13.5a7.7 7.7 0 000-3l2-1.5-2-3.4-2.4 1a7.8 7.8 0 00-2.6-1.5L14 2h-4l-.4 3.1A7.8 7.8 0 007 6.6l-2.4-1-2 3.4 2 1.5a7.7 7.7 0 000 3l-2 1.5 2 3.4 2.4-1a7.8 7.8 0 002.6 1.5L10 22h4l.4-3.1a7.8 7.8 0 002.6-1.5l2.4 1 2-3.4-2-1.5zM12 15.5A3.5 3.5 0 1112 8a3.5 3.5 0 010 7.5z"/></svg>',
+    trash: '<svg viewBox="0 0 20 20"><path d="M8 2a1 1 0 00-.9.6L6.4 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 000-2h-2.4l-.7-1.4A1 1 0 0012 2H8zm-1 6h2v7H7V8zm4 0h2v7h-2V8z"/></svg>'
+  };
+  return icons[key] || '';
+}
+
+function refreshSidebarIcons() {
+  document.querySelectorAll('.nav-item[data-obj]').forEach((item) => {
+    const icon = item.querySelector('.nav-icon');
+    const meta = OBJECT_META[item.dataset.obj];
+    if (icon && meta) icon.innerHTML = standardIconSvg(meta.icon);
+  });
 }
 
 function objectFromId(id) {
@@ -247,7 +341,7 @@ function openUserInfo() {
     toast('User profile is still loading', 'info');
     return;
   }
-  $('detailObjIcon').innerHTML = '<span class="object-icon object-icon-user">User</span>';
+  $('detailObjIcon').innerHTML = objectIcon('User');
   $('detailTitle').textContent = currentUser.name || 'Salesforce User';
   $('detailSub').textContent = currentUser.username || currentUser.email || '';
   $('detailBody').innerHTML = `
@@ -647,17 +741,19 @@ async function openRecordModal(title, record, fields = null) {
   $('modalObjIcon').innerHTML = objectIcon(currentObject);
   $('modalTitle').textContent = title;
   const fullFields = fields || await getEditableFields(record);
-  $('modalBody').innerHTML = `
-    <div class="form-grid">
-      ${fullFields.map((field) => renderFieldControl(field.name || field, record, field)).join('')}
-    </div>
-  `;
+  const sections = getLayoutSections(currentObject, fullFields);
+  $('modalBody').innerHTML = sections.length
+    ? renderFormSections(sections, record)
+    : `<div class="form-grid">${fullFields.map((field) => renderFieldControl(field.name || field, record, field)).join('')}</div>`;
   $('modalOverlay').classList.add('open');
 }
 
 async function getEditableFields(record) {
   try {
     const data = await api(`/api/${currentObject}/fields`);
+    const layoutSections = getLayoutSections(currentObject, data.fields || []);
+    if (layoutSections.length) return layoutSections.flatMap((section) => section.fields);
+
     const fields = data.fields
       .filter((field) => editingRecord ? field.updateable : field.createable)
       .filter((field) => !['Id', 'IsDeleted', 'CreatedDate', 'CreatedById', 'LastModifiedDate', 'LastModifiedById', 'SystemModstamp', 'LastViewedDate', 'LastReferencedDate'].includes(field.name))
@@ -669,25 +765,78 @@ async function getEditableFields(record) {
   }
 }
 
+function getLayoutSections(objectName, fields = []) {
+  const layout = OBJECT_FIELD_LAYOUTS[objectName];
+  if (!layout) return [];
+  const fieldList = (fields || []).map((field) => typeof field === 'string' ? { name: field, label: labelFor(field) } : field);
+  const resolved = layout.map((section) => ({
+    title: section.title,
+    fields: section.fields
+      .map((entry) => resolveLayoutField(entry, fieldList))
+      .filter(Boolean)
+  })).filter((section) => section.fields.length);
+  return resolved;
+}
+
+function resolveLayoutField(entry, fields) {
+  const config = typeof entry === 'string' ? { name: entry } : entry;
+  const wanted = normalizeFieldKey(config.name);
+  const field = fields.find((item) => {
+    const aliases = [
+      item.name,
+      item.label,
+      item.name?.replace(/Id$/, ''),
+      labelFor(item.name || '')
+    ].map(normalizeFieldKey);
+    return aliases.includes(wanted);
+  });
+  if (!field) return null;
+  return {
+    ...field,
+    readOnly: Boolean(config.readOnly),
+    layoutLabel: config.label
+  };
+}
+
+function normalizeFieldKey(value = '') {
+  return String(value).toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+
+function renderFormSections(sections, record) {
+  return sections.map((section) => `
+    <section class="form-section">
+      <div class="form-section-title">${utilityIconSvg('chevronDown')}<span>${escapeHtml(section.title)}</span></div>
+      <div class="form-grid">
+        ${section.fields.map((field) => renderFieldControl(field.name, record, field)).join('')}
+      </div>
+    </section>
+  `).join('');
+}
+
 function renderFieldControl(field, record, fieldMeta = {}) {
   fieldMeta = typeof fieldMeta === 'string' ? { name: field, label: labelFor(field) } : fieldMeta;
   const lookup = OBJECT_META[currentObject].lookups?.[field] || (fieldMeta.referenceTo?.length ? { object: fieldMeta.referenceTo[0], label: fieldMeta.label || labelFor(field) } : null);
-  const label = fieldMeta.label || lookup?.label || labelFor(field);
+  const label = fieldMeta.layoutLabel || fieldMeta.label || lookup?.label || labelFor(field);
   const value = record[field] ?? '';
   const type = fieldMeta.type || 'string';
   const required = fieldMeta.nillable === false ? '<span class="form-req">*</span>' : '';
   const spanClass = shouldSpanField(field, type) ? 'span-2' : '';
+  const readOnly = Boolean(fieldMeta.readOnly)
+    || (editingRecord && fieldMeta.updateable === false)
+    || (!editingRecord && fieldMeta.createable === false);
+  const disabled = readOnly ? 'disabled data-readonly="true"' : '';
+  const readonlyClass = readOnly ? ' readonly-field' : '';
 
   if (lookup) {
-    const displayValue = getValue(record, field.replace(/Id$/, '.Name')) || '';
+    const displayValue = getLookupDisplayValue(field, record, fieldMeta);
     return `
-      <div class="form-group">
+      <div class="form-group${readonlyClass}">
         <label class="form-label" for="field-${field}-search">${escapeHtml(label)}${required}</label>
         <div class="lookup-wrap">
           <input class="form-ctrl" id="field-${field}-search" value="${escapeHtml(displayValue)}"
                  placeholder="Search ${escapeHtml(lookup.object)}..." autocomplete="off"
-                 oninput="lookupSearch('${field}', '${lookup.object}', this.value)">
-          <input type="hidden" id="field-${field}" name="${field}" value="${escapeHtml(record[field] || '')}">
+                 oninput="lookupSearch('${field}', '${lookup.object}', this.value)" ${disabled}>
+          <input type="hidden" id="field-${field}" name="${field}" value="${escapeHtml(record[field] || '')}" ${disabled}>
           <div class="lookup-results" id="lookup-${field}"></div>
         </div>
       </div>
@@ -696,9 +845,9 @@ function renderFieldControl(field, record, fieldMeta = {}) {
 
   if (type === 'picklist') {
     return `
-      <div class="form-group ${spanClass}">
+      <div class="form-group ${spanClass}${readonlyClass}">
         <label class="form-label" for="field-${field}">${escapeHtml(label)}${required}</label>
-        <select class="form-ctrl" id="field-${field}" name="${field}">
+        <select class="form-ctrl" id="field-${field}" name="${field}" ${disabled}>
           <option value=""></option>
           ${renderPicklistOptions(fieldMeta.picklistValues, value)}
         </select>
@@ -709,9 +858,9 @@ function renderFieldControl(field, record, fieldMeta = {}) {
   if (type === 'multipicklist') {
     const selectedValues = String(value || '').split(';').filter(Boolean);
     return `
-      <div class="form-group ${spanClass}">
+      <div class="form-group ${spanClass}${readonlyClass}">
         <label class="form-label" for="field-${field}">${escapeHtml(label)}${required}</label>
-        <select class="form-ctrl multi-select" id="field-${field}" name="${field}" multiple>
+        <select class="form-ctrl multi-select" id="field-${field}" name="${field}" multiple ${disabled}>
           ${renderPicklistOptions(fieldMeta.picklistValues, selectedValues)}
         </select>
       </div>
@@ -720,18 +869,18 @@ function renderFieldControl(field, record, fieldMeta = {}) {
 
   if (type === 'textarea' || type === 'encryptedtextarea' || type === 'address') {
     return `
-      <div class="form-group span-2">
+      <div class="form-group span-2${readonlyClass}">
         <label class="form-label" for="field-${field}">${escapeHtml(label)}${required}</label>
-        <textarea class="form-ctrl" id="field-${field}" name="${field}">${escapeHtml(formatEditableValue(value, type))}</textarea>
+        <textarea class="form-ctrl" id="field-${field}" name="${field}" ${disabled}>${escapeHtml(formatEditableValue(value, type))}</textarea>
       </div>
     `;
   }
 
   if (type === 'boolean') {
     return `
-      <div class="form-group ${spanClass}">
+      <div class="form-group ${spanClass}${readonlyClass}">
         <label class="check-item form-check">
-          <input type="checkbox" id="field-${field}" name="${field}" ${value ? 'checked' : ''}>
+          <input type="checkbox" id="field-${field}" name="${field}" ${value ? 'checked' : ''} ${disabled}>
           <span>${escapeHtml(label)}${required}</span>
         </label>
       </div>
@@ -752,9 +901,9 @@ function renderFieldControl(field, record, fieldMeta = {}) {
   }[type] || 'text';
 
   return `
-    <div class="form-group ${spanClass}">
+    <div class="form-group ${spanClass}${readonlyClass}">
       <label class="form-label" for="field-${field}">${escapeHtml(label)}${required}</label>
-      <input class="form-ctrl" id="field-${field}" name="${field}" type="${inputType}" value="${escapeHtml(formatEditableValue(value, type))}">
+      <input class="form-ctrl" id="field-${field}" name="${field}" type="${inputType}" value="${escapeHtml(formatEditableValue(value, type))}" ${disabled}>
     </div>
   `;
 }
@@ -768,6 +917,16 @@ function renderPicklistOptions(values = [], selected) {
 
 function shouldSpanField(field, type) {
   return ['Description', 'Website'].includes(field) || ['textarea', 'encryptedtextarea', 'multipicklist', 'address'].includes(type);
+}
+
+function getLookupDisplayValue(field, record = {}, fieldMeta = {}) {
+  const lookup = detailLookupLabels[field];
+  if (lookup?.name && (!lookup.id || lookup.id === record[field])) return lookup.name;
+
+  const relationshipName = fieldMeta.relationshipName || field.replace(/Id$/, '');
+  return getValue(record, `${relationshipName}.Name`)
+    || getValue(record, field.replace(/Id$/, '.Name'))
+    || '';
 }
 
 function formatEditableValue(value, type) {
@@ -896,9 +1055,7 @@ function renderRecordDetailPage(objectName, record, fields, displayFields, title
             ${renderRelatedPanel(objectName)}
           </div>
           <div id="recordDetailsPanel" class="record-tab-panel" style="display:none">
-            <div class="detail-grid">
-              ${displayFields.map((field) => renderDetailField(objectName, record, field)).join('')}
-            </div>
+            ${renderConfiguredDetailSections(objectName, record, fields, displayFields)}
           </div>
         </section>
         <aside class="record-side">
@@ -917,6 +1074,22 @@ function renderRecordDetailPage(objectName, record, fields, displayFields, title
       </div>
     </div>
   `;
+}
+
+function renderConfiguredDetailSections(objectName, record, fields, fallbackFields) {
+  const sections = getLayoutSections(objectName, fields);
+  if (!sections.length) {
+    return `<div class="detail-grid">${fallbackFields.map((field) => renderDetailField(objectName, record, field)).join('')}</div>`;
+  }
+
+  return sections.map((section) => `
+    <section class="detail-section">
+      <div class="detail-section-title">${utilityIconSvg('chevronDown')}<span>${escapeHtml(section.title)}</span></div>
+      <div class="detail-grid">
+        ${section.fields.map((field) => renderDetailField(objectName, record, field)).join('')}
+      </div>
+    </section>
+  `).join('');
 }
 
 function getSummaryFields(objectName) {
@@ -963,7 +1136,7 @@ function editCurrentDetailRecord() {
   openRecordModal(
     `Edit ${detailRecordState.objectName}`,
     detailRecordState.record,
-    detailRecordState.fields.filter((field) => field.updateable)
+    detailRecordState.fields
   );
 }
 
@@ -1089,9 +1262,7 @@ function renderCampaignMembers() {
             <td>${member.email ? `<a class="cell-email" href="mailto:${escapeHtml(member.email)}">${escapeHtml(member.email)}</a>` : '<span class="cell-empty">-</span>'}</td>
             <td>
               <button class="row-action del" title="Remove campaign member" aria-label="Remove campaign member" onclick="removeCampaignMember('${member.id}')">
-                <svg viewBox="0 0 20 20" width="15" height="15" fill="currentColor">
-                  <path fill-rule="evenodd" d="M8 2a1 1 0 00-.894.553L6.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-2.382l-.724-1.447A1 1 0 0012 2H8zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm5-1a1 1 0 00-1 1v6a1 1 0 102 0V8a1 1 0 00-1-1z" clip-rule="evenodd"/>
-                </svg>
+                ${utilityIconSvg('trash')}
               </button>
             </td>
           </tr>
@@ -1132,6 +1303,7 @@ async function loadRecordActivity(objectName, recordId) {
   try {
     const data = await api(`/api/${objectName}/${recordId}/activity`);
     recordActivities = data.records || [];
+    expandedActivityIds = new Set();
     renderRecordActivity(data.warnings || []);
   } catch (err) {
     timeline.innerHTML = `<div class="error-state compact"><p>${escapeHtml(err.message)}</p></div>`;
@@ -1161,7 +1333,7 @@ function renderRecordActivity(warnings = []) {
     ${renderUpcomingSection(upcoming)}
     ${past.length ? `
       <div class="activity-month">
-        <span>${escapeHtml(formatActivityMonth(firstPast.when))}</span>
+        <span class="activity-month-label">${utilityIconSvg('chevronDown')}${escapeHtml(formatActivityMonth(firstPast.when))}</span>
         <span>This Month</span>
       </div>
       <div class="activity-list">${past.map(renderActivityItem).join('')}</div>
@@ -1173,18 +1345,31 @@ function renderRecordActivity(warnings = []) {
 function renderActivityToolbar() {
   return `
     <div class="activity-actions">
-      <button class="activity-action activity-action-event" title="New Event">Cal</button>
-      <button class="activity-action activity-action-task" title="New Task">Task</button>
-      <button class="activity-action activity-action-call" title="Log Call">Call</button>
-      <button class="activity-action activity-action-email" title="Email">@</button>
+      <button class="activity-action activity-action-task" title="New Task">${utilityIconSvg('task')}<span>New Task</span></button>
+      <button class="activity-action activity-action-call" title="Log a Call">${utilityIconSvg('call')}<span>Log a Call</span></button>
+      <button class="activity-action activity-action-event" title="New Event">${utilityIconSvg('event')}<span>New Event</span></button>
+      <button class="activity-action activity-action-email" title="Email">${utilityIconSvg('email')}<span>Email</span></button>
     </div>
-    <div class="activity-filter">All time &bull; All activities &bull; All types</div>
+    <div class="activity-filter">
+      <span>Filters: All time &bull; All activities &bull; All types</span>
+      <button class="activity-settings" title="Activity Settings">${utilityIconSvg('settings')}</button>
+    </div>
+    <div class="activity-links">
+      <button class="cell-button-link" onclick="loadRecordActivity('${detailRecordState?.objectName || ''}', '${detailRecordState?.id || ''}')">Refresh</button>
+      <span>&bull;</span>
+      <button class="cell-button-link" onclick="toggleAllActivities(true)">Expand All</button>
+      <span>&bull;</span>
+      <button class="cell-button-link" onclick="toggleAllActivities(false)">Collapse All</button>
+    </div>
   `;
 }
 
 function renderUpcomingSection(items) {
   return `
-    <div class="activity-section-title">⌄ Upcoming &amp; Overdue</div>
+    <button class="activity-section-title" onclick="toggleActivitySection(this)" aria-expanded="true">
+      <span class="activity-section-chevron">${utilityIconSvg('chevronDown')}</span>
+      <span>Upcoming &amp; Overdue</span>
+    </button>
     ${items.length
       ? `<div class="activity-list">${items.map(renderActivityItem).join('')}</div>`
       : `<div class="activity-empty standard-empty">
@@ -1195,38 +1380,95 @@ function renderUpcomingSection(items) {
 }
 
 function renderActivityItem(item) {
+  const expanded = expandedActivityIds.has(item.id);
   const target = item.targetId && item.targetObject && OBJECT_META[item.targetObject]
     ? `<button class="cell-button-link" onclick="openRecordDetail('${item.targetObject}', '${item.targetId}')">${escapeHtml(item.target)}</button>`
     : escapeHtml(item.target || '');
   const meta = [formatActivityTime(item.when), item.status].filter(Boolean).join(' | ');
-  const body = item.body ? `<div class="activity-body">${escapeHtml(String(item.body).slice(0, 180))}</div>` : '';
   const actionText = target
     ? `${escapeHtml(item.actor || 'Salesforce')} logged activity for ${target}`
     : `${escapeHtml(item.actor || 'Salesforce')} logged activity`;
+  const details = renderActivityDetails(item);
 
   return `
-    <div class="activity-item">
-      <div class="activity-icon">${activityIconLabel(item.type)}</div>
+    <div class="activity-item ${expanded ? 'expanded' : ''}" data-activity-id="${escapeHtml(item.id)}">
+      <button class="activity-row-toggle" aria-label="${expanded ? 'Collapse' : 'Expand'} activity" onclick="toggleActivity('${item.id}')">
+        ${utilityIconSvg(expanded ? 'chevronDown' : 'chevronRight')}
+      </button>
+      <div class="activity-icon ${activityIconClass(item.type)}">${activityIconLabel(item.type)}</div>
       <div class="activity-content">
         <div class="activity-title-row">
-          <span class="activity-title">${escapeHtml(item.subject || item.type)}</span>
+          <button class="cell-button-link activity-title" onclick="toggleActivity('${item.id}')">${escapeHtml(item.subject || item.type)}</button>
           <span>${escapeHtml(meta)}</span>
         </div>
         <div class="activity-meta">
           ${actionText}
         </div>
-        ${body}
+        ${expanded ? details : ''}
       </div>
+      <button class="activity-menu" aria-label="Activity actions">${utilityIconSvg('chevronDown')}</button>
     </div>
   `;
 }
 
+function renderActivityDetails(item) {
+  const body = String(item.body || '').trim();
+  const rows = [
+    ['Scheduled Date', formatActivityTime(item.when)],
+    ['Status', item.status || (item.isClosed ? 'Completed' : '')],
+    ['Assigned To', item.actor || '']
+  ].filter(([, value]) => value);
+
+  return `
+    <div class="activity-detail-box">
+      <div class="activity-detail-grid">
+        ${rows.map(([label, value]) => `
+          <div>
+            <div class="activity-detail-label">${escapeHtml(label)}</div>
+            <div>${escapeHtml(value)}</div>
+          </div>
+        `).join('')}
+      </div>
+      ${body ? `
+        <div class="activity-detail-label">Text Body</div>
+        <div class="activity-detail-body">${escapeHtml(body)}</div>
+      ` : ''}
+    </div>
+  `;
+}
+
+function toggleActivity(id) {
+  if (expandedActivityIds.has(id)) expandedActivityIds.delete(id);
+  else expandedActivityIds.add(id);
+  renderRecordActivity();
+}
+
+function toggleAllActivities(expand) {
+  expandedActivityIds = new Set(expand ? recordActivities.map((item) => item.id) : []);
+  renderRecordActivity();
+}
+
+function toggleActivitySection(button) {
+  const expanded = button.getAttribute('aria-expanded') !== 'false';
+  button.setAttribute('aria-expanded', String(!expanded));
+  const section = button.nextElementSibling;
+  if (section) section.style.display = expanded ? 'none' : '';
+  const chevron = button.querySelector('.activity-section-chevron');
+  if (chevron) chevron.innerHTML = utilityIconSvg(expanded ? 'chevronRight' : 'chevronDown');
+}
+
 function activityIconLabel(type) {
   const text = String(type || '').toLowerCase();
-  if (text.includes('email')) return '@';
-  if (text.includes('event')) return 'Cal';
-  if (text.includes('call')) return 'Call';
-  return 'Task';
+  const key = text.includes('event') ? 'event' : text.includes('call') ? 'call' : text.includes('email') ? 'email' : 'task';
+  return utilityIconSvg(key);
+}
+
+function activityIconClass(type) {
+  const text = String(type || '').toLowerCase();
+  if (text.includes('event')) return 'activity-icon-event';
+  if (text.includes('call')) return 'activity-icon-call';
+  if (text.includes('email')) return 'activity-icon-email';
+  return 'activity-icon-task';
 }
 
 function formatActivityTime(value) {
@@ -1440,6 +1682,7 @@ async function sendCampaignEmail() {
 async function saveRecord() {
   const body = {};
   $('modalBody').querySelectorAll('[name]').forEach((input) => {
+    if (input.disabled || input.dataset.readonly === 'true') return;
     if (input.type === 'checkbox') {
       body[input.name] = input.checked;
       return;
@@ -1582,6 +1825,7 @@ document.addEventListener('click', (event) => {
 
 document.addEventListener('DOMContentLoaded', () => {
   listContentHtml = $('content').innerHTML;
+  refreshSidebarIcons();
   checkConnection().then(async (connection) => {
     if (connection?.success) {
       await loadListViews();

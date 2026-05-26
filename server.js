@@ -194,6 +194,11 @@ const OBJECTS = {
     orderBy     : 'CreatedDate DESC',
     searchFields: ['Name', 'Type', 'Status']
   },
+  Pricebook2: {
+    fields      : 'Id, Name, IsActive, Description',
+    orderBy     : 'Name',
+    searchFields: ['Name', 'Description']
+  },
   User: {
     fields      : 'Id, Name, Email, Username, Title, IsActive',
     orderBy     : 'Name',
@@ -417,6 +422,32 @@ function normalizeActivity(record, source) {
     isClosed: Boolean(record.IsClosed),
     body: record.Description || ''
   };
+}
+
+function normalizeEmailSubject(value = '') {
+  return String(value || '')
+    .replace(/^(Email|List Email):\s*/i, '')
+    .trim()
+    .toLowerCase();
+}
+
+function extractEmailRecipient(value = '') {
+  const match = String(value || '').match(/^To:\s*([^\s\r\n]+)/im);
+  return match ? match[1].trim().toLowerCase() : '';
+}
+
+function dedupeCampaignEmailActivities(records) {
+  const emailKeys = new Set(records
+    .filter((record) => record.id?.startsWith('02s'))
+    .map((record) => `${normalizeEmailSubject(record.subject)}|${String(record.target || '').toLowerCase()}`));
+
+  if (!emailKeys.size) return records;
+
+  return records.filter((record) => {
+    if (!record.id?.startsWith('00T') || !String(record.type || '').toLowerCase().includes('email')) return true;
+    const key = `${normalizeEmailSubject(record.subject)}|${extractEmailRecipient(record.body)}`;
+    return !emailKeys.has(key);
+  });
 }
 
 // ─── Error Handler ────────────────────────────────────────────
@@ -815,10 +846,11 @@ app.get('/api/:object/:id/activity', async (req, res) => {
     const results = await Promise.allSettled(
       queries.map((item) => sfGet('/query', { q: item.q.replace(/\s+/g, ' ').trim() }))
     );
-    const records = results.flatMap((result, index) => {
+    let records = results.flatMap((result, index) => {
       if (result.status !== 'fulfilled') return [];
       return (result.value.records || []).map((record) => normalizeActivity(record, queries[index].source));
     });
+    if (object === 'Campaign') records = dedupeCampaignEmailActivities(records);
 
     records.sort((a, b) => new Date(b.when || 0) - new Date(a.when || 0));
     res.json({
@@ -1061,6 +1093,7 @@ app.get('/api/:object/:id', async (req, res) => {
         type: field.type,
         updateable: field.updateable,
         createable: field.createable,
+        nillable: field.nillable,
         referenceTo: field.referenceTo || [],
         relationshipName: field.relationshipName || '',
         picklistValues: field.picklistValues?.filter(item => item.active).map(item => item.value) || []
