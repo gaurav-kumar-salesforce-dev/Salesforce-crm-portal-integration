@@ -2052,6 +2052,284 @@ textarea.form-ctrl { resize: vertical; min-height: 80px; line-height: 1.5; }
   font-family: inherit;
 }
 
+.activity-overlay .modal {
+  border-radius: 3px;
+}
+
+.activity-modal {
+  width: min(96vw, 1440px);
+  max-height: 88vh;
+}
+
+.activity-modal-head {
+  border-top: 3px solid var(--accent);
+  padding: 10px 18px;
+}
+
+.activity-modal-icon {
+  width: 20px;
+  height: 20px;
+  color: var(--text-2);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.activity-modal-icon svg {
+  width: 16px;
+  height: 16px;
+}
+
+.activity-modal-body {
+  max-height: calc(88vh - 116px);
+  overflow-y: auto;
+  padding: 14px 18px 22px;
+}
+
+.activity-form-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 14px;
+}
+
+.activity-form-grid.two {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px 20px;
+}
+
+.activity-form-grid .span-2 {
+  grid-column: 1 / -1;
+}
+
+.form-section-label {
+  color: var(--text-1);
+  font-size: 12px;
+  font-weight: 800;
+  margin-top: 4px;
+}
+
+.form-label.required::before {
+  content: "*";
+  color: var(--danger);
+  margin-right: 2px;
+}
+
+.activity-pill {
+  min-height: 34px;
+  border: 1px solid var(--border-dark);
+  border-radius: var(--r-sm);
+  background: var(--surface);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px;
+  color: var(--text-1);
+  font-size: 13px;
+}
+
+.activity-pill .object-icon {
+  width: 20px;
+  height: 20px;
+  border-radius: 4px;
+  box-shadow: none;
+}
+
+.activity-pill .object-icon svg {
+  width: 13px;
+  height: 13px;
+}
+
+.activity-pill span:not(.object-icon) {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.activity-pill button {
+  border: none;
+  background: transparent;
+  color: var(--text-3);
+  font: inherit;
+  cursor: pointer;
+}
+
+.activity-lookup {
+  position: relative;
+}
+
+.activity-lookup-search {
+  display: grid;
+  grid-template-columns: 150px minmax(0, 1fr) 34px;
+  align-items: stretch;
+  border: 1px solid var(--border-dark);
+  border-radius: var(--r-sm);
+  background: var(--surface);
+  overflow: hidden;
+}
+
+.activity-lookup-type {
+  border: none;
+  border-right: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text-1);
+  padding: 0 8px;
+  font: inherit;
+  font-size: 12px;
+}
+
+.activity-lookup-search .form-ctrl {
+  border: none;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.activity-lookup-search-btn {
+  border: none;
+  border-left: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text-2);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.activity-lookup-search-btn svg {
+  width: 14px;
+  height: 14px;
+}
+
+.activity-lookup-results {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  z-index: 1200;
+  display: none;
+  max-height: 260px;
+  overflow-y: auto;
+  border: 1px solid var(--border-dark);
+  border-radius: var(--r-sm);
+  background: var(--surface);
+  box-shadow: var(--shadow-lg);
+}
+
+.activity-lookup-results.open {
+  display: block;
+}
+
+.activity-lookup-item {
+  width: 100%;
+  border: none;
+  background: transparent;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 9px 10px;
+  color: var(--text-1);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.activity-lookup-item:hover {
+  background: var(--surface-2);
+}
+
+.activity-lookup-item .object-icon {
+  width: 22px;
+  height: 22px;
+  border-radius: 4px;
+  box-shadow: none;
+}
+
+.activity-lookup-item .object-icon svg {
+  width: 13px;
+  height: 13px;
+}
+
+.activity-lookup-item span {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.activity-lookup-item small {
+  color: var(--text-3);
+  font-size: 11px;
+}
+
+.activity-checkbox {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-2);
+  font-size: 13px;
+}
+
+.activity-checkbox input {
+  width: 15px;
+  height: 15px;
+}
+
+.activity-email-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.activity-email-row {
+  display: grid;
+  grid-template-columns: 72px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.activity-email-row .form-ctrl {
+  border-color: transparent;
+  box-shadow: none;
+}
+
+.activity-email-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 7px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.activity-email-toolbar button {
+  width: 28px;
+  height: 26px;
+  border: 1px solid var(--border-dark);
+  border-radius: var(--r-sm);
+  background: var(--surface);
+  color: var(--text-2);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.activity-email-toolbar svg {
+  width: 14px;
+  height: 14px;
+}
+
+.activity-email-body {
+  min-height: 250px;
+  border: none;
+  border-bottom: 1px solid var(--border);
+  padding: 14px 0;
+  resize: vertical;
+  font: inherit;
+  color: var(--text-1);
+  outline: none;
+}
+
 .lookup-wrap { position: relative; }
 
 .lookup-results {

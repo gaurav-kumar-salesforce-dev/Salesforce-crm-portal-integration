@@ -777,6 +777,39 @@ function extractActionFailures(result) {
     .filter(Boolean);
 }
 
+function activityRelationFor(object, id) {
+  return ['Contact', 'Lead'].includes(object)
+    ? { WhoId: id }
+    : { WhatId: id };
+}
+
+function activityRelationFromBody(object, id, body = {}) {
+  const relation = {};
+  if (body.whoId) relation.WhoId = body.whoId;
+  if (body.whatId) relation.WhatId = body.whatId;
+  if (!relation.WhoId && !relation.WhatId) return activityRelationFor(object, id);
+  return relation;
+}
+
+async function createTaskActivity(fields, subtype = '') {
+  const body = { ...fields };
+  if (subtype) body.TaskSubtype = subtype;
+
+  try {
+    return await sfPost('/sobjects/Task', body);
+  } catch (err) {
+    if (!subtype) throw err;
+    const { TaskSubtype, ...fallback } = body;
+    return sfPost('/sobjects/Task', fallback);
+  }
+}
+
+function toSalesforceDateTime(dateValue, timeValue) {
+  if (!dateValue) return '';
+  if (!timeValue) return new Date(dateValue).toISOString();
+  return new Date(`${dateValue}T${timeValue}`).toISOString();
+}
+
 async function getEmailMergeContext() {
   const me = await sfGet('/chatter/users/me');
   const [userData, orgData] = await Promise.all([
@@ -953,11 +986,26 @@ app.get('/api/lookup/:object', async (req, res) => {
   if (!OBJECTS[object]) return res.status(400).json({ error: `Unknown object: ${object}` });
 
   try {
-    const where = search ? `WHERE Name LIKE '%${search}%'` : '';
+    const searchFields = OBJECTS[object].searchFields || ['Name'];
+    const where = search
+      ? `WHERE ${searchFields.map((field) => `${field} LIKE '%${search}%'`).join(' OR ')}`
+      : '';
+    const fields = {
+      Case: 'Id, CaseNumber, Subject, AccountId, Account.Name',
+      Contact: 'Id, Name, Email, AccountId, Account.Name',
+      Lead: 'Id, Name, Email, Company',
+      User: 'Id, Name, Email, Username',
+      Opportunity: 'Id, Name, AccountId, Account.Name'
+    }[object] || OBJECTS[object].fields;
     const data = await sfGet('/query', {
-      q: `SELECT Id, Name FROM ${object} ${where} ORDER BY Name LIMIT 25`
+      q: `SELECT ${fields} FROM ${object} ${where} ORDER BY ${OBJECTS[object].orderBy} LIMIT 25`
     });
-    res.json({ records: data.records || [] });
+    res.json({
+      records: (data.records || []).map((record) => ({
+        ...record,
+        Name: record.Name || record.Subject || record.CaseNumber || record.Id
+      }))
+    });
   } catch (err) {
     handleSFError(err, res, `Lookup ${object}`);
   }
@@ -1098,7 +1146,6 @@ app.delete('/api/campaigns/:id/members/:memberId', async (req, res) => {
 app.get('/api/:object/:id/activity', async (req, res) => {
   const { object, id } = req.params;
   if (!OBJECTS[object]) return res.status(400).json({ error: `Unknown object: ${object}` });
-  if (!['Campaign', 'Contact', 'Lead'].includes(object)) return res.json({ records: [], warnings: [] });
 
   const recordId = escapeSOQL(id);
   const isPersonRecord = ['Contact', 'Lead'].includes(object);
@@ -1159,6 +1206,114 @@ app.get('/api/:object/:id/activity', async (req, res) => {
     });
   } catch (err) {
     handleSFError(err, res, `${object} activity ${id}`);
+  }
+});
+
+app.post('/api/:object/:id/activity', async (req, res) => {
+  const { object, id } = req.params;
+  if (!OBJECTS[object]) return res.status(400).json({ error: `Unknown object: ${object}` });
+
+  const type = String(req.body?.type || '').toLowerCase();
+  const relation = activityRelationFromBody(object, id, req.body);
+  const owner = req.body?.ownerId ? { OwnerId: req.body.ownerId } : {};
+
+  try {
+    if (type === 'task') {
+      const subject = String(req.body.subject || '').trim();
+      if (!subject) return res.status(400).json({ error: 'Subject is required' });
+      const result = await createTaskActivity({
+        Subject: subject,
+        ActivityDate: req.body.dueDate || null,
+        Status: req.body.status || 'Not Started',
+        Priority: req.body.priority || 'Normal',
+        Description: req.body.comments || '',
+        ...owner,
+        ...relation
+      });
+      return res.json({ success: true, result });
+    }
+
+    if (type === 'call') {
+      const result = await createTaskActivity({
+        Subject: String(req.body.subject || 'Call').trim() || 'Call',
+        Status: 'Completed',
+        Priority: req.body.priority || 'Normal',
+        ActivityDate: req.body.date || new Date().toISOString().slice(0, 10),
+        Description: req.body.comments || '',
+        ...owner,
+        ...relation
+      }, 'Call');
+      return res.json({ success: true, result });
+    }
+
+    if (type === 'event') {
+      const subject = String(req.body.subject || '').trim();
+      if (!subject) return res.status(400).json({ error: 'Subject is required' });
+      const isAllDay = Boolean(req.body.isAllDay);
+      const startDate = req.body.startDate || new Date().toISOString().slice(0, 10);
+      const endDate = req.body.endDate || startDate;
+      const eventBody = {
+        Subject: subject,
+        IsAllDayEvent: isAllDay,
+        StartDateTime: toSalesforceDateTime(startDate, isAllDay ? '00:00' : req.body.startTime || '09:00'),
+        EndDateTime: toSalesforceDateTime(endDate, isAllDay ? '23:59' : req.body.endTime || '10:00'),
+        Location: req.body.location || '',
+        Description: req.body.comments || '',
+        ...owner,
+        ...relation
+      };
+      const result = await sfPost('/sobjects/Event', eventBody);
+      return res.json({ success: true, result });
+    }
+
+    if (type === 'email') {
+      const subject = String(req.body.subject || '').trim();
+      const body = String(req.body.body || '').trim();
+      if (!subject) return res.status(400).json({ error: 'Subject is required' });
+      if (!body) return res.status(400).json({ error: 'Email body is required' });
+
+      let to = String(req.body.to || '').trim();
+      let recipientId = req.body.whoId || (['Contact', 'Lead'].includes(object) ? id : '');
+      if (!to && recipientId) {
+        const personObject = objectFromId(recipientId);
+        const person = ['Contact', 'Lead'].includes(personObject)
+          ? await sfGet(`/sobjects/${personObject}/${recipientId}`)
+          : {};
+        to = person.Email || '';
+      }
+      if (!to) return res.status(400).json({ error: 'Recipient email is required' });
+
+      const emailResult = await sfPost('/actions/standard/emailSimple', {
+        inputs: [{
+          emailAddresses: to,
+          emailSubject: subject,
+          emailBody: body,
+          sendRichBody: false,
+          useLineBreaks: true,
+          senderType: 'CurrentUser',
+          ...(recipientId ? { recipientId } : {}),
+          ...(!recipientId ? { relatedRecordId: id } : {}),
+          logEmailOnSend: true
+        }]
+      });
+      const failures = extractActionFailures(emailResult);
+      if (failures.length) return res.status(400).json({ error: failures.join('; '), result: emailResult });
+
+      const taskResult = await createTaskActivity({
+        Subject: `Email: ${subject}`,
+        Status: 'Completed',
+        Priority: 'Normal',
+        ActivityDate: new Date().toISOString().slice(0, 10),
+        Description: `To: ${to}\n\n${body}`,
+        ...owner,
+        ...relation
+      }, 'Email');
+      return res.json({ success: true, result: emailResult, taskResult });
+    }
+
+    res.status(400).json({ error: 'Activity type must be task, call, event, or email' });
+  } catch (err) {
+    handleSFError(err, res, `Create ${type || 'activity'} for ${object}/${id}`);
   }
 });
 
