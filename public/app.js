@@ -128,6 +128,9 @@ let sortState = { field: null, direction: 'asc' };
 let currentPage = 1;
 let pageSize = 25;
 let totalRecords = 0;
+let currentViewMode = 'table';
+let draggedKanbanId = null;
+const kanbanPicklistCache = {};
 let listContentHtml = '';
 let viewingDetail = false;
 let detailRecordState = null;
@@ -141,6 +144,7 @@ let currentCampaignCandidates = [];
 let emailTemplates = [];
 let detailLookupLabels = {};
 let expandedActivityIds = new Set();
+let activityLookupState = {};
 
 const $ = (id) => document.getElementById(id);
 
@@ -150,6 +154,31 @@ function getLocalViews() {
 
 function setLocalViews(views) {
   localStorage.setItem('sfmListViews', JSON.stringify(views));
+}
+
+function isKanbanObject(objectName = currentObject) {
+  return ['Opportunity', 'Lead'].includes(objectName);
+}
+
+function kanbanFieldFor(objectName = currentObject) {
+  return objectName === 'Opportunity' ? 'StageName' : 'Status';
+}
+
+function kanbanFallbackValues(objectName = currentObject) {
+  return objectName === 'Opportunity'
+    ? ['Prospecting', 'Qualification', 'Needs Analysis', 'Value Proposition', 'Id. Decision Makers', 'Perception Analysis', 'Proposal/Price Quote', 'Negotiation/Review', 'Closed Won', 'Closed Lost']
+    : ['Open - Not Contacted', 'Working - Contacted', 'Closed - Converted', 'Closed - Not Converted'];
+}
+
+function uniqueKanbanValues(values, objectName = currentObject) {
+  const seen = new Set();
+  return [...values, ...kanbanFallbackValues(objectName)]
+    .map((value) => String(value || '').trim())
+    .filter((value) => {
+      if (!value || seen.has(value)) return false;
+      seen.add(value);
+      return true;
+    });
 }
 
 function objectLocalViews() {
@@ -423,6 +452,8 @@ async function loadData() {
   $('stateLoading').style.display = 'flex';
   $('stateError').style.display = 'none';
   $('tableCard').style.display = 'none';
+  if ($('kanbanCard')) $('kanbanCard').style.display = 'none';
+  updateViewToggle();
 
   try {
     if (currentViewId.startsWith('sf:')) {
@@ -448,15 +479,17 @@ async function loadData() {
     }
 
     applySort();
-    renderTable();
+    await renderCurrentView();
     updatePagination();
     updateBadge(currentObject, currentRecords.length);
     $('pageSub').textContent = `${totalRecords} records available`;
-    $('recCount').textContent = currentViewId.startsWith('sf:')
+    $('recCount').textContent = currentViewMode === 'kanban'
+      ? `${currentRecords.length} records`
+      : currentViewId.startsWith('sf:')
       ? `${currentRecords.length} records`
       : `${pageRangeStart()}-${pageRangeEnd()} of ${totalRecords}`;
     $('stateLoading').style.display = 'none';
-    $('tableCard').style.display = 'block';
+    showActiveView();
   } catch (err) {
     $('stateLoading').style.display = 'none';
     $('stateError').style.display = 'flex';
@@ -557,8 +590,266 @@ function renderTable() {
   `).join('');
 }
 
+function updateViewToggle() {
+  const toggle = $('viewToggle');
+  if (!toggle) return;
+  if (!isKanbanObject()) {
+    currentViewMode = 'table';
+    toggle.style.display = 'none';
+  } else {
+    toggle.style.display = 'inline-flex';
+  }
+  $('tableViewBtn')?.classList.toggle('active', currentViewMode === 'table');
+  $('kanbanViewBtn')?.classList.toggle('active', currentViewMode === 'kanban');
+}
+
+async function setViewMode(mode) {
+  currentViewMode = isKanbanObject() && mode === 'kanban' ? 'kanban' : 'table';
+  updateViewToggle();
+  await renderCurrentView();
+  updatePagination();
+  showActiveView();
+}
+
+function showActiveView() {
+  const tableCard = $('tableCard');
+  const kanbanCard = $('kanbanCard');
+  if (tableCard) tableCard.style.display = currentViewMode === 'table' ? 'block' : 'none';
+  if (kanbanCard) kanbanCard.style.display = currentViewMode === 'kanban' ? 'block' : 'none';
+}
+
+async function renderCurrentView() {
+  updateViewToggle();
+  if (currentViewMode === 'kanban') {
+    await renderKanban();
+    return;
+  }
+  renderTable();
+}
+
 function fieldColumnClass(field) {
   return `col-${String(field).toLowerCase().replace(/[^a-z0-9]+/g, '-')}`;
+}
+
+async function getKanbanValues() {
+  const field = kanbanFieldFor();
+  const key = `${currentObject}.${field}`;
+  if (kanbanPicklistCache[key]) return kanbanPicklistCache[key];
+
+  try {
+    const data = await api(`/api/meta/${currentObject}/picklist/${field}`);
+    const values = (data.values || []).filter(Boolean);
+    kanbanPicklistCache[key] = uniqueKanbanValues(values);
+  } catch {
+    kanbanPicklistCache[key] = uniqueKanbanValues([]);
+  }
+  return kanbanPicklistCache[key];
+}
+
+async function renderKanban() {
+  const board = $('kanbanBoard');
+  if (!board) return;
+
+  const field = kanbanFieldFor();
+  const values = await getKanbanValues();
+  const records = getRecordsToRender();
+  const grouped = uniqueKanbanValues([...values, ...records.map((record) => record[field] || 'Unspecified')])
+    .reduce((acc, value) => ({ ...acc, [value]: [] }), {});
+  records.forEach((record) => {
+    const value = record[field] || 'Unspecified';
+    if (!grouped[value]) grouped[value] = [];
+    grouped[value].push(record);
+  });
+
+  const columns = Object.keys(grouped);
+  board.innerHTML = columns.map((value) => {
+    const items = grouped[value] || [];
+    const amount = currentObject === 'Opportunity'
+      ? items.reduce((sum, record) => sum + (Number(record.Amount) || 0), 0)
+      : 0;
+    return `
+      <section class="kanban-column" data-value="${escapeHtml(value)}" ondragover="handleKanbanDragOver(event)" ondragleave="handleKanbanDragLeave(event)" ondrop="handleKanbanDrop(event, '${escapeJs(value)}')">
+        <div class="kanban-column-head">
+          <div class="kanban-stage-name" title="${escapeHtml(value)}">${escapeHtml(value)}</div>
+          <span class="kanban-count">${items.length}</span>
+        </div>
+        ${currentObject === 'Opportunity' ? `<div class="kanban-stage-total">${formatKanbanAmount(amount)}</div>` : ''}
+        <div class="kanban-list">
+          ${items.length ? items.map(renderKanbanCard).join('') : '<div class="kanban-empty">No records</div>'}
+        </div>
+      </section>
+    `;
+  }).join('');
+}
+
+function renderKanbanCard(record) {
+  const title = record.Name || `${record.FirstName || ''} ${record.LastName || ''}`.trim() || record.Id;
+  const accountName = getValue(record, 'Account.Name');
+  const subtitle = currentObject === 'Opportunity'
+    ? accountName || record.AccountSite || ''
+    : record.Company || record.Title || '';
+  const detail = currentObject === 'Opportunity'
+    ? [formatKanbanAmount(record.Amount), record.CloseDate].filter(Boolean).join(' - ')
+    : [record.State, record.Email].filter(Boolean).join(' - ');
+  const subtitleHtml = currentObject === 'Opportunity' && accountName && record.AccountId
+    ? `<button class="kanban-link-line" onclick="event.stopPropagation(); openRecordDetail('Account', '${escapeJs(record.AccountId)}')">${escapeHtml(accountName)}</button>`
+    : (subtitle ? `<div class="kanban-subtitle">${escapeHtml(subtitle)}</div>` : '');
+  const field = kanbanFieldFor();
+  const value = record[field] || 'Unspecified';
+
+  return `
+    <article class="kanban-item" draggable="true" data-id="${escapeHtml(record.Id)}"
+      ondragstart="handleKanbanDragStart(event, '${escapeJs(record.Id)}')"
+      onclick="openRecordDetail('${currentObject}', '${escapeJs(record.Id)}')">
+      <div class="kanban-item-top">
+        <button class="kanban-title" onclick="event.stopPropagation(); openRecordDetail('${currentObject}', '${escapeJs(record.Id)}')">${escapeHtml(title)}</button>
+        <button class="kanban-card-action" title="Edit" aria-label="Edit" onclick="event.stopPropagation(); openEdit('${escapeJs(record.Id)}')">
+          <svg viewBox="0 0 20 20" width="14" height="14" fill="currentColor">
+            <path d="M13.586 3.586a2 2 0 112.828 2.828l-.793.793-2.828-2.828.793-.793z"/>
+            <path d="M11.379 5.793L3 14.172V17h2.828l8.379-8.379-2.828-2.828z"/>
+          </svg>
+        </button>
+      </div>
+      ${subtitleHtml}
+      ${detail ? `<div class="kanban-detail">${escapeHtml(detail)}</div>` : ''}
+      <div class="kanban-foot">
+        <button class="kanban-grip" title="Change ${escapeHtml(labelFor(field))}" onclick="event.stopPropagation(); toggleKanbanMenu(event, '${escapeJs(record.Id)}')" aria-label="Change ${escapeHtml(labelFor(field))}" aria-haspopup="menu" aria-expanded="false">::::</button>
+        <span class="kanban-stage-text" title="${escapeHtml(value)}">
+          ${escapeHtml(value)}
+        </span>
+      </div>
+    </article>
+  `;
+}
+
+function formatKanbanAmount(value) {
+  const amount = Number(value) || 0;
+  return amount.toLocaleString(undefined, {
+    style: 'currency',
+    currency: 'USD',
+    maximumFractionDigits: 0
+  });
+}
+
+async function toggleKanbanMenu(event, id) {
+  event.stopPropagation();
+  const openMenu = Array.from(document.querySelectorAll('.kanban-stage-menu'))
+    .find((menu) => menu.dataset.recordId === id);
+  closeKanbanMenus();
+
+  const button = event.currentTarget;
+  if (openMenu) {
+    button.setAttribute('aria-expanded', 'false');
+    return;
+  }
+
+  const item = button.closest('.kanban-item');
+  const record = currentRecords.find((row) => row.Id === id);
+  if (!item || !record) return;
+
+  const values = await getKanbanValues();
+  const currentValue = record[kanbanFieldFor()] || 'Unspecified';
+  const menu = document.createElement('div');
+  menu.className = 'kanban-stage-menu';
+  menu.dataset.recordId = id;
+  menu.setAttribute('role', 'menu');
+  menu.innerHTML = values.map((value) => `
+    <button class="kanban-stage-option${value === currentValue ? ' active' : ''}" role="menuitem" onclick="event.stopPropagation(); selectKanbanValue('${escapeJs(id)}', '${escapeJs(value)}')">
+      ${escapeHtml(value)}
+    </button>
+  `).join('');
+  document.body.appendChild(menu);
+  positionKanbanMenu(menu, button);
+  button.setAttribute('aria-expanded', 'true');
+}
+
+async function selectKanbanValue(id, value) {
+  closeKanbanMenus();
+  await moveKanbanRecord(id, value);
+}
+
+function closeKanbanMenus(exceptId = '') {
+  document.querySelectorAll('.kanban-stage-menu').forEach((menu) => {
+    if (exceptId && menu.dataset.recordId === exceptId) return;
+    menu.remove();
+  });
+  document.querySelectorAll('.kanban-grip[aria-expanded="true"]').forEach((button) => {
+    button.setAttribute('aria-expanded', 'false');
+  });
+}
+
+function positionKanbanMenu(menu, anchor) {
+  const margin = 8;
+  const width = Math.min(232, window.innerWidth - (margin * 2));
+  menu.style.width = `${width}px`;
+
+  const anchorRect = anchor.getBoundingClientRect();
+  const menuRect = menu.getBoundingClientRect();
+  const maxLeft = window.innerWidth - width - margin;
+  const left = Math.min(Math.max(anchorRect.left + (anchorRect.width / 2) - (width / 2), margin), maxLeft);
+
+  let top = anchorRect.bottom + 6;
+  const roomBelow = window.innerHeight - anchorRect.bottom - margin;
+  const roomAbove = anchorRect.top - margin;
+  if (roomBelow < menuRect.height && roomAbove > roomBelow) {
+    top = anchorRect.top - menuRect.height - 6;
+  }
+  if (top < margin || top + menuRect.height > window.innerHeight - margin) {
+    top = Math.max(margin, (window.innerHeight - menuRect.height) / 2);
+  }
+
+  menu.style.left = `${left}px`;
+  menu.style.top = `${top}px`;
+}
+
+function escapeJs(value) {
+  return String(value || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+}
+
+function handleKanbanDragStart(event, id) {
+  draggedKanbanId = id;
+  event.dataTransfer.effectAllowed = 'move';
+  event.dataTransfer.setData('text/plain', id);
+}
+
+function handleKanbanDragOver(event) {
+  event.preventDefault();
+  event.currentTarget.classList.add('drag-over');
+}
+
+function handleKanbanDragLeave(event) {
+  event.currentTarget.classList.remove('drag-over');
+}
+
+async function handleKanbanDrop(event, nextValue) {
+  event.preventDefault();
+  event.currentTarget.classList.remove('drag-over');
+  const id = event.dataTransfer.getData('text/plain') || draggedKanbanId;
+  draggedKanbanId = null;
+  if (!id) return;
+  await moveKanbanRecord(id, nextValue);
+}
+
+async function moveKanbanRecord(id, nextValue) {
+  const record = currentRecords.find((item) => item.Id === id);
+  const field = kanbanFieldFor();
+  if (!record || record[field] === nextValue) return;
+
+  const previousValue = record[field];
+  record[field] = nextValue;
+  await renderKanban();
+
+  try {
+    await api(`/api/${currentObject}/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ [field]: nextValue })
+    });
+    toast(`${labelFor(field)} updated`, 'ok');
+  } catch (err) {
+    record[field] = previousValue;
+    await renderKanban();
+    toast(err.message, 'err');
+  }
 }
 
 function getRecordsToRender() {
@@ -574,7 +865,7 @@ function sortBy(field) {
     direction: sortState.field === field && sortState.direction === 'asc' ? 'desc' : 'asc'
   };
   applySort();
-  renderTable();
+  renderCurrentView();
 }
 
 function applySort() {
@@ -598,6 +889,7 @@ async function switchObject(objectName) {
   currentPage = 1;
   totalRecords = 0;
   currentViewId = 'all';
+  currentViewMode = 'table';
   sortState = { field: null, direction: 'asc' };
   $('objSearch').value = '';
   document.querySelectorAll('.nav-item').forEach((item) => {
@@ -648,6 +940,10 @@ function pageRangeEnd() {
 function updatePagination() {
   const bar = $('paginationBar');
   if (!bar) return;
+  if (currentViewMode === 'kanban') {
+    bar.style.display = 'none';
+    return;
+  }
 
   const isServerPaged = !currentViewId.startsWith('sf:');
   bar.style.display = isServerPaged ? 'flex' : 'none';
@@ -1115,7 +1411,7 @@ async function openRecordDetail(objectName, id) {
     if (objectName === 'Campaign') {
       activeCampaign = record;
       await Promise.all([loadCampaignMembers(id), loadRecordActivity(objectName, id)]);
-    } else if (['Contact', 'Lead'].includes(objectName)) {
+    } else {
       await loadRecordActivity(objectName, id);
     }
   } catch (err) {
@@ -1174,12 +1470,10 @@ function renderRecordDetailPage(objectName, record, fields, displayFields, title
           <div class="activity-card">
             <div class="activity-head">
               <h3>Activity</h3>
-              ${['Campaign', 'Contact', 'Lead'].includes(objectName) ? `<button class="cell-button-link" onclick="loadRecordActivity('${objectName}', '${id}')">Refresh</button>` : ''}
+              <button class="cell-button-link" onclick="loadRecordActivity('${objectName}', '${id}')">Refresh</button>
             </div>
             <div id="activityTimeline">
-              ${['Campaign', 'Contact', 'Lead'].includes(objectName)
-                ? '<div class="activity-empty"><p>Loading activities...</p></div>'
-                : '<div class="activity-empty"><p>Open Salesforce Activity Timeline for this record.</p></div>'}
+              <div class="activity-empty"><p>Loading activities...</p></div>
             </div>
           </div>
         </aside>
@@ -1418,6 +1712,423 @@ async function removeCampaignMember(memberId) {
   }
 }
 
+function activityModalTitle(type) {
+  return {
+    task: 'New Task',
+    call: 'Log a Call',
+    event: 'New Event',
+    email: 'Email'
+  }[type] || 'New Activity';
+}
+
+function todayInputValue() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function addHoursTimeValue(hours = 1) {
+  const date = new Date();
+  date.setMinutes(0, 0, 0);
+  date.setHours(date.getHours() + hours);
+  return date.toTimeString().slice(0, 5);
+}
+
+function currentActivityTargetLabel() {
+  const record = detailRecordState?.record || {};
+  return record.Name || record.Subject || record.CaseNumber || record.Email || detailRecordState?.id || '';
+}
+
+function currentActivityRecipientEmail() {
+  const record = detailRecordState?.record || {};
+  return ['Contact', 'Lead'].includes(detailRecordState?.objectName) ? record.Email || '' : '';
+}
+
+function initializeActivityLookups() {
+  const objectName = detailRecordState?.objectName || currentObject;
+  const record = detailRecordState?.record || {};
+  const title = currentActivityTargetLabel();
+
+  activityLookupState = {
+    who: ['Contact', 'Lead'].includes(objectName)
+      ? { object: objectName, id: detailRecordState.id, label: title }
+      : { object: 'Contact', id: '', label: '' },
+    what: { object: 'Account', id: '', label: '' },
+    owner: currentUser?.id
+      ? { object: 'User', id: currentUser.id, label: currentUser.name || currentUser.username || 'Current User' }
+      : { object: 'User', id: '', label: '' }
+  };
+
+  if (objectName === 'Contact' && record.AccountId) {
+    activityLookupState.what = { object: 'Account', id: record.AccountId, label: getValue(record, 'Account.Name') || detailLookupLabels.AccountId?.name || 'Account' };
+  } else if (!['Contact', 'Lead', 'User'].includes(objectName)) {
+    activityLookupState.what = { object: objectName, id: detailRecordState.id, label: title };
+  }
+}
+
+function activityLookupControl(kind, label, objects, placeholder = 'Search...') {
+  const state = activityLookupState[kind] || { object: objects[0], id: '', label: '' };
+  const options = objects.map((objectName) => `
+    <option value="${escapeHtml(objectName)}" ${state.object === objectName ? 'selected' : ''}>${escapeHtml(OBJECT_META[objectName]?.title || objectName)}</option>
+  `).join('');
+
+  return `
+    <div class="activity-lookup" data-kind="${escapeHtml(kind)}">
+      <label class="form-label">${escapeHtml(label)}</label>
+      ${state.id ? `
+        <div class="activity-pill">
+          ${objectIcon(state.object)}
+          <span>${escapeHtml(state.label || state.id)}</span>
+          <button type="button" aria-label="Clear ${escapeHtml(label)}" onclick="clearActivityLookup('${escapeJs(kind)}')">&times;</button>
+        </div>
+      ` : `
+        <div class="activity-lookup-search">
+          <select class="activity-lookup-type" onchange="setActivityLookupObject('${escapeJs(kind)}', this.value)">
+            ${options}
+          </select>
+          <input class="form-ctrl" id="activityLookupInput-${escapeHtml(kind)}" placeholder="${escapeHtml(placeholder)}"
+            oninput="searchActivityLookup('${escapeJs(kind)}', this.value)" autocomplete="off">
+          <button type="button" class="activity-lookup-search-btn" aria-label="Search">${utilityIconSvg('settings')}</button>
+        </div>
+        <div class="activity-lookup-results" id="activityLookupResults-${escapeHtml(kind)}"></div>
+      `}
+    </div>
+  `;
+}
+
+function setActivityLookupObject(kind, objectName) {
+  activityLookupState[kind] = { object: objectName, id: '', label: '' };
+  const results = $(`activityLookupResults-${kind}`);
+  if (results) results.classList.remove('open');
+}
+
+function clearActivityLookup(kind) {
+  const current = activityLookupState[kind] || {};
+  activityLookupState[kind] = { object: current.object || (kind === 'owner' ? 'User' : 'Contact'), id: '', label: '' };
+  rerenderActivityFormPreservingFields();
+}
+
+async function searchActivityLookup(kind, value) {
+  const results = $(`activityLookupResults-${kind}`);
+  const state = activityLookupState[kind];
+  if (!results || !state?.object) return;
+  if (!String(value || '').trim()) {
+    results.classList.remove('open');
+    results.innerHTML = '';
+    return;
+  }
+
+  try {
+    const data = await api(`/api/lookup/${state.object}?search=${encodeURIComponent(value)}`);
+    results.innerHTML = (data.records || []).map((record) => {
+      const label = record.Name || record.Subject || record.CaseNumber || record.Id;
+      const sub = record.Email || record.Company || getValue(record, 'Account.Name') || record.Status || '';
+      return `
+        <button type="button" class="activity-lookup-item" onclick="selectActivityLookup('${escapeJs(kind)}', '${escapeJs(state.object)}', '${escapeJs(record.Id)}', '${escapeJs(label)}')">
+          ${objectIcon(state.object)}
+          <span><strong>${escapeHtml(label)}</strong>${sub ? `<small>${escapeHtml(sub)}</small>` : ''}</span>
+        </button>
+      `;
+    }).join('') || '<div class="lookup-empty">No matches</div>';
+    results.classList.add('open');
+  } catch (err) {
+    results.innerHTML = `<div class="lookup-empty">${escapeHtml(err.message)}</div>`;
+    results.classList.add('open');
+  }
+}
+
+function selectActivityLookup(kind, objectName, id, label) {
+  activityLookupState[kind] = { object: objectName, id, label };
+  rerenderActivityFormPreservingFields();
+}
+
+function collectActivityDraft() {
+  return {
+    subject: activityFieldValue('activitySubject'),
+    dueDate: activityFieldValue('activityDueDate'),
+    status: activityFieldValue('activityStatus'),
+    comments: activityFieldValue('activityComments'),
+    startDate: activityFieldValue('activityStartDate'),
+    startTime: activityFieldValue('activityStartTime'),
+    endDate: activityFieldValue('activityEndDate'),
+    endTime: activityFieldValue('activityEndTime'),
+    allDay: Boolean($('activityAllDay')?.checked),
+    location: activityFieldValue('activityLocation'),
+    to: activityFieldValue('activityTo'),
+    body: activityFieldValue('activityBody')
+  };
+}
+
+function restoreActivityDraft(draft = {}) {
+  Object.entries({
+    activitySubject: draft.subject,
+    activityDueDate: draft.dueDate,
+    activityStatus: draft.status,
+    activityComments: draft.comments,
+    activityStartDate: draft.startDate,
+    activityStartTime: draft.startTime,
+    activityEndDate: draft.endDate,
+    activityEndTime: draft.endTime,
+    activityLocation: draft.location,
+    activityTo: draft.to,
+    activityBody: draft.body
+  }).forEach(([id, value]) => {
+    if ($(id) && value !== undefined) $(id).value = value;
+  });
+  if ($('activityAllDay')) $('activityAllDay').checked = Boolean(draft.allDay);
+}
+
+function rerenderActivityFormPreservingFields() {
+  const overlay = $('activityOverlay');
+  const type = overlay?.dataset.type || 'task';
+  const draft = collectActivityDraft();
+  $('activityModalBody').innerHTML = renderActivityForm(type);
+  restoreActivityDraft(draft);
+}
+
+function ensureActivityModal() {
+  let overlay = $('activityOverlay');
+  if (overlay) return overlay;
+
+  overlay = document.createElement('div');
+  overlay.className = 'overlay activity-overlay';
+  overlay.id = 'activityOverlay';
+  overlay.setAttribute('onclick', "overlayClick(event, 'activityOverlay', closeActivityModal)");
+  overlay.innerHTML = `
+    <div class="modal activity-modal" onclick="event.stopPropagation()">
+      <div class="modal-head activity-modal-head">
+        <div class="modal-title-group">
+          <span class="activity-modal-icon" id="activityModalIcon">${utilityIconSvg('task')}</span>
+          <h2 id="activityModalTitle">New Activity</h2>
+        </div>
+        <button class="close-btn" onclick="closeActivityModal()">
+          <svg viewBox="0 0 20 20" width="18" height="18" fill="currentColor">
+            <path fill-rule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clip-rule="evenodd"/>
+          </svg>
+        </button>
+      </div>
+      <form id="activityForm" onsubmit="event.preventDefault(); saveActivity();">
+        <div class="modal-body activity-modal-body" id="activityModalBody"></div>
+        <div class="modal-foot">
+          <button type="button" class="btn btn-ghost" onclick="closeActivityModal()">Cancel</button>
+          <button type="submit" class="btn btn-primary" id="activitySaveBtn">Save</button>
+        </div>
+      </form>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+  return overlay;
+}
+
+function openActivityModal(type) {
+  if (!detailRecordState?.id) return;
+  const overlay = ensureActivityModal();
+  overlay.dataset.type = type;
+  initializeActivityLookups();
+  $('activityModalTitle').textContent = activityModalTitle(type);
+  $('activityModalIcon').innerHTML = utilityIconSvg(type === 'call' ? 'call' : type === 'event' ? 'event' : type === 'email' ? 'email' : 'task');
+  $('activitySaveBtn').textContent = type === 'email' ? 'Send' : 'Save';
+  $('activityModalBody').innerHTML = renderActivityForm(type);
+  overlay.classList.add('open');
+  setTimeout(() => $('activityModalBody').querySelector('input, textarea, select')?.focus(), 0);
+}
+
+function renderActivityForm(type) {
+  const today = todayInputValue();
+  const recipient = currentActivityRecipientEmail();
+  const nameLookup = activityLookupControl('who', 'Name', ['Contact', 'Lead'], 'Search Contacts...');
+  const relatedLookup = activityLookupControl('what', 'Related To', ['Account', 'Opportunity', 'Case', 'Campaign'], 'Search Accounts...');
+  const ownerLookup = activityLookupControl('owner', 'Assigned To', ['User'], 'Search Users...');
+
+  if (type === 'call') {
+    return `
+      <div class="activity-form-grid two">
+        <div class="form-group">
+          <label class="form-label" for="activitySubject">Subject</label>
+          <input class="form-ctrl" id="activitySubject" value="Call" required>
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="activityComments">Comments</label>
+          <textarea class="form-ctrl" id="activityComments" rows="4"></textarea>
+        </div>
+        <div class="form-group">
+          ${nameLookup}
+        </div>
+        <div class="form-group">
+          ${relatedLookup}
+        </div>
+      </div>
+    `;
+  }
+
+  if (type === 'event') {
+    return `
+      <div class="activity-form-grid two">
+        <div class="form-section-label span-2">Start</div>
+        <div class="form-group">
+          <label class="form-label required" for="activityStartDate">Date</label>
+          <input type="date" class="form-ctrl" id="activityStartDate" value="${today}" required>
+        </div>
+        <div class="form-group">
+          <label class="form-label required" for="activityStartTime">Time</label>
+          <input type="time" class="form-ctrl" id="activityStartTime" value="${addHoursTimeValue(1)}" required>
+        </div>
+        <div class="form-section-label span-2">End</div>
+        <div class="form-group">
+          <label class="form-label required" for="activityEndDate">Date</label>
+          <input type="date" class="form-ctrl" id="activityEndDate" value="${today}" required>
+        </div>
+        <div class="form-group">
+          <label class="form-label required" for="activityEndTime">Time</label>
+          <input type="time" class="form-ctrl" id="activityEndTime" value="${addHoursTimeValue(2)}" required>
+        </div>
+        <label class="activity-checkbox span-2"><input type="checkbox" id="activityAllDay"> <span>All-Day Event</span></label>
+        <div class="form-group span-2">
+          <label class="form-label required" for="activitySubject">Subject</label>
+          <input class="form-ctrl" id="activitySubject" required>
+        </div>
+        <div class="form-group span-2">
+          ${nameLookup}
+        </div>
+        <div class="form-group span-2">
+          ${relatedLookup}
+        </div>
+        <div class="form-group span-2">
+          ${ownerLookup}
+        </div>
+        <div class="form-group span-2">
+          <label class="form-label" for="activityLocation">Location</label>
+          <input class="form-ctrl" id="activityLocation">
+        </div>
+        <div class="form-group span-2">
+          <label class="form-label" for="activityComments">Description</label>
+          <textarea class="form-ctrl" id="activityComments" rows="4"></textarea>
+        </div>
+      </div>
+    `;
+  }
+
+  if (type === 'email') {
+    return `
+      <div class="activity-email-form">
+        <div class="activity-email-row">
+          <label class="form-label required" for="activityTo">To</label>
+          <input class="form-ctrl" id="activityTo" type="email" value="${escapeHtml(recipient)}" placeholder="recipient@example.com" required>
+        </div>
+        <div class="activity-email-row">
+          <label class="form-label required" for="activitySubject">Subject</label>
+          <input class="form-ctrl" id="activitySubject" placeholder="Enter Subject..." required>
+        </div>
+        <div class="activity-email-toolbar">
+          <button type="button"><strong>B</strong></button>
+          <button type="button"><em>I</em></button>
+          <button type="button"><u>U</u></button>
+          <button type="button">${utilityIconSvg('email')}</button>
+        </div>
+        <textarea class="activity-email-body" id="activityBody" placeholder="Write your email..." required></textarea>
+        <div class="form-group">
+          ${relatedLookup}
+        </div>
+      </div>
+    `;
+  }
+
+  return `
+    <div class="activity-form-grid">
+      <div class="form-group span-2">
+        <label class="form-label required" for="activitySubject">Subject</label>
+        <input class="form-ctrl" id="activitySubject" required>
+      </div>
+      <div class="form-group span-2">
+        <label class="form-label" for="activityDueDate">Due Date</label>
+        <input type="date" class="form-ctrl" id="activityDueDate" value="${today}">
+      </div>
+      <div class="form-group span-2">
+        ${nameLookup}
+      </div>
+      <div class="form-group span-2">
+        ${relatedLookup}
+      </div>
+      <div class="form-group span-2">
+        ${ownerLookup}
+      </div>
+      <div class="form-group span-2">
+        <label class="form-label required" for="activityStatus">Status</label>
+        <select class="form-ctrl" id="activityStatus" required>
+          <option>Not Started</option>
+          <option>In Progress</option>
+          <option>Completed</option>
+          <option>Waiting on someone else</option>
+          <option>Deferred</option>
+        </select>
+      </div>
+      <div class="form-group span-2">
+        <label class="form-label" for="activityComments">Comments</label>
+        <textarea class="form-ctrl" id="activityComments" rows="4"></textarea>
+      </div>
+    </div>
+  `;
+}
+
+function closeActivityModal() {
+  $('activityOverlay')?.classList.remove('open');
+}
+
+function activityFieldValue(id) {
+  return $(id)?.value || '';
+}
+
+async function saveActivity() {
+  const overlay = $('activityOverlay');
+  const type = overlay?.dataset.type || 'task';
+  if (!detailRecordState?.id) return;
+
+  const payload = {
+    type,
+    whoId: activityLookupState.who?.id || '',
+    whoObject: activityLookupState.who?.object || '',
+    whatId: activityLookupState.what?.id || '',
+    whatObject: activityLookupState.what?.object || '',
+    ownerId: activityLookupState.owner?.id || ''
+  };
+  if (type === 'task') {
+    payload.subject = activityFieldValue('activitySubject');
+    payload.dueDate = activityFieldValue('activityDueDate');
+    payload.status = activityFieldValue('activityStatus');
+    payload.comments = activityFieldValue('activityComments');
+  } else if (type === 'call') {
+    payload.subject = activityFieldValue('activitySubject') || 'Call';
+    payload.comments = activityFieldValue('activityComments');
+    payload.date = todayInputValue();
+  } else if (type === 'event') {
+    payload.subject = activityFieldValue('activitySubject');
+    payload.startDate = activityFieldValue('activityStartDate');
+    payload.startTime = activityFieldValue('activityStartTime');
+    payload.endDate = activityFieldValue('activityEndDate');
+    payload.endTime = activityFieldValue('activityEndTime');
+    payload.isAllDay = Boolean($('activityAllDay')?.checked);
+    payload.location = activityFieldValue('activityLocation');
+    payload.comments = activityFieldValue('activityComments');
+  } else if (type === 'email') {
+    payload.to = activityFieldValue('activityTo');
+    payload.subject = activityFieldValue('activitySubject');
+    payload.body = activityFieldValue('activityBody');
+  }
+
+  try {
+    $('activitySaveBtn').disabled = true;
+    await api(`/api/${detailRecordState.objectName}/${detailRecordState.id}/activity`, {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    });
+    toast(type === 'email' ? 'Email sent and logged' : `${activityModalTitle(type)} saved`, 'ok');
+    closeActivityModal();
+    await loadRecordActivity(detailRecordState.objectName, detailRecordState.id);
+  } catch (err) {
+    toast(err.message, 'err');
+  } finally {
+    if ($('activitySaveBtn')) $('activitySaveBtn').disabled = false;
+  }
+}
+
 async function loadRecordActivity(objectName, recordId) {
   const timeline = $('activityTimeline');
   if (!timeline) return;
@@ -1467,10 +2178,10 @@ function renderRecordActivity(warnings = []) {
 function renderActivityToolbar() {
   return `
     <div class="activity-actions">
-      <button class="activity-action activity-action-task" title="New Task">${utilityIconSvg('task')}<span>New Task</span></button>
-      <button class="activity-action activity-action-call" title="Log a Call">${utilityIconSvg('call')}<span>Log a Call</span></button>
-      <button class="activity-action activity-action-event" title="New Event">${utilityIconSvg('event')}<span>New Event</span></button>
-      <button class="activity-action activity-action-email" title="Email">${utilityIconSvg('email')}<span>Email</span></button>
+      <button class="activity-action activity-action-task" title="New Task" onclick="openActivityModal('task')">${utilityIconSvg('task')}<span>New Task</span></button>
+      <button class="activity-action activity-action-call" title="Log a Call" onclick="openActivityModal('call')">${utilityIconSvg('call')}<span>Log a Call</span></button>
+      <button class="activity-action activity-action-event" title="New Event" onclick="openActivityModal('event')">${utilityIconSvg('event')}<span>New Event</span></button>
+      <button class="activity-action activity-action-email" title="Email" onclick="openActivityModal('email')">${utilityIconSvg('email')}<span>Email</span></button>
     </div>
     <div class="activity-filter">
       <span>Filters: All time &bull; All activities &bull; All types</span>
@@ -1943,7 +2654,14 @@ function toast(message, type = 'info') {
 
 document.addEventListener('click', (event) => {
   if (!event.target.closest('.profile-menu')) closeProfileMenu();
+  if (!event.target.closest('.kanban-item')) closeKanbanMenus();
 });
+
+document.addEventListener('scroll', (event) => {
+  if (event.target?.closest?.('.kanban-stage-menu')) return;
+  closeKanbanMenus();
+}, true);
+window.addEventListener('resize', () => closeKanbanMenus());
 
 document.addEventListener('DOMContentLoaded', () => {
   listContentHtml = $('content').innerHTML;

@@ -6,7 +6,7 @@ const fs      = require('fs');
 const crypto  = require('crypto');
 
 const app = express();
-app.use(express.json());
+app.use(express.json({ limit: process.env.JSON_BODY_LIMIT || '25mb' }));
 app.use(express.static(path.join(__dirname, 'public')));
 
 const PORT = process.env.PORT || 3000;
@@ -74,6 +74,20 @@ async function sfAuthedRequest(method, url, data, config = {}) {
     }
   });
   return res.data;
+}
+
+async function sfAuthedRawRequest(method, url, data, config = {}) {
+  const token = await getAccessToken();
+  return axios({
+    method,
+    url,
+    data,
+    ...config,
+    headers: {
+      Authorization: `Bearer ${token}`,
+      ...(config.headers || {})
+    }
+  });
 }
 
 // ─── Token Cache ──────────────────────────────────────────────
@@ -162,6 +176,269 @@ async function sfDelete(endpoint) {
   });
 }
 
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function bulkUrl(endpoint) {
+  return `${baseUrl()}${endpoint}`;
+}
+
+function flattenRecord(record = {}) {
+  const flat = {};
+  for (const [key, value] of Object.entries(record)) {
+    if (key === 'attributes') continue;
+    flat[key] = value;
+  }
+  return flat;
+}
+
+function csvEscape(value) {
+  if (value === null || value === undefined) return '';
+  const text = value instanceof Date ? value.toISOString() : String(value);
+  return /[",\r\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+}
+
+function recordsToCsv(records = []) {
+  const rows = records.map(flattenRecord);
+  const fieldSet = new Set();
+  rows.forEach((row) => Object.keys(row).forEach((key) => fieldSet.add(key)));
+  const fields = [...fieldSet];
+  if (!fields.length) throw new Error('Bulk jobs require at least one field');
+
+  return [
+    fields.map(csvEscape).join(','),
+    ...rows.map((row) => fields.map((field) => csvEscape(row[field])).join(','))
+  ].join('\n');
+}
+
+function parseCsv(text = '') {
+  const rows = [];
+  let row = [];
+  let value = '';
+  let quoted = false;
+
+  for (let i = 0; i < text.length; i += 1) {
+    const char = text[i];
+    const next = text[i + 1];
+
+    if (quoted) {
+      if (char === '"' && next === '"') {
+        value += '"';
+        i += 1;
+      } else if (char === '"') {
+        quoted = false;
+      } else {
+        value += char;
+      }
+      continue;
+    }
+
+    if (char === '"') quoted = true;
+    else if (char === ',') {
+      row.push(value);
+      value = '';
+    } else if (char === '\n') {
+      row.push(value);
+      rows.push(row);
+      row = [];
+      value = '';
+    } else if (char !== '\r') {
+      value += char;
+    }
+  }
+
+  if (value || row.length) {
+    row.push(value);
+    rows.push(row);
+  }
+
+  if (!rows.length) return [];
+  const headers = rows.shift();
+  return rows
+    .filter((item) => item.some((cell) => cell !== ''))
+    .map((item) => headers.reduce((record, header, index) => {
+      record[header] = item[index] ?? '';
+      return record;
+    }, {}));
+}
+
+function normalizeBulkSoql(soql) {
+  const compact = String(soql || '').replace(/\s+/g, ' ').trim();
+  if (!/^SELECT\s+/i.test(compact)) throw new Error('Bulk query requires a SELECT SOQL statement');
+  if (/\bCOUNT\s*\(/i.test(compact) || /\b(GROUP\s+BY|OFFSET|TYPEOF)\b/i.test(compact)) {
+    throw new Error('Bulk API 2.0 query does not support COUNT(), GROUP BY, OFFSET, or TYPEOF');
+  }
+  if (/\(\s*SELECT\s+/i.test(compact)) {
+    throw new Error('Bulk API 2.0 query does not support parent-to-child subqueries');
+  }
+  return compact;
+}
+
+function buildBulkSOQL(objectName, search, extraWhere) {
+  const cfg = OBJECTS[objectName];
+  let soql = `SELECT ${cfg.fields} FROM ${objectName}`;
+  soql += buildWhereClause(objectName, search, extraWhere);
+  return normalizeBulkSoql(soql);
+}
+
+async function createBulkQueryJob(soql) {
+  return sfAuthedRequest('post', bulkUrl('/jobs/query'), {
+    operation: 'query',
+    query: normalizeBulkSoql(soql),
+    contentType: 'CSV',
+    columnDelimiter: 'COMMA',
+    lineEnding: 'LF'
+  }, {
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+    timeout: 30000
+  });
+}
+
+async function getBulkQueryJob(jobId) {
+  return sfAuthedRequest('get', bulkUrl(`/jobs/query/${encodeURIComponent(jobId)}`), null, {
+    headers: { Accept: 'application/json' },
+    timeout: 30000
+  });
+}
+
+async function pollBulkQueryJob(jobId, maxWaitMs = BULK_MAX_POLL_MS) {
+  const started = Date.now();
+  let job = await getBulkQueryJob(jobId);
+  while (['UploadComplete', 'InProgress'].includes(job.state) && Date.now() - started < maxWaitMs) {
+    await sleep(BULK_POLL_INTERVAL_MS);
+    job = await getBulkQueryJob(jobId);
+  }
+  return job;
+}
+
+async function getBulkQueryResults(jobId, { locator, maxRecords = BULK_QUERY_PAGE_SIZE } = {}) {
+  const params = { maxRecords };
+  if (locator) params.locator = locator;
+  const res = await sfAuthedRawRequest(
+    'get',
+    bulkUrl(`/jobs/query/${encodeURIComponent(jobId)}/results`),
+    null,
+    {
+      params,
+      responseType: 'text',
+      headers: { Accept: 'text/csv', 'Accept-Encoding': 'gzip' },
+      timeout: 120000
+    }
+  );
+  const nextLocator = res.headers['sforce-locator'];
+  return {
+    csv: res.data || '',
+    records: parseCsv(res.data || ''),
+    locator: nextLocator && nextLocator !== 'null' ? nextLocator : null,
+    numberOfRecords: Number(res.headers['sforce-numberofrecords'] || 0)
+  };
+}
+
+async function createBulkIngestJob(object, operation, options = {}) {
+  const body = {
+    object,
+    operation,
+    contentType: 'CSV',
+    lineEnding: 'LF',
+    columnDelimiter: 'COMMA'
+  };
+  if (operation === 'upsert') {
+    if (!options.externalIdFieldName) throw new Error('Upsert requires externalIdFieldName');
+    body.externalIdFieldName = options.externalIdFieldName;
+  }
+  return sfAuthedRequest('post', bulkUrl('/jobs/ingest'), body, {
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+    timeout: 30000
+  });
+}
+
+async function uploadBulkIngestData(jobId, csv) {
+  await sfAuthedRequest(
+    'put',
+    bulkUrl(`/jobs/ingest/${encodeURIComponent(jobId)}/batches`),
+    csv,
+    {
+      headers: { 'Content-Type': 'text/csv', Accept: 'application/json' },
+      maxBodyLength: Infinity,
+      timeout: 120000
+    }
+  );
+}
+
+async function closeBulkIngestJob(jobId) {
+  return sfAuthedRequest('patch', bulkUrl(`/jobs/ingest/${encodeURIComponent(jobId)}`), {
+    state: 'UploadComplete'
+  }, {
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+    timeout: 30000
+  });
+}
+
+async function getBulkIngestJob(jobId) {
+  return sfAuthedRequest('get', bulkUrl(`/jobs/ingest/${encodeURIComponent(jobId)}`), null, {
+    headers: { Accept: 'application/json' },
+    timeout: 30000
+  });
+}
+
+async function pollBulkIngestJob(jobId, maxWaitMs = BULK_MAX_POLL_MS) {
+  const started = Date.now();
+  let job = await getBulkIngestJob(jobId);
+  while (['Open', 'UploadComplete', 'InProgress'].includes(job.state) && Date.now() - started < maxWaitMs) {
+    await sleep(BULK_POLL_INTERVAL_MS);
+    job = await getBulkIngestJob(jobId);
+  }
+  return job;
+}
+
+async function getBulkIngestResultCsv(jobId, resultType) {
+  const res = await sfAuthedRawRequest(
+    'get',
+    bulkUrl(`/jobs/ingest/${encodeURIComponent(jobId)}/${resultType}`),
+    null,
+    {
+      responseType: 'text',
+      headers: { Accept: 'text/csv' },
+      timeout: 120000
+    }
+  );
+  return res.data || '';
+}
+
+async function runBulkIngest(object, operation, records, options = {}) {
+  const cleanRecords = (records || []).map(flattenRecord);
+  if (!cleanRecords.length) throw new Error('Bulk ingest requires at least one record');
+  if (['update', 'delete'].includes(operation) && cleanRecords.some((record) => !record.Id)) {
+    throw new Error(`${operation} jobs require Id on every record`);
+  }
+
+  const csv = operation === 'delete'
+    ? recordsToCsv(cleanRecords.map((record) => ({ Id: record.Id })))
+    : recordsToCsv(cleanRecords);
+  const job = await createBulkIngestJob(object, operation, options);
+  await uploadBulkIngestData(job.id, csv);
+  await closeBulkIngestJob(job.id);
+
+  const finalJob = options.wait === false ? await getBulkIngestJob(job.id) : await pollBulkIngestJob(job.id, options.maxWaitMs);
+  const response = { success: finalJob.state === 'JobComplete', job: finalJob };
+
+  if (['JobComplete', 'Failed', 'Aborted'].includes(finalJob.state) && options.includeResults !== false) {
+    const [successfulCsv, failedCsv, unprocessedCsv] = await Promise.all([
+      getBulkIngestResultCsv(job.id, 'successfulResults').catch(() => ''),
+      getBulkIngestResultCsv(job.id, 'failedResults').catch(() => ''),
+      getBulkIngestResultCsv(job.id, 'unprocessedrecords').catch(() => '')
+    ]);
+    response.results = {
+      successful: parseCsv(successfulCsv),
+      failed: parseCsv(failedCsv),
+      unprocessed: parseCsv(unprocessedCsv)
+    };
+  }
+
+  return response;
+}
+
 // ─── Object Definitions ───────────────────────────────────────
 const OBJECTS = {
   Account: {
@@ -205,6 +482,14 @@ const OBJECTS = {
     searchFields: ['Name', 'Email', 'Username']
   }
 };
+
+const BULK_AUTO_THRESHOLD = Math.max(parseInt(process.env.BULK_AUTO_THRESHOLD, 10) || 200, 1);
+const BULK_MAX_POLL_MS = Math.max(parseInt(process.env.BULK_MAX_POLL_MS, 10) || 120000, 5000);
+const BULK_POLL_INTERVAL_MS = Math.max(parseInt(process.env.BULK_POLL_INTERVAL_MS, 10) || 2000, 500);
+const BULK_QUERY_PAGE_SIZE = Math.min(
+  Math.max(parseInt(process.env.BULK_QUERY_PAGE_SIZE, 10) || 50000, 1000),
+  250000
+);
 
 function escapeSOQL(value) {
   return String(value || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'");
@@ -492,6 +777,39 @@ function extractActionFailures(result) {
     .filter(Boolean);
 }
 
+function activityRelationFor(object, id) {
+  return ['Contact', 'Lead'].includes(object)
+    ? { WhoId: id }
+    : { WhatId: id };
+}
+
+function activityRelationFromBody(object, id, body = {}) {
+  const relation = {};
+  if (body.whoId) relation.WhoId = body.whoId;
+  if (body.whatId) relation.WhatId = body.whatId;
+  if (!relation.WhoId && !relation.WhatId) return activityRelationFor(object, id);
+  return relation;
+}
+
+async function createTaskActivity(fields, subtype = '') {
+  const body = { ...fields };
+  if (subtype) body.TaskSubtype = subtype;
+
+  try {
+    return await sfPost('/sobjects/Task', body);
+  } catch (err) {
+    if (!subtype) throw err;
+    const { TaskSubtype, ...fallback } = body;
+    return sfPost('/sobjects/Task', fallback);
+  }
+}
+
+function toSalesforceDateTime(dateValue, timeValue) {
+  if (!dateValue) return '';
+  if (!timeValue) return new Date(dateValue).toISOString();
+  return new Date(`${dateValue}T${timeValue}`).toISOString();
+}
+
 async function getEmailMergeContext() {
   const me = await sfGet('/chatter/users/me');
   const [userData, orgData] = await Promise.all([
@@ -668,11 +986,26 @@ app.get('/api/lookup/:object', async (req, res) => {
   if (!OBJECTS[object]) return res.status(400).json({ error: `Unknown object: ${object}` });
 
   try {
-    const where = search ? `WHERE Name LIKE '%${search}%'` : '';
+    const searchFields = OBJECTS[object].searchFields || ['Name'];
+    const where = search
+      ? `WHERE ${searchFields.map((field) => `${field} LIKE '%${search}%'`).join(' OR ')}`
+      : '';
+    const fields = {
+      Case: 'Id, CaseNumber, Subject, AccountId, Account.Name',
+      Contact: 'Id, Name, Email, AccountId, Account.Name',
+      Lead: 'Id, Name, Email, Company',
+      User: 'Id, Name, Email, Username',
+      Opportunity: 'Id, Name, AccountId, Account.Name'
+    }[object] || OBJECTS[object].fields;
     const data = await sfGet('/query', {
-      q: `SELECT Id, Name FROM ${object} ${where} ORDER BY Name LIMIT 25`
+      q: `SELECT ${fields} FROM ${object} ${where} ORDER BY ${OBJECTS[object].orderBy} LIMIT 25`
     });
-    res.json({ records: data.records || [] });
+    res.json({
+      records: (data.records || []).map((record) => ({
+        ...record,
+        Name: record.Name || record.Subject || record.CaseNumber || record.Id
+      }))
+    });
   } catch (err) {
     handleSFError(err, res, `Lookup ${object}`);
   }
@@ -813,7 +1146,6 @@ app.delete('/api/campaigns/:id/members/:memberId', async (req, res) => {
 app.get('/api/:object/:id/activity', async (req, res) => {
   const { object, id } = req.params;
   if (!OBJECTS[object]) return res.status(400).json({ error: `Unknown object: ${object}` });
-  if (!['Campaign', 'Contact', 'Lead'].includes(object)) return res.json({ records: [], warnings: [] });
 
   const recordId = escapeSOQL(id);
   const isPersonRecord = ['Contact', 'Lead'].includes(object);
@@ -874,6 +1206,114 @@ app.get('/api/:object/:id/activity', async (req, res) => {
     });
   } catch (err) {
     handleSFError(err, res, `${object} activity ${id}`);
+  }
+});
+
+app.post('/api/:object/:id/activity', async (req, res) => {
+  const { object, id } = req.params;
+  if (!OBJECTS[object]) return res.status(400).json({ error: `Unknown object: ${object}` });
+
+  const type = String(req.body?.type || '').toLowerCase();
+  const relation = activityRelationFromBody(object, id, req.body);
+  const owner = req.body?.ownerId ? { OwnerId: req.body.ownerId } : {};
+
+  try {
+    if (type === 'task') {
+      const subject = String(req.body.subject || '').trim();
+      if (!subject) return res.status(400).json({ error: 'Subject is required' });
+      const result = await createTaskActivity({
+        Subject: subject,
+        ActivityDate: req.body.dueDate || null,
+        Status: req.body.status || 'Not Started',
+        Priority: req.body.priority || 'Normal',
+        Description: req.body.comments || '',
+        ...owner,
+        ...relation
+      });
+      return res.json({ success: true, result });
+    }
+
+    if (type === 'call') {
+      const result = await createTaskActivity({
+        Subject: String(req.body.subject || 'Call').trim() || 'Call',
+        Status: 'Completed',
+        Priority: req.body.priority || 'Normal',
+        ActivityDate: req.body.date || new Date().toISOString().slice(0, 10),
+        Description: req.body.comments || '',
+        ...owner,
+        ...relation
+      }, 'Call');
+      return res.json({ success: true, result });
+    }
+
+    if (type === 'event') {
+      const subject = String(req.body.subject || '').trim();
+      if (!subject) return res.status(400).json({ error: 'Subject is required' });
+      const isAllDay = Boolean(req.body.isAllDay);
+      const startDate = req.body.startDate || new Date().toISOString().slice(0, 10);
+      const endDate = req.body.endDate || startDate;
+      const eventBody = {
+        Subject: subject,
+        IsAllDayEvent: isAllDay,
+        StartDateTime: toSalesforceDateTime(startDate, isAllDay ? '00:00' : req.body.startTime || '09:00'),
+        EndDateTime: toSalesforceDateTime(endDate, isAllDay ? '23:59' : req.body.endTime || '10:00'),
+        Location: req.body.location || '',
+        Description: req.body.comments || '',
+        ...owner,
+        ...relation
+      };
+      const result = await sfPost('/sobjects/Event', eventBody);
+      return res.json({ success: true, result });
+    }
+
+    if (type === 'email') {
+      const subject = String(req.body.subject || '').trim();
+      const body = String(req.body.body || '').trim();
+      if (!subject) return res.status(400).json({ error: 'Subject is required' });
+      if (!body) return res.status(400).json({ error: 'Email body is required' });
+
+      let to = String(req.body.to || '').trim();
+      let recipientId = req.body.whoId || (['Contact', 'Lead'].includes(object) ? id : '');
+      if (!to && recipientId) {
+        const personObject = objectFromId(recipientId);
+        const person = ['Contact', 'Lead'].includes(personObject)
+          ? await sfGet(`/sobjects/${personObject}/${recipientId}`)
+          : {};
+        to = person.Email || '';
+      }
+      if (!to) return res.status(400).json({ error: 'Recipient email is required' });
+
+      const emailResult = await sfPost('/actions/standard/emailSimple', {
+        inputs: [{
+          emailAddresses: to,
+          emailSubject: subject,
+          emailBody: body,
+          sendRichBody: false,
+          useLineBreaks: true,
+          senderType: 'CurrentUser',
+          ...(recipientId ? { recipientId } : {}),
+          ...(!recipientId ? { relatedRecordId: id } : {}),
+          logEmailOnSend: true
+        }]
+      });
+      const failures = extractActionFailures(emailResult);
+      if (failures.length) return res.status(400).json({ error: failures.join('; '), result: emailResult });
+
+      const taskResult = await createTaskActivity({
+        Subject: `Email: ${subject}`,
+        Status: 'Completed',
+        Priority: 'Normal',
+        ActivityDate: new Date().toISOString().slice(0, 10),
+        Description: `To: ${to}\n\n${body}`,
+        ...owner,
+        ...relation
+      }, 'Email');
+      return res.json({ success: true, result: emailResult, taskResult });
+    }
+
+    res.status(400).json({ error: 'Activity type must be task, call, event, or email' });
+  } catch (err) {
+    handleSFError(err, res, `Create ${type || 'activity'} for ${object}/${id}`);
   }
 });
 
@@ -1063,6 +1503,107 @@ app.post('/api/campaigns/:id/send-email', async (req, res) => {
   }
 });
 
+// Bulk API 2.0 query for export-scale reads
+app.post('/api/bulk/query', async (req, res) => {
+  const { soql, wait = true, includeRecords = true, maxRecords, maxWaitMs } = req.body || {};
+
+  try {
+    const job = await createBulkQueryJob(soql);
+    const finalJob = wait ? await pollBulkQueryJob(job.id, maxWaitMs) : job;
+    const response = { success: finalJob.state === 'JobComplete', job: finalJob };
+
+    if (includeRecords && finalJob.state === 'JobComplete') {
+      const page = await getBulkQueryResults(job.id, { maxRecords: maxRecords || BULK_QUERY_PAGE_SIZE });
+      response.records = page.records;
+      response.locator = page.locator;
+      response.numberOfRecords = page.numberOfRecords;
+      response.done = !page.locator;
+    }
+
+    res.json(response);
+  } catch (err) {
+    handleSFError(err, res, 'Bulk query');
+  }
+});
+
+app.get('/api/bulk/query/:jobId', async (req, res) => {
+  try {
+    res.json({ job: await getBulkQueryJob(req.params.jobId) });
+  } catch (err) {
+    handleSFError(err, res, `Bulk query job ${req.params.jobId}`);
+  }
+});
+
+app.get('/api/bulk/query/:jobId/results', async (req, res) => {
+  try {
+    const page = await getBulkQueryResults(req.params.jobId, {
+      locator: req.query.locator,
+      maxRecords: req.query.maxRecords || BULK_QUERY_PAGE_SIZE
+    });
+
+    if (req.query.format === 'csv') {
+      res.type('text/csv');
+      res.set('Sforce-Locator', page.locator || 'null');
+      return res.send(page.csv);
+    }
+
+    res.json({
+      records: page.records,
+      locator: page.locator,
+      numberOfRecords: page.numberOfRecords,
+      done: !page.locator
+    });
+  } catch (err) {
+    handleSFError(err, res, `Bulk query results ${req.params.jobId}`);
+  }
+});
+
+app.post('/api/bulk/:object/query', async (req, res) => {
+  const { object } = req.params;
+  if (!OBJECTS[object]) return res.status(400).json({ error: `Unknown object: ${object}` });
+
+  try {
+    const soql = req.body?.soql || buildBulkSOQL(object, req.body?.search, req.body?.where);
+    const job = await createBulkQueryJob(soql);
+    const finalJob = req.body?.wait === false ? job : await pollBulkQueryJob(job.id, req.body?.maxWaitMs);
+    const response = { success: finalJob.state === 'JobComplete', job: finalJob, soql };
+
+    if (req.body?.includeRecords !== false && finalJob.state === 'JobComplete') {
+      const page = await getBulkQueryResults(job.id, { maxRecords: req.body?.maxRecords || BULK_QUERY_PAGE_SIZE });
+      response.records = page.records;
+      response.locator = page.locator;
+      response.numberOfRecords = page.numberOfRecords;
+      response.done = !page.locator;
+    }
+
+    res.json(response);
+  } catch (err) {
+    handleSFError(err, res, `Bulk ${object} query`);
+  }
+});
+
+// Bulk API 2.0 ingest for large create/update/upsert/delete jobs
+app.post('/api/bulk/:object/:operation', async (req, res) => {
+  const { object, operation } = req.params;
+  if (!OBJECTS[object]) return res.status(400).json({ error: `Unknown object: ${object}` });
+  if (!['insert', 'update', 'upsert', 'delete'].includes(operation)) {
+    return res.status(400).json({ error: 'Bulk operation must be insert, update, upsert, or delete' });
+  }
+
+  try {
+    const records = Array.isArray(req.body) ? req.body : req.body?.records;
+    const result = await runBulkIngest(object, operation, records, {
+      externalIdFieldName: req.body?.externalIdFieldName,
+      wait: req.body?.wait,
+      maxWaitMs: req.body?.maxWaitMs,
+      includeResults: req.body?.includeResults
+    });
+    res.json(result);
+  } catch (err) {
+    handleSFError(err, res, `Bulk ${operation} ${object}`);
+  }
+});
+
 // List records
 app.get('/api/:object', async (req, res) => {
   const { object } = req.params;
@@ -1125,10 +1666,70 @@ app.post('/api/:object', async (req, res) => {
   if (!OBJECTS[object]) return res.status(400).json({ error: `Unknown object: ${object}` });
 
   try {
+    const records = Array.isArray(req.body) ? req.body : req.body?.records;
+    if (Array.isArray(records)) {
+      if (!records.length) return res.status(400).json({ error: 'Create requires at least one record' });
+      if (records.length >= BULK_AUTO_THRESHOLD || req.query.bulk === 'true' || req.body?.bulk === true) {
+        const result = await runBulkIngest(object, 'insert', records, {
+          wait: req.body?.wait,
+          includeResults: req.body?.includeResults
+        });
+        return res.json({ ...result, bulk: true });
+      }
+
+      const result = await sfPost('/composite/sobjects', {
+        allOrNone: false,
+        records: records.map((record) => ({
+          attributes: { type: object },
+          ...flattenRecord(record)
+        }))
+      });
+      return res.json({ bulk: false, result });
+    }
+
     const result = await sfPost(`/sobjects/${object}`, req.body);
     res.json(result);
   } catch (err) {
     handleSFError(err, res, `POST ${object}`);
+  }
+});
+
+// Bulk-aware update route for array payloads: { records: [{ Id, ...fields }] }
+app.patch('/api/:object', async (req, res) => {
+  const { object } = req.params;
+  if (!OBJECTS[object]) return res.status(400).json({ error: `Unknown object: ${object}` });
+
+  try {
+    const records = Array.isArray(req.body) ? req.body : req.body?.records;
+    if (!Array.isArray(records) || !records.length) {
+      return res.status(400).json({ error: 'Update requires records with Id values' });
+    }
+
+    if (records.length >= BULK_AUTO_THRESHOLD || req.query.bulk === 'true' || req.body?.bulk === true) {
+      const result = await runBulkIngest(object, 'update', records, {
+        wait: req.body?.wait,
+        includeResults: req.body?.includeResults
+      });
+      return res.json({ ...result, bulk: true });
+    }
+
+    const results = await Promise.allSettled(records.map((record) => {
+      const clean = flattenRecord(record);
+      const { Id, ...fields } = clean;
+      if (!Id) throw new Error('Update requires Id on every record');
+      return sfPatch(`/sobjects/${object}/${Id}`, fields);
+    }));
+    res.json({
+      bulk: false,
+      success: results.every((item) => item.status === 'fulfilled'),
+      results: results.map((item, index) => ({
+        id: records[index].Id,
+        success: item.status === 'fulfilled',
+        error: item.status === 'rejected' ? formatSalesforceError(item.reason?.response?.data) || item.reason?.message : ''
+      }))
+    });
+  } catch (err) {
+    handleSFError(err, res, `PATCH ${object}`);
   }
 });
 
@@ -1142,6 +1743,41 @@ app.patch('/api/:object/:id', async (req, res) => {
     res.json({ success: true });
   } catch (err) {
     handleSFError(err, res, `PATCH ${object}/${id}`);
+  }
+});
+
+// Bulk-aware delete route for array payloads: { ids: [] } or { records: [{ Id }] }
+app.delete('/api/:object', async (req, res) => {
+  const { object } = req.params;
+  if (!OBJECTS[object]) return res.status(400).json({ error: `Unknown object: ${object}` });
+
+  try {
+    const ids = Array.isArray(req.body?.ids)
+      ? req.body.ids
+      : (Array.isArray(req.body?.records) ? req.body.records.map((record) => record.Id) : []);
+    const records = [...new Set(ids.map(String).filter(Boolean))].map((Id) => ({ Id }));
+    if (!records.length) return res.status(400).json({ error: 'Delete requires ids or records with Id values' });
+
+    if (records.length >= BULK_AUTO_THRESHOLD || req.query.bulk === 'true' || req.body?.bulk === true) {
+      const result = await runBulkIngest(object, 'delete', records, {
+        wait: req.body?.wait,
+        includeResults: req.body?.includeResults
+      });
+      return res.json({ ...result, bulk: true });
+    }
+
+    const results = await Promise.allSettled(records.map((record) => sfDelete(`/sobjects/${object}/${record.Id}`)));
+    res.json({
+      bulk: false,
+      success: results.every((item) => item.status === 'fulfilled'),
+      results: results.map((item, index) => ({
+        id: records[index].Id,
+        success: item.status === 'fulfilled',
+        error: item.status === 'rejected' ? formatSalesforceError(item.reason?.response?.data) || item.reason?.message : ''
+      }))
+    });
+  } catch (err) {
+    handleSFError(err, res, `DELETE ${object}`);
   }
 });
 
