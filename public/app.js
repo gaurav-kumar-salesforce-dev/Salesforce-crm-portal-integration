@@ -128,6 +128,9 @@ let sortState = { field: null, direction: 'asc' };
 let currentPage = 1;
 let pageSize = 25;
 let totalRecords = 0;
+let currentViewMode = 'table';
+let draggedKanbanId = null;
+const kanbanPicklistCache = {};
 let listContentHtml = '';
 let viewingDetail = false;
 let detailRecordState = null;
@@ -150,6 +153,31 @@ function getLocalViews() {
 
 function setLocalViews(views) {
   localStorage.setItem('sfmListViews', JSON.stringify(views));
+}
+
+function isKanbanObject(objectName = currentObject) {
+  return ['Opportunity', 'Lead'].includes(objectName);
+}
+
+function kanbanFieldFor(objectName = currentObject) {
+  return objectName === 'Opportunity' ? 'StageName' : 'Status';
+}
+
+function kanbanFallbackValues(objectName = currentObject) {
+  return objectName === 'Opportunity'
+    ? ['Prospecting', 'Qualification', 'Needs Analysis', 'Value Proposition', 'Id. Decision Makers', 'Perception Analysis', 'Proposal/Price Quote', 'Negotiation/Review', 'Closed Won', 'Closed Lost']
+    : ['Open - Not Contacted', 'Working - Contacted', 'Closed - Converted', 'Closed - Not Converted'];
+}
+
+function uniqueKanbanValues(values, objectName = currentObject) {
+  const seen = new Set();
+  return [...values, ...kanbanFallbackValues(objectName)]
+    .map((value) => String(value || '').trim())
+    .filter((value) => {
+      if (!value || seen.has(value)) return false;
+      seen.add(value);
+      return true;
+    });
 }
 
 function objectLocalViews() {
@@ -423,6 +451,8 @@ async function loadData() {
   $('stateLoading').style.display = 'flex';
   $('stateError').style.display = 'none';
   $('tableCard').style.display = 'none';
+  if ($('kanbanCard')) $('kanbanCard').style.display = 'none';
+  updateViewToggle();
 
   try {
     if (currentViewId.startsWith('sf:')) {
@@ -448,15 +478,17 @@ async function loadData() {
     }
 
     applySort();
-    renderTable();
+    await renderCurrentView();
     updatePagination();
     updateBadge(currentObject, currentRecords.length);
     $('pageSub').textContent = `${totalRecords} records available`;
-    $('recCount').textContent = currentViewId.startsWith('sf:')
+    $('recCount').textContent = currentViewMode === 'kanban'
+      ? `${currentRecords.length} records`
+      : currentViewId.startsWith('sf:')
       ? `${currentRecords.length} records`
       : `${pageRangeStart()}-${pageRangeEnd()} of ${totalRecords}`;
     $('stateLoading').style.display = 'none';
-    $('tableCard').style.display = 'block';
+    showActiveView();
   } catch (err) {
     $('stateLoading').style.display = 'none';
     $('stateError').style.display = 'flex';
@@ -557,8 +589,266 @@ function renderTable() {
   `).join('');
 }
 
+function updateViewToggle() {
+  const toggle = $('viewToggle');
+  if (!toggle) return;
+  if (!isKanbanObject()) {
+    currentViewMode = 'table';
+    toggle.style.display = 'none';
+  } else {
+    toggle.style.display = 'inline-flex';
+  }
+  $('tableViewBtn')?.classList.toggle('active', currentViewMode === 'table');
+  $('kanbanViewBtn')?.classList.toggle('active', currentViewMode === 'kanban');
+}
+
+async function setViewMode(mode) {
+  currentViewMode = isKanbanObject() && mode === 'kanban' ? 'kanban' : 'table';
+  updateViewToggle();
+  await renderCurrentView();
+  updatePagination();
+  showActiveView();
+}
+
+function showActiveView() {
+  const tableCard = $('tableCard');
+  const kanbanCard = $('kanbanCard');
+  if (tableCard) tableCard.style.display = currentViewMode === 'table' ? 'block' : 'none';
+  if (kanbanCard) kanbanCard.style.display = currentViewMode === 'kanban' ? 'block' : 'none';
+}
+
+async function renderCurrentView() {
+  updateViewToggle();
+  if (currentViewMode === 'kanban') {
+    await renderKanban();
+    return;
+  }
+  renderTable();
+}
+
 function fieldColumnClass(field) {
   return `col-${String(field).toLowerCase().replace(/[^a-z0-9]+/g, '-')}`;
+}
+
+async function getKanbanValues() {
+  const field = kanbanFieldFor();
+  const key = `${currentObject}.${field}`;
+  if (kanbanPicklistCache[key]) return kanbanPicklistCache[key];
+
+  try {
+    const data = await api(`/api/meta/${currentObject}/picklist/${field}`);
+    const values = (data.values || []).filter(Boolean);
+    kanbanPicklistCache[key] = uniqueKanbanValues(values);
+  } catch {
+    kanbanPicklistCache[key] = uniqueKanbanValues([]);
+  }
+  return kanbanPicklistCache[key];
+}
+
+async function renderKanban() {
+  const board = $('kanbanBoard');
+  if (!board) return;
+
+  const field = kanbanFieldFor();
+  const values = await getKanbanValues();
+  const records = getRecordsToRender();
+  const grouped = uniqueKanbanValues([...values, ...records.map((record) => record[field] || 'Unspecified')])
+    .reduce((acc, value) => ({ ...acc, [value]: [] }), {});
+  records.forEach((record) => {
+    const value = record[field] || 'Unspecified';
+    if (!grouped[value]) grouped[value] = [];
+    grouped[value].push(record);
+  });
+
+  const columns = Object.keys(grouped);
+  board.innerHTML = columns.map((value) => {
+    const items = grouped[value] || [];
+    const amount = currentObject === 'Opportunity'
+      ? items.reduce((sum, record) => sum + (Number(record.Amount) || 0), 0)
+      : 0;
+    return `
+      <section class="kanban-column" data-value="${escapeHtml(value)}" ondragover="handleKanbanDragOver(event)" ondragleave="handleKanbanDragLeave(event)" ondrop="handleKanbanDrop(event, '${escapeJs(value)}')">
+        <div class="kanban-column-head">
+          <div class="kanban-stage-name" title="${escapeHtml(value)}">${escapeHtml(value)}</div>
+          <span class="kanban-count">${items.length}</span>
+        </div>
+        ${currentObject === 'Opportunity' ? `<div class="kanban-stage-total">${formatKanbanAmount(amount)}</div>` : ''}
+        <div class="kanban-list">
+          ${items.length ? items.map(renderKanbanCard).join('') : '<div class="kanban-empty">No records</div>'}
+        </div>
+      </section>
+    `;
+  }).join('');
+}
+
+function renderKanbanCard(record) {
+  const title = record.Name || `${record.FirstName || ''} ${record.LastName || ''}`.trim() || record.Id;
+  const accountName = getValue(record, 'Account.Name');
+  const subtitle = currentObject === 'Opportunity'
+    ? accountName || record.AccountSite || ''
+    : record.Company || record.Title || '';
+  const detail = currentObject === 'Opportunity'
+    ? [formatKanbanAmount(record.Amount), record.CloseDate].filter(Boolean).join(' - ')
+    : [record.State, record.Email].filter(Boolean).join(' - ');
+  const subtitleHtml = currentObject === 'Opportunity' && accountName && record.AccountId
+    ? `<button class="kanban-link-line" onclick="event.stopPropagation(); openRecordDetail('Account', '${escapeJs(record.AccountId)}')">${escapeHtml(accountName)}</button>`
+    : (subtitle ? `<div class="kanban-subtitle">${escapeHtml(subtitle)}</div>` : '');
+  const field = kanbanFieldFor();
+  const value = record[field] || 'Unspecified';
+
+  return `
+    <article class="kanban-item" draggable="true" data-id="${escapeHtml(record.Id)}"
+      ondragstart="handleKanbanDragStart(event, '${escapeJs(record.Id)}')"
+      onclick="openRecordDetail('${currentObject}', '${escapeJs(record.Id)}')">
+      <div class="kanban-item-top">
+        <button class="kanban-title" onclick="event.stopPropagation(); openRecordDetail('${currentObject}', '${escapeJs(record.Id)}')">${escapeHtml(title)}</button>
+        <button class="kanban-card-action" title="Edit" aria-label="Edit" onclick="event.stopPropagation(); openEdit('${escapeJs(record.Id)}')">
+          <svg viewBox="0 0 20 20" width="14" height="14" fill="currentColor">
+            <path d="M13.586 3.586a2 2 0 112.828 2.828l-.793.793-2.828-2.828.793-.793z"/>
+            <path d="M11.379 5.793L3 14.172V17h2.828l8.379-8.379-2.828-2.828z"/>
+          </svg>
+        </button>
+      </div>
+      ${subtitleHtml}
+      ${detail ? `<div class="kanban-detail">${escapeHtml(detail)}</div>` : ''}
+      <div class="kanban-foot">
+        <button class="kanban-grip" title="Change ${escapeHtml(labelFor(field))}" onclick="event.stopPropagation(); toggleKanbanMenu(event, '${escapeJs(record.Id)}')" aria-label="Change ${escapeHtml(labelFor(field))}" aria-haspopup="menu" aria-expanded="false">::::</button>
+        <span class="kanban-stage-text" title="${escapeHtml(value)}">
+          ${escapeHtml(value)}
+        </span>
+      </div>
+    </article>
+  `;
+}
+
+function formatKanbanAmount(value) {
+  const amount = Number(value) || 0;
+  return amount.toLocaleString(undefined, {
+    style: 'currency',
+    currency: 'USD',
+    maximumFractionDigits: 0
+  });
+}
+
+async function toggleKanbanMenu(event, id) {
+  event.stopPropagation();
+  const openMenu = Array.from(document.querySelectorAll('.kanban-stage-menu'))
+    .find((menu) => menu.dataset.recordId === id);
+  closeKanbanMenus();
+
+  const button = event.currentTarget;
+  if (openMenu) {
+    button.setAttribute('aria-expanded', 'false');
+    return;
+  }
+
+  const item = button.closest('.kanban-item');
+  const record = currentRecords.find((row) => row.Id === id);
+  if (!item || !record) return;
+
+  const values = await getKanbanValues();
+  const currentValue = record[kanbanFieldFor()] || 'Unspecified';
+  const menu = document.createElement('div');
+  menu.className = 'kanban-stage-menu';
+  menu.dataset.recordId = id;
+  menu.setAttribute('role', 'menu');
+  menu.innerHTML = values.map((value) => `
+    <button class="kanban-stage-option${value === currentValue ? ' active' : ''}" role="menuitem" onclick="event.stopPropagation(); selectKanbanValue('${escapeJs(id)}', '${escapeJs(value)}')">
+      ${escapeHtml(value)}
+    </button>
+  `).join('');
+  document.body.appendChild(menu);
+  positionKanbanMenu(menu, button);
+  button.setAttribute('aria-expanded', 'true');
+}
+
+async function selectKanbanValue(id, value) {
+  closeKanbanMenus();
+  await moveKanbanRecord(id, value);
+}
+
+function closeKanbanMenus(exceptId = '') {
+  document.querySelectorAll('.kanban-stage-menu').forEach((menu) => {
+    if (exceptId && menu.dataset.recordId === exceptId) return;
+    menu.remove();
+  });
+  document.querySelectorAll('.kanban-grip[aria-expanded="true"]').forEach((button) => {
+    button.setAttribute('aria-expanded', 'false');
+  });
+}
+
+function positionKanbanMenu(menu, anchor) {
+  const margin = 8;
+  const width = Math.min(232, window.innerWidth - (margin * 2));
+  menu.style.width = `${width}px`;
+
+  const anchorRect = anchor.getBoundingClientRect();
+  const menuRect = menu.getBoundingClientRect();
+  const maxLeft = window.innerWidth - width - margin;
+  const left = Math.min(Math.max(anchorRect.left + (anchorRect.width / 2) - (width / 2), margin), maxLeft);
+
+  let top = anchorRect.bottom + 6;
+  const roomBelow = window.innerHeight - anchorRect.bottom - margin;
+  const roomAbove = anchorRect.top - margin;
+  if (roomBelow < menuRect.height && roomAbove > roomBelow) {
+    top = anchorRect.top - menuRect.height - 6;
+  }
+  if (top < margin || top + menuRect.height > window.innerHeight - margin) {
+    top = Math.max(margin, (window.innerHeight - menuRect.height) / 2);
+  }
+
+  menu.style.left = `${left}px`;
+  menu.style.top = `${top}px`;
+}
+
+function escapeJs(value) {
+  return String(value || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+}
+
+function handleKanbanDragStart(event, id) {
+  draggedKanbanId = id;
+  event.dataTransfer.effectAllowed = 'move';
+  event.dataTransfer.setData('text/plain', id);
+}
+
+function handleKanbanDragOver(event) {
+  event.preventDefault();
+  event.currentTarget.classList.add('drag-over');
+}
+
+function handleKanbanDragLeave(event) {
+  event.currentTarget.classList.remove('drag-over');
+}
+
+async function handleKanbanDrop(event, nextValue) {
+  event.preventDefault();
+  event.currentTarget.classList.remove('drag-over');
+  const id = event.dataTransfer.getData('text/plain') || draggedKanbanId;
+  draggedKanbanId = null;
+  if (!id) return;
+  await moveKanbanRecord(id, nextValue);
+}
+
+async function moveKanbanRecord(id, nextValue) {
+  const record = currentRecords.find((item) => item.Id === id);
+  const field = kanbanFieldFor();
+  if (!record || record[field] === nextValue) return;
+
+  const previousValue = record[field];
+  record[field] = nextValue;
+  await renderKanban();
+
+  try {
+    await api(`/api/${currentObject}/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ [field]: nextValue })
+    });
+    toast(`${labelFor(field)} updated`, 'ok');
+  } catch (err) {
+    record[field] = previousValue;
+    await renderKanban();
+    toast(err.message, 'err');
+  }
 }
 
 function getRecordsToRender() {
@@ -574,7 +864,7 @@ function sortBy(field) {
     direction: sortState.field === field && sortState.direction === 'asc' ? 'desc' : 'asc'
   };
   applySort();
-  renderTable();
+  renderCurrentView();
 }
 
 function applySort() {
@@ -598,6 +888,7 @@ async function switchObject(objectName) {
   currentPage = 1;
   totalRecords = 0;
   currentViewId = 'all';
+  currentViewMode = 'table';
   sortState = { field: null, direction: 'asc' };
   $('objSearch').value = '';
   document.querySelectorAll('.nav-item').forEach((item) => {
@@ -648,6 +939,10 @@ function pageRangeEnd() {
 function updatePagination() {
   const bar = $('paginationBar');
   if (!bar) return;
+  if (currentViewMode === 'kanban') {
+    bar.style.display = 'none';
+    return;
+  }
 
   const isServerPaged = !currentViewId.startsWith('sf:');
   bar.style.display = isServerPaged ? 'flex' : 'none';
@@ -1943,7 +2238,14 @@ function toast(message, type = 'info') {
 
 document.addEventListener('click', (event) => {
   if (!event.target.closest('.profile-menu')) closeProfileMenu();
+  if (!event.target.closest('.kanban-item')) closeKanbanMenus();
 });
+
+document.addEventListener('scroll', (event) => {
+  if (event.target?.closest?.('.kanban-stage-menu')) return;
+  closeKanbanMenus();
+}, true);
+window.addEventListener('resize', () => closeKanbanMenus());
 
 document.addEventListener('DOMContentLoaded', () => {
   listContentHtml = $('content').innerHTML;
