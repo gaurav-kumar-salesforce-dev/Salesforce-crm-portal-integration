@@ -145,6 +145,7 @@ let emailTemplates = [];
 let detailLookupLabels = {};
 let expandedActivityIds = new Set();
 let activityLookupState = {};
+let emailComposerState = {};
 
 const $ = (id) => document.getElementById(id);
 
@@ -211,6 +212,11 @@ function utilityIconSvg(key) {
     call: '<svg viewBox="0 0 24 24"><path d="M7 4l3 3-2 2c1.2 2.4 3.1 4.3 5.5 5.5l2-2 3 3-1.7 3c-.4.7-1.2 1-2 .8C9.9 18.6 5.4 14.1 4.2 9.2c-.2-.8.1-1.6.8-2L7 4z"/></svg>',
     event: '<svg viewBox="0 0 24 24"><path d="M7 2h2v3h6V2h2v3h2a2 2 0 012 2v12a2 2 0 01-2 2H5a2 2 0 01-2-2V7a2 2 0 012-2h2V2zm12 8H5v9h14v-9z"/></svg>',
     email: '<svg viewBox="0 0 24 24"><path d="M4 5h16a2 2 0 012 2v10a2 2 0 01-2 2H4a2 2 0 01-2-2V7a2 2 0 012-2zm8 8l8-5.2V7l-8 5-8-5v.8L12 13z"/></svg>',
+    attach: '<svg viewBox="0 0 24 24"><path d="M8 17.5l8.7-8.7a2.5 2.5 0 00-3.5-3.5l-9.1 9.1a4.5 4.5 0 006.4 6.4l8.2-8.2 1.4 1.4-8.2 8.2a6.5 6.5 0 11-9.2-9.2l9.1-9.1a4.5 4.5 0 016.4 6.4l-8.7 8.7a2.5 2.5 0 01-3.5-3.5l7.8-7.8 1.4 1.4-7.8 7.8a.5.5 0 10.7.7z"/></svg>',
+    merge: '<svg viewBox="0 0 24 24"><path d="M4 5h7v2H6v10h5v2H4V5zm9 0h7v14h-7v-2h5V7h-5V5zm-2.2 5.4L8.2 13l2.6 2.6-1.4 1.4L5.4 13l4-4 1.4 1.4zm2.4 5.2l2.6-2.6-2.6-2.6 1.4-1.4 4 4-4 4-1.4-1.4z"/></svg>',
+    template: '<svg viewBox="0 0 24 24"><path d="M5 3h11l3 3v15H5V3zm10 2H7v14h10V7h-2V5zM9 10h6v2H9v-2zm0 4h6v2H9v-2z"/></svg>',
+    preview: '<svg viewBox="0 0 24 24"><path d="M12 5c5 0 8.5 4.5 9.5 7-1 2.5-4.5 7-9.5 7s-8.5-4.5-9.5-7C3.5 9.5 7 5 12 5zm0 2c-3.4 0-6 2.8-7.2 5 1.2 2.2 3.8 5 7.2 5s6-2.8 7.2-5C18 9.8 15.4 7 12 7zm0 2.5a2.5 2.5 0 110 5 2.5 2.5 0 010-5z"/></svg>',
+    link: '<svg viewBox="0 0 24 24"><path d="M10.6 13.4a1 1 0 010-1.4l3.4-3.4a3 3 0 114.2 4.2l-3.1 3.1-1.4-1.4 3.1-3.1a1 1 0 10-1.4-1.4L12 13.4a1 1 0 01-1.4 0zm2.8-2.8a1 1 0 010 1.4L10 15.4a3 3 0 11-4.2-4.2l3.1-3.1 1.4 1.4-3.1 3.1a1 1 0 101.4 1.4l3.4-3.4a1 1 0 011.4 0z"/></svg>',
     settings: '<svg viewBox="0 0 24 24"><path d="M19.4 13.5a7.7 7.7 0 000-3l2-1.5-2-3.4-2.4 1a7.8 7.8 0 00-2.6-1.5L14 2h-4l-.4 3.1A7.8 7.8 0 007 6.6l-2.4-1-2 3.4 2 1.5a7.7 7.7 0 000 3l-2 1.5 2 3.4 2.4-1a7.8 7.8 0 002.6 1.5L10 22h4l.4-3.1a7.8 7.8 0 002.6-1.5l2.4 1 2-3.4-2-1.5zM12 15.5A3.5 3.5 0 1112 8a3.5 3.5 0 010 7.5z"/></svg>',
     trash: '<svg viewBox="0 0 20 20"><path d="M8 2a1 1 0 00-.9.6L6.4 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 000-2h-2.4l-.7-1.4A1 1 0 0012 2H8zm-1 6h2v7H7V8zm4 0h2v7h-2V8z"/></svg>'
   };
@@ -1840,6 +1846,434 @@ function selectActivityLookup(kind, objectName, id, label) {
   rerenderActivityFormPreservingFields();
 }
 
+function defaultEmailRecipient() {
+  const record = detailRecordState?.record || {};
+  if (!['Contact', 'Lead'].includes(detailRecordState?.objectName) || !record.Email) return null;
+  return {
+    object: detailRecordState.objectName,
+    id: detailRecordState.id,
+    label: currentActivityTargetLabel(),
+    email: record.Email
+  };
+}
+
+function initializeEmailComposer() {
+  const recipient = defaultEmailRecipient();
+  emailComposerState = {
+    fromOptions: [],
+    fromValue: 'user:',
+    to: recipient ? [recipient] : [],
+    cc: [],
+    bcc: [],
+    showCc: false,
+    showBcc: true,
+    files: [],
+    templates: [],
+    templatePromise: null,
+    templateMenuOpen: false,
+    mergeMenuOpen: false
+  };
+  loadEmailFromOptions();
+  loadEmailTemplates();
+}
+
+async function loadEmailFromOptions() {
+  try {
+    const data = await api('/api/email/from-addresses');
+    emailComposerState.fromOptions = data.records || [];
+    const selected = emailComposerState.fromOptions.find((item) => item.type === 'user') || emailComposerState.fromOptions[0];
+    emailComposerState.fromValue = selected ? `${selected.type}:${selected.id || selected.email}` : 'user:';
+    renderEmailFromOptions();
+  } catch (err) {
+    emailComposerState.fromOptions = [{
+      type: 'user',
+      id: currentUser?.id || '',
+      label: currentUser?.name || currentUser?.username || 'Current User',
+      email: currentUser?.email || currentUser?.username || ''
+    }];
+    renderEmailFromOptions();
+  }
+}
+
+async function loadEmailTemplates() {
+  if (emailComposerState.templatePromise) return emailComposerState.templatePromise;
+  emailComposerState.templatePromise = (async () => {
+  try {
+    emailComposerState.templateError = '';
+    emailComposerState.templateLoading = true;
+    const data = await api('/api/campaigns/activity/email-templates');
+    emailComposerState.templates = data.records || [];
+  } catch (err) {
+    emailComposerState.templates = [];
+    emailComposerState.templateError = err.message || 'Could not load templates';
+  } finally {
+    emailComposerState.templateLoading = false;
+    emailComposerState.templatePromise = null;
+  }
+  })();
+  return emailComposerState.templatePromise;
+}
+
+function renderEmailFromOptions() {
+  const select = $('activityEmailFrom');
+  if (!select) return;
+  select.innerHTML = emailComposerState.fromOptions.map((item) => `
+    <option value="${escapeHtml(`${item.type}:${item.id || item.email}`)}" ${emailComposerState.fromValue === `${item.type}:${item.id || item.email}` ? 'selected' : ''}>
+      ${escapeHtml(item.label || item.email)}${item.email ? ` &lt;${escapeHtml(item.email)}&gt;` : ''}
+    </option>
+  `).join('');
+}
+
+function emailRecipientRow(kind, label, required = false) {
+  const recipients = emailComposerState[kind] || [];
+  return `
+    <div class="activity-email-row email-recipient-row" id="activityEmailRow-${escapeHtml(kind)}">
+      <label class="form-label ${required ? 'required' : ''}" for="activityEmailSearch-${escapeHtml(kind)}">${escapeHtml(label)}</label>
+      <div class="email-token-box" onclick="$('activityEmailSearch-${escapeJs(kind)}')?.focus()">
+        ${recipients.map((item, index) => `
+          <span class="email-token">
+            ${objectIcon(item.object)}
+            <span>${escapeHtml(item.label || item.email)}</span>
+            <button type="button" aria-label="Remove ${escapeHtml(item.label || item.email)}" onclick="removeEmailRecipient('${escapeJs(kind)}', ${index})">&times;</button>
+          </span>
+        `).join('')}
+        <input id="activityEmailSearch-${escapeHtml(kind)}" placeholder="${recipients.length ? '' : 'Search people...'}"
+          oninput="searchEmailRecipients('${escapeJs(kind)}', this.value)" autocomplete="off">
+      </div>
+      <div class="email-recipient-results" id="activityEmailResults-${escapeHtml(kind)}"></div>
+      ${kind === 'to' ? `
+        <div class="email-row-actions">
+          <button type="button" onclick="toggleEmailRow('cc')">Cc</button>
+          <button type="button" onclick="toggleEmailRow('bcc')">Bcc</button>
+        </div>
+      ` : ''}
+    </div>
+  `;
+}
+
+function renderEmailComposer() {
+  const relatedLookup = activityLookupControl('what', 'Related To', ['Account', 'Opportunity', 'Case', 'Campaign'], 'Search Accounts...');
+  return `
+    <div class="activity-email-form activity-email-composer">
+      <div class="activity-email-row">
+        <label class="form-label required" for="activityEmailFrom">From</label>
+        <select class="form-ctrl" id="activityEmailFrom" onchange="emailComposerState.fromValue = this.value"></select>
+      </div>
+      ${emailRecipientRow('to', 'To', true)}
+      <div id="activityEmailCcWrap" style="${emailComposerState.showCc ? '' : 'display:none'}">${emailRecipientRow('cc', 'Cc')}</div>
+      <div id="activityEmailBccWrap" style="${emailComposerState.showBcc ? '' : 'display:none'}">${emailRecipientRow('bcc', 'Bcc')}</div>
+      <div class="activity-email-row">
+        <label class="form-label required" for="activitySubject">Subject</label>
+        <input class="form-ctrl" id="activitySubject" placeholder="Enter Subject..." required>
+      </div>
+      <div class="activity-template-lock" id="activityTemplateNotice" style="display:none">
+        <strong>i</strong>
+        <span>Some sections of this template are locked to prevent changes.</span>
+        <button type="button" onclick="clearActivityTemplate()">Clear Template</button>
+      </div>
+      <div class="activity-email-toolbar">
+        <select title="Font" onchange="formatEmailBody('fontName', this.value)">
+          <option value="">Font</option>
+          <option value="Arial">Arial</option>
+          <option value="Georgia">Georgia</option>
+          <option value="Tahoma">Tahoma</option>
+          <option value="Times New Roman">Times</option>
+        </select>
+        <select title="Size" onchange="formatEmailBody('fontSize', this.value)">
+          <option value="">Size</option>
+          <option value="2">Small</option>
+          <option value="3">Normal</option>
+          <option value="4">Large</option>
+          <option value="5">X-Large</option>
+        </select>
+        <button type="button" title="Bold" onclick="formatEmailBody('bold')"><strong>B</strong></button>
+        <button type="button" title="Italic" onclick="formatEmailBody('italic')"><em>I</em></button>
+        <button type="button" title="Underline" onclick="formatEmailBody('underline')"><u>U</u></button>
+        <button type="button" title="Link" onclick="createEmailLink()">${utilityIconSvg('link')}</button>
+        <button type="button" title="Preview" onclick="previewEmailBody()">${utilityIconSvg('preview')}</button>
+      </div>
+      <div class="activity-email-body rich-email-body" id="activityBody" contenteditable="true" data-placeholder="Write your email..."></div>
+      <div class="activity-email-footer-tools">
+        <button type="button" title="Attach File" onclick="$('activityAttachmentInput').click()">${utilityIconSvg('attach')}</button>
+        <button type="button" title="Insert, create, or update template" onclick="toggleTemplateMenu()">${utilityIconSvg('template')}</button>
+        <input id="activityAttachmentInput" type="file" accept=".pdf,application/pdf" multiple onchange="handleActivityAttachments(this.files)" hidden>
+        <div class="activity-popover" id="activityMergeMenu"></div>
+        <div class="activity-file-list" id="activityFileList"></div>
+      </div>
+      <div class="activity-email-related">
+        ${relatedLookup}
+      </div>
+    </div>
+  `;
+}
+
+function rerenderEmailComposerPreservingFields() {
+  const draft = collectActivityDraft();
+  $('activityModalBody').innerHTML = renderEmailComposer();
+  restoreActivityDraft(draft);
+  renderEmailFromOptions();
+  renderActivityFiles();
+}
+
+function toggleEmailRow(kind) {
+  emailComposerState[kind === 'cc' ? 'showCc' : 'showBcc'] = true;
+  rerenderEmailComposerPreservingFields();
+}
+
+function removeEmailRecipient(kind, index) {
+  emailComposerState[kind].splice(index, 1);
+  rerenderEmailComposerPreservingFields();
+}
+
+async function searchEmailRecipients(kind, value) {
+  const results = $(`activityEmailResults-${kind}`);
+  const q = String(value || '').trim();
+  if (!results) return;
+  if (!q) {
+    results.classList.remove('open');
+    results.innerHTML = '';
+    return;
+  }
+
+  try {
+    const groups = await Promise.all(['Lead', 'Contact', 'User'].map(async (objectName) => {
+      const data = await api(`/api/lookup/${objectName}?search=${encodeURIComponent(q)}`);
+      return { objectName, records: (data.records || []).filter((record) => record.Email).slice(0, 5) };
+    }));
+    results.innerHTML = groups.flatMap(({ objectName, records }) => records.map((record) => {
+      const label = record.Name || record.Email;
+      const sub = record.Email || record.Username || record.Company || '';
+      return `
+        <button type="button" class="activity-lookup-item" onclick="selectEmailRecipient('${escapeJs(kind)}', '${escapeJs(objectName)}', '${escapeJs(record.Id)}', '${escapeJs(label)}', '${escapeJs(record.Email)}')">
+          ${objectIcon(objectName)}
+          <span><strong>${escapeHtml(label)}</strong>${sub ? `<small>${escapeHtml(sub)}</small>` : ''}</span>
+        </button>
+      `;
+    })).join('') || '<div class="lookup-empty">No matches</div>';
+    results.classList.add('open');
+  } catch (err) {
+    results.innerHTML = `<div class="lookup-empty">${escapeHtml(err.message)}</div>`;
+    results.classList.add('open');
+  }
+}
+
+function selectEmailRecipient(kind, objectName, id, label, email) {
+  const existing = new Set((emailComposerState[kind] || []).map((item) => item.id || item.email));
+  if (!existing.has(id || email)) emailComposerState[kind].push({ object: objectName, id, label, email });
+  rerenderEmailComposerPreservingFields();
+}
+
+function readFileAsBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = String(reader.result || '');
+      resolve(result.includes(',') ? result.split(',').pop() : result);
+    };
+    reader.onerror = () => reject(reader.error || new Error(`Could not read ${file.name}`));
+    reader.readAsDataURL(file);
+  });
+}
+
+async function handleActivityAttachments(files) {
+  const selected = Array.from(files || []);
+  const pdfs = selected.filter((file) => file.type === 'application/pdf' || /\.pdf$/i.test(file.name));
+  if (selected.length !== pdfs.length) toast('Only PDF attachments are allowed', 'info');
+  if (!pdfs.length) return;
+
+  try {
+    const prepared = await Promise.all(pdfs.map(async (file) => ({
+      name: file.name,
+      size: file.size,
+      type: file.type || 'application/pdf',
+      data: await readFileAsBase64(file)
+    })));
+    emailComposerState.files = [...(emailComposerState.files || []), ...prepared];
+    renderActivityFiles();
+  } catch (err) {
+    toast(err.message || 'Could not read attachment', 'err');
+  } finally {
+    if ($('activityAttachmentInput')) $('activityAttachmentInput').value = '';
+  }
+}
+
+function renderActivityFiles() {
+  const list = $('activityFileList');
+  if (!list) return;
+  list.innerHTML = (emailComposerState.files || []).map((file, index) => `
+    <span class="activity-file-pill">${escapeHtml(file.name)}<button type="button" onclick="removeActivityFile(${index})">&times;</button></span>
+  `).join('');
+}
+
+function removeActivityFile(index) {
+  emailComposerState.files.splice(index, 1);
+  renderActivityFiles();
+}
+
+function focusEmailBody() {
+  const body = $('activityBody');
+  if (!body) return null;
+  body.focus();
+  return body;
+}
+
+function formatEmailBody(command, value = null) {
+  const body = focusEmailBody();
+  if (!body) return;
+  document.execCommand(command, false, value);
+}
+
+function createEmailLink() {
+  const body = focusEmailBody();
+  if (!body) return;
+  const url = window.prompt('Enter URL');
+  if (!url) return;
+  document.execCommand('createLink', false, url);
+}
+
+function previewEmailBody() {
+  const text = activityFieldValue('activityBody');
+  if (!text.trim()) {
+    toast('Email body is empty', 'info');
+    return;
+  }
+  const preview = window.open('', '_blank', 'width=720,height=640');
+  if (!preview) return;
+  preview.document.write(`<!doctype html><title>Email Preview</title><body style="font-family:Arial,sans-serif;padding:24px">${text}</body>`);
+  preview.document.close();
+}
+
+function toggleMergeMenu() {
+  const menu = $('activityMergeMenu');
+  if (!menu) return;
+  const fields = ['Recipient.FirstName', 'Recipient.LastName', 'Recipient.Email', 'Sender.Name', 'Sender.Title', 'Sender.Email', 'Organization.Name'];
+  menu.innerHTML = fields.map((field) => `<button type="button" onclick="insertMergeField('${escapeJs(field)}')">{{{${escapeHtml(field)}}}}</button>`).join('');
+  menu.classList.toggle('open');
+  $('activityTemplateMenu')?.classList.remove('open');
+}
+
+function insertMergeField(field) {
+  const body = $('activityBody');
+  if (!body) return;
+  const token = `{{{${field}}}}`;
+  const start = body.selectionStart || body.value.length;
+  const end = body.selectionEnd || start;
+  body.value = `${body.value.slice(0, start)}${token}${body.value.slice(end)}`;
+  body.focus();
+  body.setSelectionRange(start + token.length, start + token.length);
+  $('activityMergeMenu')?.classList.remove('open');
+}
+
+async function toggleTemplateMenu() {
+  ensureActivityTemplatePicker();
+  $('activityTemplateOverlay').classList.add('open');
+  await refreshActivityTemplatePicker();
+}
+
+function ensureActivityTemplatePicker() {
+  if ($('activityTemplateOverlay')) return;
+  const overlay = document.createElement('div');
+  overlay.className = 'activity-suboverlay';
+  overlay.id = 'activityTemplateOverlay';
+  overlay.innerHTML = `
+    <div class="activity-template-picker">
+      <button type="button" class="activity-template-close" onclick="closeActivityTemplatePicker()">&times;</button>
+      <div class="activity-template-picker-head">
+        <h3>Insert Email Template</h3>
+        <span>Select a template for Contacts or Leads</span>
+      </div>
+      <div class="activity-template-filters">
+        <label>
+          <span>Search</span>
+          <input id="activityTemplateSearch" placeholder="Search templates..." oninput="renderActivityTemplateRows()">
+        </label>
+      </div>
+      <div class="activity-template-table-wrap">
+        <table class="activity-template-table">
+          <thead>
+            <tr><th>Name</th><th>Template Type</th><th>Description</th></tr>
+          </thead>
+          <tbody id="activityTemplateRows"></tbody>
+        </table>
+      </div>
+      <div class="activity-template-picker-foot">
+        <button type="button" class="btn btn-ghost" onclick="closeActivityTemplatePicker()">Cancel</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+}
+
+function closeActivityTemplatePicker() {
+  $('activityTemplateOverlay')?.classList.remove('open');
+}
+
+async function refreshActivityTemplatePicker() {
+  const rows = $('activityTemplateRows');
+  if (rows) rows.innerHTML = '<tr><td colspan="3">Loading templates...</td></tr>';
+  if (!emailComposerState.templates?.length) {
+    await loadEmailTemplates();
+  }
+  renderActivityTemplateRows();
+}
+
+function renderActivityTemplateRows() {
+  const rows = $('activityTemplateRows');
+  if (!rows) return;
+  const search = String($('activityTemplateSearch')?.value || '').toLowerCase();
+  let templates = emailComposerState.templates || [];
+  if (search) {
+    templates = templates.filter((template) =>
+      [template.Name, template.Subject, template.Description, template.TemplateType].some((value) => String(value || '').toLowerCase().includes(search))
+    );
+  }
+  if (emailComposerState.templateError) {
+    rows.innerHTML = `<tr><td colspan="3">${escapeHtml(emailComposerState.templateError)}</td></tr>`;
+    return;
+  }
+  rows.innerHTML = templates.map((template) => `
+    <tr onclick="selectActivityTemplate('${escapeJs(template.Id)}')">
+      <td><button type="button" onclick="event.stopPropagation(); selectActivityTemplate('${escapeJs(template.Id)}')">${escapeHtml(template.Name || '(No name)')}</button></td>
+      <td>${escapeHtml(template.TemplateType || '')}</td>
+      <td>${escapeHtml(template.Description || template.Subject || '')}</td>
+    </tr>
+  `).join('') || '<tr><td colspan="3">No templates found. Check EmailTemplate access or create an active email template in Salesforce.</td></tr>';
+}
+
+async function selectActivityTemplate(templateId) {
+  try {
+    const primary = emailComposerState.to[0] || {};
+    const template = (emailComposerState.templates || []).find((item) => item.Id === templateId) || {};
+    if ($('activitySubject')) $('activitySubject').value = template.Subject || template.Name || '';
+    const data = await api('/api/activity-email-preview', {
+      method: 'POST',
+      body: JSON.stringify({
+        templateId,
+        recipientId: primary.id || '',
+        recipientObject: primary.object || '',
+        relatedRecordId: activityLookupState.what?.id || detailRecordState?.id || '',
+        relatedObject: activityLookupState.what?.object || detailRecordState?.objectName || ''
+      })
+    });
+    if ($('activitySubject')) $('activitySubject').value = data.subject || template.Subject || template.Name || '';
+    if ($('activityBody')) $('activityBody').innerHTML = data.html || escapeHtml(data.text || '').replace(/\n/g, '<br>');
+    if ($('activityTemplateNotice')) $('activityTemplateNotice').style.display = 'flex';
+    closeActivityTemplatePicker();
+  } catch (err) {
+    toast(err.message, 'err');
+  }
+}
+
+function clearActivityTemplate() {
+  if ($('activitySubject')) $('activitySubject').value = '';
+  if ($('activityBody')) $('activityBody').innerHTML = '';
+  if ($('activityTemplateNotice')) $('activityTemplateNotice').style.display = 'none';
+}
+
+function emailAddressList(kind) {
+  return (emailComposerState[kind] || []).map((item) => item.email).filter(Boolean).join(', ');
+}
+
 function collectActivityDraft() {
   return {
     subject: activityFieldValue('activitySubject'),
@@ -1871,7 +2305,10 @@ function restoreActivityDraft(draft = {}) {
     activityTo: draft.to,
     activityBody: draft.body
   }).forEach(([id, value]) => {
-    if ($(id) && value !== undefined) $(id).value = value;
+    if ($(id) && value !== undefined) {
+      if ($(id).isContentEditable) $(id).innerHTML = value;
+      else $(id).value = value;
+    }
   });
   if ($('activityAllDay')) $('activityAllDay').checked = Boolean(draft.allDay);
 }
@@ -1923,10 +2360,15 @@ function openActivityModal(type) {
   const overlay = ensureActivityModal();
   overlay.dataset.type = type;
   initializeActivityLookups();
+  if (type === 'email') initializeEmailComposer();
   $('activityModalTitle').textContent = activityModalTitle(type);
   $('activityModalIcon').innerHTML = utilityIconSvg(type === 'call' ? 'call' : type === 'event' ? 'event' : type === 'email' ? 'email' : 'task');
   $('activitySaveBtn').textContent = type === 'email' ? 'Send' : 'Save';
   $('activityModalBody').innerHTML = renderActivityForm(type);
+  if (type === 'email') {
+    renderEmailFromOptions();
+    renderActivityFiles();
+  }
   overlay.classList.add('open');
   setTimeout(() => $('activityModalBody').querySelector('input, textarea, select')?.focus(), 0);
 }
@@ -2007,28 +2449,7 @@ function renderActivityForm(type) {
   }
 
   if (type === 'email') {
-    return `
-      <div class="activity-email-form">
-        <div class="activity-email-row">
-          <label class="form-label required" for="activityTo">To</label>
-          <input class="form-ctrl" id="activityTo" type="email" value="${escapeHtml(recipient)}" placeholder="recipient@example.com" required>
-        </div>
-        <div class="activity-email-row">
-          <label class="form-label required" for="activitySubject">Subject</label>
-          <input class="form-ctrl" id="activitySubject" placeholder="Enter Subject..." required>
-        </div>
-        <div class="activity-email-toolbar">
-          <button type="button"><strong>B</strong></button>
-          <button type="button"><em>I</em></button>
-          <button type="button"><u>U</u></button>
-          <button type="button">${utilityIconSvg('email')}</button>
-        </div>
-        <textarea class="activity-email-body" id="activityBody" placeholder="Write your email..." required></textarea>
-        <div class="form-group">
-          ${relatedLookup}
-        </div>
-      </div>
-    `;
+    return renderEmailComposer();
   }
 
   return `
@@ -2073,7 +2494,9 @@ function closeActivityModal() {
 }
 
 function activityFieldValue(id) {
-  return $(id)?.value || '';
+  const field = $(id);
+  if (!field) return '';
+  return field.isContentEditable ? field.innerHTML || '' : field.value || '';
 }
 
 async function saveActivity() {
@@ -2108,7 +2531,15 @@ async function saveActivity() {
     payload.location = activityFieldValue('activityLocation');
     payload.comments = activityFieldValue('activityComments');
   } else if (type === 'email') {
-    payload.to = activityFieldValue('activityTo');
+    const fromOption = emailComposerState.fromOptions.find((item) => `${item.type}:${item.id || item.email}` === emailComposerState.fromValue);
+    payload.from = fromOption || null;
+    payload.to = emailAddressList('to');
+    payload.cc = emailAddressList('cc');
+    payload.bcc = emailAddressList('bcc');
+    payload.toRecipients = emailComposerState.to || [];
+    payload.ccRecipients = emailComposerState.cc || [];
+    payload.bccRecipients = emailComposerState.bcc || [];
+    payload.attachments = emailComposerState.files || [];
     payload.subject = activityFieldValue('activitySubject');
     payload.body = activityFieldValue('activityBody');
   }

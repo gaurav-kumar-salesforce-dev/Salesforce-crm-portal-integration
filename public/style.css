@@ -2287,6 +2287,7 @@ textarea.form-ctrl { resize: vertical; min-height: 80px; line-height: 1.5; }
   gap: 8px;
   padding: 6px 0;
   border-bottom: 1px solid var(--border);
+  position: relative;
 }
 
 .activity-email-row .form-ctrl {
@@ -2314,6 +2315,17 @@ textarea.form-ctrl { resize: vertical; min-height: 80px; line-height: 1.5; }
   justify-content: center;
 }
 
+.activity-email-toolbar select {
+  height: 28px;
+  border: 1px solid var(--border-dark);
+  border-radius: var(--r-sm);
+  background: var(--surface);
+  color: var(--text-2);
+  font: inherit;
+  font-size: 12px;
+  padding: 0 6px;
+}
+
 .activity-email-toolbar svg {
   width: 14px;
   height: 14px;
@@ -2328,6 +2340,397 @@ textarea.form-ctrl { resize: vertical; min-height: 80px; line-height: 1.5; }
   font: inherit;
   color: var(--text-1);
   outline: none;
+}
+
+.rich-email-body {
+  overflow-y: auto;
+  line-height: 1.45;
+  background: var(--surface);
+}
+
+.rich-email-body:empty::before {
+  content: attr(data-placeholder);
+  color: var(--text-3);
+}
+
+.rich-email-body a {
+  color: var(--text-link);
+  text-decoration: underline;
+}
+
+.activity-email-composer {
+  min-height: 500px;
+}
+
+.email-recipient-row {
+  grid-template-columns: 72px minmax(0, 1fr) auto;
+}
+
+.email-token-box {
+  min-height: 30px;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 2px 4px;
+  border: 1px solid transparent;
+  border-radius: var(--r-sm);
+  background: var(--surface);
+}
+
+.email-token-box:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-glow);
+}
+
+.email-token-box input {
+  min-width: 120px;
+  flex: 1;
+  border: none;
+  outline: none;
+  font: inherit;
+  font-size: 12px;
+  background: transparent;
+}
+
+.email-token {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 260px;
+  padding: 2px 5px 2px 2px;
+  border: 1px solid var(--border-dark);
+  border-radius: 3px;
+  background: var(--surface-2);
+  color: var(--text-1);
+  font-size: 12px;
+}
+
+.email-token .object-icon {
+  width: 18px;
+  height: 18px;
+  border-radius: 3px;
+  box-shadow: none;
+}
+
+.email-token .object-icon svg {
+  width: 11px;
+  height: 11px;
+}
+
+.email-token span:not(.object-icon) {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.email-token button,
+.email-row-actions button,
+.activity-template-lock button {
+  border: none;
+  background: transparent;
+  color: var(--text-link);
+  cursor: pointer;
+  font: inherit;
+}
+
+.email-recipient-results {
+  position: absolute;
+  left: 80px;
+  top: calc(100% - 2px);
+  width: min(520px, calc(100% - 92px));
+  z-index: 1300;
+  display: none;
+  max-height: 230px;
+  overflow-y: auto;
+  border: 1px solid var(--border-dark);
+  background: var(--surface);
+  box-shadow: var(--shadow-lg);
+}
+
+.email-recipient-results.open {
+  display: block;
+}
+
+.email-row-actions {
+  display: inline-flex;
+  gap: 8px;
+  padding-right: 6px;
+  font-size: 12px;
+}
+
+.activity-template-lock {
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  margin: 6px 0;
+  background: #eef0f2;
+  color: var(--text-2);
+  font-size: 12px;
+}
+
+.activity-template-lock strong {
+  width: 15px;
+  height: 15px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--text-1);
+  color: white;
+  font-size: 10px;
+}
+
+.activity-email-footer-tools {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 38px;
+  padding: 7px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.activity-email-footer-tools > button {
+  width: 26px;
+  height: 26px;
+  border: 1px solid var(--border-dark);
+  border-radius: var(--r-sm);
+  background: var(--surface);
+  color: var(--text-2);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.activity-email-footer-tools svg {
+  width: 14px;
+  height: 14px;
+}
+
+.activity-file-list {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.activity-file-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 230px;
+  padding: 3px 7px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface-2);
+  color: var(--text-2);
+  font-size: 11px;
+}
+
+.activity-file-pill button {
+  border: none;
+  background: transparent;
+  color: var(--text-3);
+  cursor: pointer;
+}
+
+.activity-popover {
+  position: absolute;
+  left: 32px;
+  bottom: calc(100% + 6px);
+  z-index: 1300;
+  display: none;
+  min-width: 260px;
+  max-height: 300px;
+  overflow-y: auto;
+  border: 1px solid var(--border-dark);
+  background: var(--surface);
+  box-shadow: var(--shadow-lg);
+}
+
+.activity-popover.open {
+  display: block;
+}
+
+.activity-popover button {
+  width: 100%;
+  border: none;
+  background: transparent;
+  color: var(--text-1);
+  text-align: left;
+  padding: 9px 12px;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.activity-popover button:hover {
+  background: var(--surface-2);
+}
+
+.activity-template-menu {
+  left: 64px;
+  min-width: 310px;
+}
+
+.template-menu-head {
+  border-bottom: 1px solid var(--border) !important;
+}
+
+.template-menu-label {
+  padding: 10px 12px 5px;
+  color: var(--text-3);
+  font-size: 11px;
+  letter-spacing: 0;
+}
+
+.template-menu-muted {
+  color: var(--text-3) !important;
+}
+
+.activity-email-related {
+  padding-top: 8px;
+}
+
+.activity-suboverlay {
+  position: fixed;
+  inset: 0;
+  z-index: 2200;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(8, 20, 36, 0.45);
+}
+
+.activity-suboverlay.open {
+  display: flex;
+}
+
+.activity-template-picker {
+  position: relative;
+  width: min(1000px, calc(100vw - 80px));
+  max-height: min(620px, calc(100vh - 80px));
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border-dark);
+  border-radius: var(--r-sm);
+  background: var(--surface);
+  box-shadow: var(--shadow-lg);
+}
+
+.activity-template-close {
+  position: absolute;
+  top: -34px;
+  right: 0;
+  width: 30px;
+  height: 30px;
+  border: none;
+  border-radius: var(--r-sm);
+  background: var(--surface);
+  color: var(--text-2);
+  font-size: 26px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.activity-template-picker-head {
+  padding: 18px 20px 14px;
+  text-align: center;
+  border-bottom: 1px solid var(--border);
+}
+
+.activity-template-picker-head h3 {
+  margin: 0 0 10px;
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-1);
+}
+
+.activity-template-picker-head span {
+  color: var(--text-2);
+  font-size: 12px;
+}
+
+.activity-template-filters {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) minmax(220px, 1fr) minmax(180px, 1fr);
+  gap: 20px;
+  padding: 14px;
+}
+
+.activity-template-filters label {
+  display: grid;
+  gap: 6px;
+  color: var(--text-2);
+  font-size: 12px;
+}
+
+.activity-template-filters select,
+.activity-template-filters input {
+  height: 31px;
+  border: 1px solid var(--border-dark);
+  border-radius: var(--r-sm);
+  background: var(--surface);
+  color: var(--text-1);
+  padding: 0 10px;
+  font: inherit;
+}
+
+.activity-template-table-wrap {
+  min-height: 260px;
+  overflow: auto;
+  margin: 0 14px;
+  border: 1px solid var(--border);
+}
+
+.activity-template-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.activity-template-table th,
+.activity-template-table td {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  vertical-align: top;
+}
+
+.activity-template-table th {
+  position: sticky;
+  top: 0;
+  background: var(--surface-2);
+  color: var(--text-1);
+  font-weight: 600;
+}
+
+.activity-template-table tr {
+  cursor: pointer;
+}
+
+.activity-template-table tr:hover td {
+  background: var(--surface-2);
+}
+
+.activity-template-table button {
+  border: none;
+  background: transparent;
+  color: var(--text-link);
+  padding: 0;
+  font: inherit;
+  cursor: pointer;
+}
+
+.activity-template-picker-foot {
+  display: flex;
+  justify-content: flex-end;
+  padding: 12px 14px;
 }
 
 .lookup-wrap { position: relative; }
