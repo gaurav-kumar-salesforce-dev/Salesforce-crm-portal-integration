@@ -548,6 +548,14 @@ function cleanTemplateBody(value = '') {
     .replace(/\]\]>/g, '');
 }
 
+function emailTemplateBody(template = {}) {
+  return cleanTemplateBody(template.HtmlValue || template.Markup || template.Body || '');
+}
+
+function emailTemplateSubject(template = {}) {
+  return template.Subject || template.Name || '';
+}
+
 function buildTemplateContext(recipient = {}, campaign = {}, sender = {}, organization = {}) {
   const replacements = {
     'Contact.Name': recipient.type === 'Contact' ? recipient.name : '',
@@ -571,6 +579,13 @@ function buildTemplateContext(recipient = {}, campaign = {}, sender = {}, organi
     'Campaign.Status': campaign.Status || '',
     'Campaign.StartDate': campaign.StartDate || '',
     'Campaign.EndDate': campaign.EndDate || '',
+    'Account.Name': campaign.Name || '',
+    'Account.Phone': campaign.Phone || '',
+    'Account.Website': campaign.Website || '',
+    'Opportunity.Name': campaign.Name || '',
+    'Opportunity.StageName': campaign.StageName || '',
+    'Case.Subject': campaign.Subject || '',
+    'Case.CaseNumber': campaign.CaseNumber || '',
     'Sender.Name': sender.Name || sender.name || '',
     'Sender.FirstName': sender.FirstName || '',
     'Sender.LastName': sender.LastName || '',
@@ -828,6 +843,80 @@ async function getEmailMergeContext() {
 
 // ─── Routes ───────────────────────────────────────────────────
 
+async function getEmailRecipientContext(objectName, id) {
+  if (!id || !['Contact', 'Lead', 'User'].includes(objectName)) return {};
+  const fields = objectName === 'User'
+    ? 'Id, Name, FirstName, LastName, Email, Title'
+    : objectName === 'Contact'
+      ? 'Id, Name, FirstName, LastName, Email, Title'
+      : 'Id, Name, FirstName, LastName, Email, Title, Company';
+  const record = await sfGet(`/sobjects/${objectName}/${id}?fields=${encodeURIComponent(fields)}`);
+  return {
+    type: objectName,
+    personId: record.Id,
+    name: record.Name || '',
+    firstName: record.FirstName || '',
+    lastName: record.LastName || '',
+    email: record.Email || '',
+    title: record.Title || '',
+    company: record.Company || ''
+  };
+}
+
+async function getRelatedMergeRecord(objectName, id) {
+  if (!id || !OBJECTS[objectName]) return {};
+  try {
+    return await sfGet(`/sobjects/${objectName}/${id}`);
+  } catch {
+    return {};
+  }
+}
+
+async function queryClassicEmailTemplates(limit = 500) {
+  const safeLimit = Math.min(Math.max(Number(limit) || 500, 1), 1000);
+  const data = await sfGet('/query', {
+    q: `
+    SELECT Id, Name, DeveloperName, Subject, Description, TemplateType, IsActive
+    FROM EmailTemplate
+    WHERE IsActive = true
+    ORDER BY Name
+    LIMIT ${safeLimit}
+    `.replace(/\s+/g, ' ').trim()
+  });
+  return data.records || [];
+}
+
+function parseEmailAddressList(value = '') {
+  return String(value || '')
+    .split(/[;,]/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function fileTitle(filename = 'attachment') {
+  return path.basename(String(filename || 'attachment')).replace(/\.[^.]+$/, '') || 'attachment';
+}
+
+async function uploadEmailAttachments(files = [], parentId = '') {
+  const pdfs = files
+    .filter((file) => file?.name && file?.data)
+    .filter((file) => file.type === 'application/pdf' || /\.pdf$/i.test(file.name))
+    .slice(0, 10);
+
+  const uploaded = [];
+  for (const file of pdfs) {
+    const cleanName = path.basename(file.name);
+    const result = await sfPost('/sobjects/ContentVersion', {
+      Title: fileTitle(cleanName),
+      PathOnClient: cleanName,
+      VersionData: String(file.data).replace(/^data:.*?;base64,/, ''),
+      ...(parentId ? { FirstPublishLocationId: parentId } : {})
+    });
+    uploaded.push({ id: result.id, name: cleanName });
+  }
+  return uploaded;
+}
+
 // Auth test
 app.get('/api/auth/test', async (req, res) => {
   try {
@@ -847,6 +936,92 @@ app.get('/api/auth/config', (req, res) => {
     hasClientSecret: Boolean(SF.clientSecret),
     hasRefreshToken: Boolean(SF.refreshToken)
   });
+});
+
+app.get('/api/email/from-addresses', async (req, res) => {
+  try {
+    const context = await getEmailMergeContext();
+    const records = [{
+      type: 'user',
+      id: context.sender.Id || '',
+      label: context.sender.Name || 'Current User',
+      email: context.sender.Email || ''
+    }];
+    try {
+      const orgWide = await sfGet('/query', {
+        q: 'SELECT Id, Address, DisplayName FROM OrgWideEmailAddress ORDER BY DisplayName LIMIT 100'
+      });
+      records.push(...(orgWide.records || []).map((item) => ({
+        type: 'orgwide',
+        id: item.Id,
+        label: item.DisplayName || item.Address,
+        email: item.Address
+      })));
+    } catch {
+      // Some orgs do not expose OrgWideEmailAddress to the connected user.
+    }
+    res.json({ records });
+  } catch (err) {
+    handleSFError(err, res, 'Email from addresses');
+  }
+});
+
+app.get('/api/email/templates', async (req, res) => {
+  try {
+    const records = await queryClassicEmailTemplates(req.query.limit || 500);
+    res.json({ records });
+  } catch (err) {
+    handleSFError(err, res, 'Email templates');
+  }
+});
+
+app.post('/api/email/template-preview', async (req, res) => {
+  const { templateId, recipientId, recipientObject, relatedRecordId, relatedObject } = req.body || {};
+  if (!templateId) return res.status(400).json({ error: 'Select an email template' });
+
+  try {
+    const [template, context, recipient, related] = await Promise.all([
+      sfGet(`/sobjects/EmailTemplate/${templateId}`),
+      getEmailMergeContext(),
+      getEmailRecipientContext(recipientObject, recipientId),
+      getRelatedMergeRecord(relatedObject, relatedRecordId)
+    ]);
+    const body = emailTemplateBody(template);
+    const subject = mergeTemplate(emailTemplateSubject(template), recipient, related, context.sender, context.organization);
+    const html = mergeTemplate(body, recipient, related, context.sender, context.organization);
+    res.json({ subject, html, text: stripHtml(html) || html });
+  } catch (err) {
+    handleSFError(err, res, 'Email template preview');
+  }
+});
+
+app.get('/api/activity-email-templates', async (req, res) => {
+  try {
+    const records = await queryClassicEmailTemplates(req.query.limit || 500);
+    res.json({ records });
+  } catch (err) {
+    handleSFError(err, res, 'Activity email templates');
+  }
+});
+
+app.post('/api/activity-email-preview', async (req, res) => {
+  const { templateId, recipientId, recipientObject, relatedRecordId, relatedObject } = req.body || {};
+  if (!templateId) return res.status(400).json({ error: 'Select an email template' });
+
+  try {
+    const [template, context, recipient, related] = await Promise.all([
+      sfGet(`/sobjects/EmailTemplate/${templateId}`),
+      getEmailMergeContext(),
+      getEmailRecipientContext(recipientObject, recipientId),
+      getRelatedMergeRecord(relatedObject, relatedRecordId)
+    ]);
+    const body = emailTemplateBody(template);
+    const subject = mergeTemplate(emailTemplateSubject(template), recipient, related, context.sender, context.organization);
+    const html = mergeTemplate(body, recipient, related, context.sender, context.organization);
+    res.json({ subject, html, text: stripHtml(html) || html });
+  } catch (err) {
+    handleSFError(err, res, 'Activity email preview');
+  }
 });
 
 app.post('/api/auth/logout', async (req, res) => {
@@ -1273,28 +1448,46 @@ app.post('/api/:object/:id/activity', async (req, res) => {
       if (!body) return res.status(400).json({ error: 'Email body is required' });
 
       let to = String(req.body.to || '').trim();
-      let recipientId = req.body.whoId || (['Contact', 'Lead'].includes(object) ? id : '');
+      const toRecipients = Array.isArray(req.body.toRecipients) ? req.body.toRecipients : [];
+      const primaryRecipient = toRecipients.find((item) => item?.id);
+      let recipientId = primaryRecipient?.id || req.body.whoId || (['Contact', 'Lead'].includes(object) ? id : '');
       if (!to && recipientId) {
         const personObject = objectFromId(recipientId);
-        const person = ['Contact', 'Lead'].includes(personObject)
+        const person = ['Contact', 'Lead', 'User'].includes(personObject)
           ? await sfGet(`/sobjects/${personObject}/${recipientId}`)
           : {};
         to = person.Email || '';
       }
       if (!to) return res.status(400).json({ error: 'Recipient email is required' });
 
+      const from = req.body.from || {};
+      const toAddresses = parseEmailAddressList(to);
+      const ccAddresses = parseEmailAddressList(req.body.cc);
+      const bccAddresses = parseEmailAddressList(req.body.bcc);
+      const attachmentParentId = req.body.whatId || id;
+      const uploadedAttachments = await uploadEmailAttachments(
+        Array.isArray(req.body.attachments) ? req.body.attachments : [],
+        attachmentParentId
+      );
+      const attachmentNames = uploadedAttachments.map((file) => file.name);
+      const relatedRecordId = req.body.whatId || (!recipientId || recipientId !== id ? id : '');
+      const emailInput = {
+        emailAddressesArray: toAddresses,
+        emailSubject: subject,
+        emailBody: body,
+        sendRichBody: true,
+        useLineBreaks: false,
+        senderType: from.type === 'orgwide' ? 'OrgWideEmailAddress' : 'CurrentUser',
+        ...(from.type === 'orgwide' && from.email ? { senderAddress: from.email } : {}),
+        ...(ccAddresses.length ? { ccRecipientAddressCollection: ccAddresses } : {}),
+        ...(bccAddresses.length ? { bccRecipientAddressCollection: bccAddresses } : {}),
+        ...(uploadedAttachments.length ? { attachmentIdCollection: uploadedAttachments.map((file) => file.id) } : {}),
+        ...(recipientId ? { recipientId } : {}),
+        ...(relatedRecordId ? { relatedRecordId } : {}),
+        logEmailOnSend: true
+      };
       const emailResult = await sfPost('/actions/standard/emailSimple', {
-        inputs: [{
-          emailAddresses: to,
-          emailSubject: subject,
-          emailBody: body,
-          sendRichBody: false,
-          useLineBreaks: true,
-          senderType: 'CurrentUser',
-          ...(recipientId ? { recipientId } : {}),
-          ...(!recipientId ? { relatedRecordId: id } : {}),
-          logEmailOnSend: true
-        }]
+        inputs: [emailInput]
       });
       const failures = extractActionFailures(emailResult);
       if (failures.length) return res.status(400).json({ error: failures.join('; '), result: emailResult });
@@ -1304,7 +1497,15 @@ app.post('/api/:object/:id/activity', async (req, res) => {
         Status: 'Completed',
         Priority: 'Normal',
         ActivityDate: new Date().toISOString().slice(0, 10),
-        Description: `To: ${to}\n\n${body}`,
+        Description: [
+          `From: ${from.email || from.label || 'Current User'}`,
+          `To: ${toAddresses.join(', ')}`,
+          ccAddresses.length ? `Cc: ${ccAddresses.join(', ')}` : '',
+          bccAddresses.length ? `Bcc: ${bccAddresses.join(', ')}` : '',
+          attachmentNames.length ? `Attachments: ${attachmentNames.join(', ')}` : '',
+          '',
+          stripHtml(body)
+        ].filter((line) => line !== '').join('\n'),
         ...owner,
         ...relation
       }, 'Email');
@@ -1387,10 +1588,8 @@ app.post('/api/campaigns/:id/members', async (req, res) => {
 
 app.get('/api/campaigns/:id/email-templates', async (req, res) => {
   try {
-    const data = await sfGet('/query', {
-      q: "SELECT Id, Name, DeveloperName, Subject, TemplateType, IsActive, FolderName FROM EmailTemplate WHERE IsActive = true ORDER BY Name LIMIT 200"
-    });
-    res.json({ records: data.records || [] });
+    const records = await queryClassicEmailTemplates(req.query.limit || 500);
+    res.json({ records });
   } catch (err) {
     handleSFError(err, res, `Email templates for campaign ${req.params.id}`);
   }
@@ -1421,9 +1620,9 @@ app.post('/api/campaigns/:id/email-preview', async (req, res) => {
       recipient = normalizeCampaignMember(memberData.records?.[0] || {});
     }
 
-    const html = cleanTemplateBody(template.HtmlValue || template.Body || '');
+    const html = emailTemplateBody(template);
     const mergedHtml = mergeTemplate(html, recipient, campaign, context.sender, context.organization);
-    const subject = mergeTemplate(template.Subject || '', recipient, campaign, context.sender, context.organization);
+    const subject = mergeTemplate(emailTemplateSubject(template), recipient, campaign, context.sender, context.organization);
     res.json({
       subject,
       html: mergedHtml,
@@ -1460,11 +1659,11 @@ app.post('/api/campaigns/:id/send-email', async (req, res) => {
     const members = (memberData.records || []).map(normalizeCampaignMember).filter((member) => member.email);
     if (!members.length) return res.status(400).json({ error: 'Selected members do not have email addresses' });
 
-    const templateBody = cleanTemplateBody(template.HtmlValue || template.Body || '');
+    const templateBody = emailTemplateBody(template);
     const isHtmlTemplate = Boolean(template.HtmlValue);
     const mergedMessages = members.map((member) => {
       const mergedBody = mergeTemplate(templateBody, member, campaign, context.sender, context.organization);
-      const subject = mergeTemplate(template.Subject || campaign.Name || 'Campaign email', member, campaign, context.sender, context.organization);
+      const subject = mergeTemplate(emailTemplateSubject(template) || campaign.Name || 'Campaign email', member, campaign, context.sender, context.organization);
       return {
         member,
         subject,
