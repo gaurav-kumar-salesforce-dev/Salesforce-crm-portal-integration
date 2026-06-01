@@ -6,7 +6,7 @@
   <title>SF Manager — Salesforce Integration</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="style.css?v=4">
+  <link rel="stylesheet" href="style.css?v=6">
 </head>
 <body>
 
@@ -128,18 +128,19 @@
         <button class="btn btn-primary" id="authBtn" onclick="connectSalesforce()" style="display:none">
           Connect Salesforce
         </button>
-        <div class="topbar-instance" title="Connected Instance">
+        <button class="topbar-instance" id="orgManagerBtn" title="Salesforce org configuration" onclick="openOrgModal()">
           <svg viewBox="0 0 20 20" width="14" height="14" fill="currentColor" style="color:var(--accent)">
             <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/>
           </svg>
-          <span>Dev Edition</span>
-        </div>
+          <span id="activeOrgLabel">Default Org</span>
+        </button>
         <div class="profile-menu">
           <button class="avatar" id="profileButton" onclick="toggleProfileMenu()">SF</button>
           <div class="profile-popover" id="profilePopover">
             <div class="profile-name" id="profileName">Salesforce User</div>
             <div class="profile-email" id="profileEmail">Connected</div>
             <button class="profile-action" onclick="openUserInfo()">User Information</button>
+            <button class="profile-action" onclick="openOrgModal()">Org Configuration</button>
             <button class="profile-action" onclick="connectSalesforce()">Reconnect</button>
             <button class="profile-action danger" onclick="logoutSalesforce()">Logout</button>
           </div>
@@ -228,19 +229,9 @@
           </table>
         </div>
         <div class="pagination-bar" id="paginationBar">
-          <div class="page-size">
-            <span>Rows</span>
-            <select id="pageSizeSelect" onchange="changePageSize(this.value)">
-              <option value="10">10</option>
-              <option value="25" selected>25</option>
-              <option value="50">50</option>
-              <option value="100">100</option>
-            </select>
-          </div>
+          <div class="page-size"><span id="lazyHint">Scroll to load more</span></div>
           <div class="page-controls">
-            <button class="btn btn-ghost" id="prevPageBtn" onclick="changePage(-1)">Previous</button>
-            <span class="page-status" id="pageStatus">Page 1</span>
-            <button class="btn btn-ghost" id="nextPageBtn" onclick="changePage(1)">Next</button>
+            <span class="page-status" id="pageStatus">Showing records</span>
           </div>
         </div>
       </div>
@@ -266,6 +257,65 @@
       <div class="modal-foot">
         <button class="btn btn-ghost" onclick="closeListViewModal()">Cancel</button>
         <button class="btn btn-primary" onclick="saveLocalListView()">Save View</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="overlay" id="orgOverlay" onclick="overlayClick(event, 'orgOverlay', closeOrgModal)">
+    <div class="modal modal-sm" onclick="event.stopPropagation()">
+      <div class="modal-head">
+        <div class="modal-title-group">
+          <div class="modal-obj-icon"></div>
+          <h2>Salesforce Org</h2>
+        </div>
+        <button class="icon-btn" onclick="closeOrgModal()">x</button>
+      </div>
+      <div class="modal-body">
+        <div class="form-grid org-form">
+          <div class="form-group span-2">
+            <label class="form-label" for="orgSelect">Active Configuration</label>
+            <select class="form-ctrl" id="orgSelect" onchange="switchOrgFromSelect(this.value)"></select>
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="orgLabel">Label</label>
+            <input class="form-ctrl" id="orgLabel" placeholder="Client Production">
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="orgKey">Key</label>
+            <input class="form-ctrl" id="orgKey" placeholder="client-production">
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="orgEnvironment">Login Type</label>
+            <select class="form-ctrl" id="orgEnvironment" onchange="setOrgEnvDefaults()">
+              <option value="production">Production</option>
+              <option value="sandbox">Sandbox</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="orgLoginUrl">Login URL</label>
+            <input class="form-ctrl" id="orgLoginUrl" placeholder="https://login.salesforce.com">
+          </div>
+          <div class="form-group span-2">
+            <label class="form-label" for="orgClientId">Client ID</label>
+            <input class="form-ctrl" id="orgClientId" autocomplete="off">
+          </div>
+          <div class="form-group span-2">
+            <label class="form-label" for="orgClientSecret">Client Secret</label>
+            <div class="secret-row">
+              <input class="form-ctrl" id="orgClientSecret" type="password" autocomplete="new-password" placeholder="Leave blank to keep saved secret">
+              <button class="btn btn-ghost" type="button" onclick="toggleOrgSecret(event)">Show</button>
+            </div>
+          </div>
+          <div class="form-group span-2">
+            <label class="form-label" for="orgInstanceUrl">Instance URL</label>
+            <input class="form-ctrl" id="orgInstanceUrl" placeholder="Optional before OAuth">
+          </div>
+        </div>
+        <div class="org-note" id="orgNote"></div>
+      </div>
+      <div class="modal-foot">
+        <button class="btn btn-ghost" onclick="closeOrgModal()">Cancel</button>
+        <button class="btn btn-primary" onclick="saveOrgAndConnect()">Save & Connect</button>
       </div>
     </div>
   </div>
@@ -403,6 +453,6 @@
 
   <div class="toast-stack" id="toastStack"></div>
 
-  <script src="app.js?v=15"></script>
+  <script src="app.js?v=17"></script>
 </body>
 </html>

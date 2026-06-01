@@ -22,8 +22,130 @@ const SF = {
   version      : 'v59.0'
 };
 
+const DEFAULT_ORG_KEY = 'default';
+const ORGS_PATH = path.join(__dirname, 'sf-orgs.local.json');
+let orgStore = loadOrgStore();
+applyActiveOrg();
+
 function normalizeUrl(url) {
   return url ? url.replace(/\/+$/, '') : url;
+}
+
+function sanitizeOrgKey(value) {
+  return String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 48);
+}
+
+function envOrgConfig() {
+  return {
+    key: DEFAULT_ORG_KEY,
+    label: process.env.SF_ORG_LABEL || 'Default Org',
+    environment: process.env.SF_ENVIRONMENT || (String(process.env.SF_LOGIN_URL || '').includes('test.salesforce.com') ? 'sandbox' : 'production'),
+    clientId: process.env.SF_CLIENT_ID || '',
+    clientSecret: process.env.SF_CLIENT_SECRET || '',
+    refreshToken: process.env.SF_REFRESH_TOKEN || '',
+    instanceUrl: normalizeUrl(process.env.SF_INSTANCE_URL || ''),
+    loginUrl: normalizeUrl(process.env.SF_LOGIN_URL || 'https://login.salesforce.com'),
+    redirectUri: process.env.SF_REDIRECT_URI || `http://localhost:${PORT}/oauth/callback`
+  };
+}
+
+function loadOrgStore() {
+  let parsed = null;
+  if (fs.existsSync(ORGS_PATH)) {
+    try {
+      parsed = JSON.parse(fs.readFileSync(ORGS_PATH, 'utf8'));
+    } catch (err) {
+      console.error('Could not read sf-orgs.local.json:', err.message);
+    }
+  }
+
+  const envOrg = envOrgConfig();
+  const store = parsed && typeof parsed === 'object'
+    ? { activeOrgKey: sanitizeOrgKey(parsed.activeOrgKey) || DEFAULT_ORG_KEY, orgs: parsed.orgs || {} }
+    : { activeOrgKey: DEFAULT_ORG_KEY, orgs: {} };
+
+  store.orgs[DEFAULT_ORG_KEY] = {
+    ...envOrg,
+    ...(store.orgs[DEFAULT_ORG_KEY] || {}),
+    key: DEFAULT_ORG_KEY,
+    clientId: (store.orgs[DEFAULT_ORG_KEY]?.clientId || envOrg.clientId),
+    clientSecret: (store.orgs[DEFAULT_ORG_KEY]?.clientSecret || envOrg.clientSecret),
+    refreshToken: (store.orgs[DEFAULT_ORG_KEY]?.refreshToken || envOrg.refreshToken),
+    instanceUrl: normalizeUrl(store.orgs[DEFAULT_ORG_KEY]?.instanceUrl || envOrg.instanceUrl),
+    loginUrl: normalizeUrl(store.orgs[DEFAULT_ORG_KEY]?.loginUrl || envOrg.loginUrl),
+    redirectUri: store.orgs[DEFAULT_ORG_KEY]?.redirectUri || envOrg.redirectUri
+  };
+
+  if (!store.orgs[store.activeOrgKey]) store.activeOrgKey = DEFAULT_ORG_KEY;
+  return store;
+}
+
+function saveOrgStore() {
+  fs.writeFileSync(ORGS_PATH, `${JSON.stringify(orgStore, null, 2)}\n`);
+}
+
+function activeOrg() {
+  return orgStore.orgs[orgStore.activeOrgKey] || orgStore.orgs[DEFAULT_ORG_KEY];
+}
+
+function applyActiveOrg() {
+  const org = activeOrg();
+  SF.clientId = org.clientId || '';
+  SF.clientSecret = org.clientSecret || '';
+  SF.refreshToken = org.refreshToken || '';
+  SF.instanceUrl = normalizeUrl(org.instanceUrl || '');
+  SF.loginUrl = normalizeUrl(org.loginUrl || 'https://login.salesforce.com');
+  SF.redirectUri = org.redirectUri || process.env.SF_REDIRECT_URI || `http://localhost:${PORT}/oauth/callback`;
+  SF.version = SF.version || 'v59.0';
+}
+
+function switchActiveOrg(key) {
+  const orgKey = sanitizeOrgKey(key);
+  if (!orgStore.orgs[orgKey]) throw new Error(`Unknown Salesforce org: ${key}`);
+  orgStore.activeOrgKey = orgKey;
+  applyActiveOrg();
+  _cachedToken = null;
+  _tokenExpires = 0;
+  describeFieldCache.clear();
+  saveOrgStore();
+  return activeOrg();
+}
+
+function publicOrg(org) {
+  return {
+    key: org.key,
+    label: org.label || org.key,
+    environment: org.environment || 'production',
+    loginUrl: org.loginUrl,
+    instanceUrl: org.instanceUrl,
+    redirectUri: org.redirectUri,
+    hasClientId: Boolean(org.clientId),
+    hasClientSecret: Boolean(org.clientSecret),
+    hasRefreshToken: Boolean(org.refreshToken),
+    isActive: org.key === orgStore.activeOrgKey
+  };
+}
+
+function persistActiveOrgTokens() {
+  const org = activeOrg();
+  org.refreshToken = SF.refreshToken || '';
+  org.instanceUrl = SF.instanceUrl || org.instanceUrl || '';
+  org.loginUrl = SF.loginUrl || org.loginUrl || 'https://login.salesforce.com';
+  org.redirectUri = SF.redirectUri || org.redirectUri;
+  saveOrgStore();
+
+  if (org.key === DEFAULT_ORG_KEY) {
+    upsertEnv({
+      SF_REFRESH_TOKEN: org.refreshToken,
+      SF_INSTANCE_URL: org.instanceUrl,
+      SF_REDIRECT_URI: org.redirectUri
+    });
+  }
 }
 
 function validateConfig() {
@@ -94,6 +216,7 @@ async function sfAuthedRawRequest(method, url, data, config = {}) {
 let _cachedToken  = null;
 let _tokenExpires = 0;
 const oauthStates = new Map();
+const describeFieldCache = new Map();
 
 function base64Url(buffer) {
   return buffer
@@ -145,11 +268,16 @@ async function getAccessToken() {
 // ─── Axios Helpers ────────────────────────────────────────────
 const baseUrl = () => `${SF.instanceUrl}/services/data/${SF.version}`;
 
-async function sfGet(endpoint, params = {}) {
+async function sfGet(endpoint, params = {}, config = {}) {
   const token = await getAccessToken();
   const res = await axios.get(`${baseUrl()}${endpoint}`, {
     headers: { Authorization: `Bearer ${token}` },
-    params
+    params,
+    ...config,
+    headers: {
+      Authorization: `Bearer ${token}`,
+      ...(config.headers || {})
+    }
   });
   return res.data;
 }
@@ -275,10 +403,11 @@ function normalizeBulkSoql(soql) {
   return compact;
 }
 
-function buildBulkSOQL(objectName, search, extraWhere) {
+async function buildBulkSOQL(objectName, search, extraWhere) {
   const cfg = OBJECTS[objectName];
-  let soql = `SELECT ${cfg.fields} FROM ${objectName}`;
-  soql += buildWhereClause(objectName, search, extraWhere);
+  const availableFields = await getObjectFieldSet(objectName);
+  let soql = `SELECT ${await fieldsCsvForObject(objectName)} FROM ${objectName}`;
+  soql += buildWhereClause(objectName, search, extraWhere, availableFields);
   return normalizeBulkSoql(soql);
 }
 
@@ -495,34 +624,86 @@ function escapeSOQL(value) {
   return String(value || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'");
 }
 
-function buildWhereClause(objectName, search, extraWhere) {
+async function getObjectFieldSet(objectName) {
+  const cacheKey = `${orgStore.activeOrgKey}:${objectName}`;
+  if (describeFieldCache.has(cacheKey)) return describeFieldCache.get(cacheKey);
+  const meta = await sfGet(`/sobjects/${objectName}/describe`);
+  const fieldSet = new Set((meta.fields || [])
+    .filter(field => !field.deprecatedAndHidden)
+    .map(field => field.name));
+  describeFieldCache.set(cacheKey, fieldSet);
+  return fieldSet;
+}
+
+function splitConfiguredFields(fields) {
+  return String(fields || '')
+    .split(',')
+    .map(field => field.trim())
+    .filter(Boolean);
+}
+
+function isSelectableField(field, availableFields) {
+  if (!availableFields || availableFields.has(field)) return true;
+  if (!field.includes('.')) return false;
+  const root = field.split('.')[0];
+  return availableFields.has(`${root}Id`);
+}
+
+async function fieldsCsvForObject(objectName, overrideFields = '') {
+  const cfg = OBJECTS[objectName];
+  const availableFields = await getObjectFieldSet(objectName);
+  const fields = splitConfiguredFields(overrideFields || cfg.fields)
+    .filter(field => field === 'Id' || isSelectableField(field, availableFields));
+  return fields.length ? [...new Set(['Id', ...fields])].join(', ') : 'Id';
+}
+
+function buildWhereClause(objectName, search, extraWhere, availableFields = null) {
   const cfg = OBJECTS[objectName];
   const conditions = [];
 
   if (search && search.trim()) {
     // Escape single quotes to prevent SOQL injection
     const safe = escapeSOQL(search);
-    const parts = cfg.searchFields.map(f => `${f} LIKE '%${safe}%'`);
-    conditions.push(`(${parts.join(' OR ')})`);
+    const parts = cfg.searchFields
+      .filter(field => !availableFields || availableFields.has(field))
+      .map(f => `${f} LIKE '%${safe}%'`);
+    if (parts.length) conditions.push(`(${parts.join(' OR ')})`);
   }
 
   if (extraWhere) conditions.push(extraWhere);
   return conditions.length ? ` WHERE ${conditions.join(' AND ')}` : '';
 }
 
-function buildSOQL(objectName, search, extraWhere, limit = 25, offset = 0) {
+async function buildSOQL(objectName, search, extraWhere, limit = null, offset = 0) {
   const cfg = OBJECTS[objectName];
-  const safeLimit = Math.min(Math.max(parseInt(limit, 10) || 25, 1), 100);
-  const safeOffset = Math.max(parseInt(offset, 10) || 0, 0);
-  let soql = `SELECT ${cfg.fields} FROM ${objectName}`;
-  soql += buildWhereClause(objectName, search, extraWhere);
-  soql += ` ORDER BY ${cfg.orderBy} LIMIT ${safeLimit} OFFSET ${safeOffset}`;
+  const availableFields = await getObjectFieldSet(objectName);
+  let soql = `SELECT ${await fieldsCsvForObject(objectName)} FROM ${objectName}`;
+  soql += buildWhereClause(objectName, search, extraWhere, availableFields);
+  soql += ` ORDER BY ${cfg.orderBy}`;
+  if (limit !== null && limit !== undefined) {
+    const safeLimit = Math.min(Math.max(parseInt(limit, 10) || 25, 1), 2000);
+    const safeOffset = Math.max(parseInt(offset, 10) || 0, 0);
+    soql += ` LIMIT ${safeLimit}`;
+    if (safeOffset) soql += ` OFFSET ${safeOffset}`;
+  }
 
   return soql;
 }
 
-function buildCountSOQL(objectName, search, extraWhere) {
-  return `SELECT COUNT() FROM ${objectName}${buildWhereClause(objectName, search, extraWhere)}`;
+function queryMoreEndpoint(nextRecordsUrl = '') {
+  const raw = String(nextRecordsUrl || '').trim();
+  if (!raw) throw new Error('Missing Salesforce query cursor');
+  const pathName = /^https?:\/\//i.test(raw) ? new URL(raw).pathname : raw;
+  const endpoint = pathName.replace(new RegExp(`^/services/data/${SF.version.replace('.', '\\.')}`), '');
+  if (!/^\/query\//.test(endpoint)) throw new Error('Invalid Salesforce query cursor');
+  return endpoint;
+}
+
+const QUERY_BATCH_HEADERS = { 'Sforce-Query-Options': 'batchSize=2000' };
+
+async function buildCountSOQL(objectName, search, extraWhere) {
+  const availableFields = await getObjectFieldSet(objectName);
+  return `SELECT COUNT() FROM ${objectName}${buildWhereClause(objectName, search, extraWhere, availableFields)}`;
 }
 
 function stripHtml(value = '') {
@@ -921,9 +1102,9 @@ async function uploadEmailAttachments(files = [], parentId = '') {
 app.get('/api/auth/test', async (req, res) => {
   try {
     await getAccessToken();
-    res.json({ success: true, instance: SF.instanceUrl, connectUrl: '/auth/salesforce' });
+    res.json({ success: true, instance: SF.instanceUrl, connectUrl: '/auth/salesforce', org: publicOrg(activeOrg()) });
   } catch (err) {
-    res.status(401).json({ success: false, error: err.message, connectUrl: '/auth/salesforce' });
+    res.status(401).json({ success: false, error: err.message, connectUrl: '/auth/salesforce', org: publicOrg(activeOrg()) });
   }
 });
 
@@ -936,6 +1117,52 @@ app.get('/api/auth/config', (req, res) => {
     hasClientSecret: Boolean(SF.clientSecret),
     hasRefreshToken: Boolean(SF.refreshToken)
   });
+});
+
+app.get('/api/auth/orgs', (req, res) => {
+  res.json({
+    activeOrgKey: orgStore.activeOrgKey,
+    orgs: Object.values(orgStore.orgs).map(publicOrg)
+  });
+});
+
+app.post('/api/auth/orgs', (req, res) => {
+  const body = req.body || {};
+  const key = sanitizeOrgKey(body.key || body.label);
+  if (!key) return res.status(400).json({ error: 'Org key or label is required' });
+
+  const existing = orgStore.orgs[key] || {};
+  const loginUrl = normalizeUrl(body.loginUrl || (
+    body.environment === 'sandbox' ? 'https://test.salesforce.com' : 'https://login.salesforce.com'
+  ));
+  const org = {
+    ...existing,
+    key,
+    label: String(body.label || existing.label || key).trim(),
+    environment: body.environment === 'sandbox' ? 'sandbox' : 'production',
+    clientId: String(body.clientId || existing.clientId || '').trim(),
+    clientSecret: body.clientSecret ? String(body.clientSecret).trim() : (existing.clientSecret || ''),
+    refreshToken: existing.refreshToken || '',
+    instanceUrl: normalizeUrl(body.instanceUrl || existing.instanceUrl || ''),
+    loginUrl,
+    redirectUri: body.redirectUri || existing.redirectUri || process.env.SF_REDIRECT_URI || `http://localhost:${PORT}/oauth/callback`
+  };
+
+  if (!org.clientId) return res.status(400).json({ error: 'Client ID is required' });
+  if (!org.clientSecret) return res.status(400).json({ error: 'Client secret is required' });
+
+  orgStore.orgs[key] = org;
+  switchActiveOrg(key);
+  res.json({ success: true, activeOrgKey: orgStore.activeOrgKey, org: publicOrg(org) });
+});
+
+app.post('/api/auth/orgs/active', (req, res) => {
+  try {
+    const org = switchActiveOrg(req.body?.key);
+    res.json({ success: true, activeOrgKey: orgStore.activeOrgKey, org: publicOrg(org) });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
 });
 
 app.get('/api/email/from-addresses', async (req, res) => {
@@ -1041,7 +1268,8 @@ app.post('/api/auth/logout', async (req, res) => {
   SF.refreshToken = '';
   _cachedToken = null;
   _tokenExpires = 0;
-  upsertEnv({ SF_REFRESH_TOKEN: '' });
+  activeOrg().refreshToken = '';
+  persistActiveOrgTokens();
   res.json({ success: true });
 });
 
@@ -1063,6 +1291,14 @@ app.get('/api/me', async (req, res) => {
 
 // Start OAuth login to generate a fresh refresh token
 app.get('/auth/salesforce', (req, res) => {
+  if (req.query.org) {
+    try {
+      switchActiveOrg(req.query.org);
+    } catch (err) {
+      return res.status(400).send(err.message);
+    }
+  }
+
   if (!SF.clientId || !SF.loginUrl) {
     return res.status(500).send('Missing SF_CLIENT_ID or SF_LOGIN_URL in .env');
   }
@@ -1070,6 +1306,7 @@ app.get('/auth/salesforce', (req, res) => {
   const state = crypto.randomBytes(16).toString('hex');
   const pkce = createPkcePair();
   oauthStates.set(state, {
+    orgKey: orgStore.activeOrgKey,
     codeVerifier: pkce.verifier,
     createdAt: Date.now()
   });
@@ -1105,6 +1342,7 @@ app.get('/oauth/callback', async (req, res) => {
     if (!oauthState) {
       throw new Error('OAuth state was not found. Start again from /auth/salesforce.');
     }
+    switchActiveOrg(oauthState.orgKey);
 
     const params = new URLSearchParams({
       grant_type: 'authorization_code',
@@ -1133,11 +1371,7 @@ app.get('/oauth/callback', async (req, res) => {
     _cachedToken = tokenRes.data.access_token || null;
     _tokenExpires = _cachedToken ? Date.now() + 55 * 60 * 1000 : 0;
 
-    upsertEnv({
-      SF_REFRESH_TOKEN: SF.refreshToken,
-      SF_INSTANCE_URL: SF.instanceUrl,
-      SF_REDIRECT_URI: SF.redirectUri
-    });
+    persistActiveOrgTokens();
 
     res.send(`
       <h1>Salesforce connected</h1>
@@ -1161,9 +1395,10 @@ app.get('/api/lookup/:object', async (req, res) => {
   if (!OBJECTS[object]) return res.status(400).json({ error: `Unknown object: ${object}` });
 
   try {
+    const availableFields = await getObjectFieldSet(object);
     const searchFields = OBJECTS[object].searchFields || ['Name'];
     const where = search
-      ? `WHERE ${searchFields.map((field) => `${field} LIKE '%${search}%'`).join(' OR ')}`
+      ? `WHERE ${searchFields.filter((field) => availableFields.has(field)).map((field) => `${field} LIKE '%${search}%'`).join(' OR ')}`
       : '';
     const fields = {
       Case: 'Id, CaseNumber, Subject, AccountId, Account.Name',
@@ -1172,8 +1407,9 @@ app.get('/api/lookup/:object', async (req, res) => {
       User: 'Id, Name, Email, Username',
       Opportunity: 'Id, Name, AccountId, Account.Name'
     }[object] || OBJECTS[object].fields;
+    const selectFields = await fieldsCsvForObject(object, fields);
     const data = await sfGet('/query', {
-      q: `SELECT ${fields} FROM ${object} ${where} ORDER BY ${OBJECTS[object].orderBy} LIMIT 25`
+      q: `SELECT ${selectFields} FROM ${object} ${where === 'WHERE ' ? '' : where} ORDER BY ${OBJECTS[object].orderBy} LIMIT 25`
     });
     res.json({
       records: (data.records || []).map((record) => ({
@@ -1198,19 +1434,68 @@ app.get('/api/:object/listviews', async (req, res) => {
   }
 });
 
+app.get('/api/:object/count', async (req, res) => {
+  const { object } = req.params;
+  if (!OBJECTS[object]) return res.status(400).json({ error: `Unknown object: ${object}` });
+
+  try {
+    const soql = await buildCountSOQL(object, req.query.search, req.query.where);
+    const data = await sfGet(req.query.all === 'true' ? '/queryAll' : '/query', { q: soql });
+    const countValue = Number(data.records?.[0]?.expr0 ?? data.totalSize ?? 0);
+    res.json({
+      object,
+      totalSize: countValue,
+      org: publicOrg(activeOrg()),
+      queryAll: req.query.all === 'true'
+    });
+  } catch (err) {
+    handleSFError(err, res, `Count ${object}`);
+  }
+});
+
+app.get('/api/debug/data-source', async (req, res) => {
+  try {
+    const results = {};
+    for (const objectName of ['Account', 'Contact', 'Opportunity', 'Case', 'Lead', 'Campaign']) {
+      const soql = await buildCountSOQL(objectName);
+      const data = await sfGet('/query', { q: soql });
+      results[objectName] = Number(data.records?.[0]?.expr0 ?? data.totalSize ?? 0);
+    }
+    res.json({
+      org: publicOrg(activeOrg()),
+      instance: SF.instanceUrl,
+      counts: results
+    });
+  } catch (err) {
+    handleSFError(err, res, 'Data source debug');
+  }
+});
+
 app.get('/api/:object/listviews/:id/results', async (req, res) => {
   const { object, id } = req.params;
   if (!OBJECTS[object]) return res.status(400).json({ error: `Unknown object: ${object}` });
 
   try {
+    if (req.query.cursor) {
+      const data = await sfGet(queryMoreEndpoint(req.query.cursor), {}, { headers: QUERY_BATCH_HEADERS });
+      return res.json({
+        records: data.records || [],
+        totalSize: data.totalSize || 0,
+        done: Boolean(data.done),
+        nextRecordsUrl: data.nextRecordsUrl || null
+      });
+    }
+
     const detail = await sfGet(`/sobjects/${object}/listviews/${id}/describe`);
-    const data = await sfGet('/query', { q: detail.query });
+    const data = await sfGet('/query', { q: detail.query }, { headers: QUERY_BATCH_HEADERS });
     res.json({
       label: detail.label,
       columns: detail.columns || [],
       query: detail.query,
       records: data.records || [],
-      totalSize: data.totalSize || 0
+      totalSize: data.totalSize || 0,
+      done: Boolean(data.done),
+      nextRecordsUrl: data.nextRecordsUrl || null
     });
   } catch (err) {
     handleSFError(err, res, `List view results ${object}/${id}`);
@@ -1525,8 +1810,9 @@ app.get('/api/campaigns/:id/candidates/:object', async (req, res) => {
   try {
     const search = String(req.query.search || '').trim();
     const cfg = OBJECTS[object];
-    const where = buildWhereClause(object, search, object === 'Lead' ? "IsConverted = false" : '');
-    const soql = `SELECT ${cfg.fields} FROM ${object}${where} ORDER BY ${cfg.orderBy} LIMIT 100`;
+    const availableFields = await getObjectFieldSet(object);
+    const where = buildWhereClause(object, search, object === 'Lead' && availableFields.has('IsConverted') ? "IsConverted = false" : '', availableFields);
+    const soql = `SELECT ${await fieldsCsvForObject(object)} FROM ${object}${where} ORDER BY ${cfg.orderBy} LIMIT 100`;
     const [people, members] = await Promise.all([
       sfGet('/query', { q: soql }),
       sfGet('/query', {
@@ -1762,7 +2048,7 @@ app.post('/api/bulk/:object/query', async (req, res) => {
   if (!OBJECTS[object]) return res.status(400).json({ error: `Unknown object: ${object}` });
 
   try {
-    const soql = req.body?.soql || buildBulkSOQL(object, req.body?.search, req.body?.where);
+    const soql = req.body?.soql || await buildBulkSOQL(object, req.body?.search, req.body?.where);
     const job = await createBulkQueryJob(soql);
     const finalJob = req.body?.wait === false ? job : await pollBulkQueryJob(job.id, req.body?.maxWaitMs);
     const response = { success: finalJob.state === 'JobComplete', job: finalJob, soql };
@@ -1809,21 +2095,24 @@ app.get('/api/:object', async (req, res) => {
   if (!OBJECTS[object]) return res.status(400).json({ error: `Unknown object: ${object}` });
 
   try {
-    const pageSize = Math.min(Math.max(parseInt(req.query.pageSize, 10) || 25, 1), 100);
-    const page = Math.max(parseInt(req.query.page, 10) || 1, 1);
-    const offset = (page - 1) * pageSize;
-    const soql = buildSOQL(object, req.query.search, req.query.where, pageSize, offset);
-    const countSOQL = buildCountSOQL(object, req.query.search, req.query.where);
-    const [data, countData] = await Promise.all([
-      sfGet('/query', { q: soql }),
-      sfGet('/query', { q: countSOQL })
-    ]);
-    const countValue = Number(countData.records?.[0]?.expr0);
+    if (req.query.cursor) {
+      const data = await sfGet(queryMoreEndpoint(req.query.cursor), {}, { headers: QUERY_BATCH_HEADERS });
+      return res.json({
+        records: data.records || [],
+        totalSize: data.totalSize || 0,
+        done: Boolean(data.done),
+        nextRecordsUrl: data.nextRecordsUrl || null
+      });
+    }
+
+    const soql = await buildSOQL(object, req.query.search, req.query.where);
+    const data = await sfGet('/query', { q: soql }, { headers: QUERY_BATCH_HEADERS });
     res.json({
       ...data,
-      totalSize: countValue > 0 ? countValue : data.totalSize || 0,
-      page,
-      pageSize
+      records: data.records || [],
+      totalSize: data.totalSize || 0,
+      done: Boolean(data.done),
+      nextRecordsUrl: data.nextRecordsUrl || null
     });
   } catch (err) {
     handleSFError(err, res, `GET ${object}`);

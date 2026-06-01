@@ -125,9 +125,13 @@ let editingRecord = null;
 let deletingRecord = null;
 let currentUser = null;
 let sortState = { field: null, direction: 'asc' };
-let currentPage = 1;
-let pageSize = 25;
 let totalRecords = 0;
+let nextRecordsUrl = null;
+const RENDER_CHUNK_SIZE = 50;
+let visibleRecordCount = RENDER_CHUNK_SIZE;
+let loadingMoreRecords = false;
+let lazyObserver = null;
+let lazyLoadQueued = false;
 let currentViewMode = 'table';
 let draggedKanbanId = null;
 const kanbanPicklistCache = {};
@@ -146,6 +150,7 @@ let detailLookupLabels = {};
 let expandedActivityIds = new Set();
 let activityLookupState = {};
 let emailComposerState = {};
+let orgSettings = { activeOrgKey: 'default', orgs: [] };
 
 const $ = (id) => document.getElementById(id);
 
@@ -321,6 +326,10 @@ async function checkConnection() {
 
   try {
     const data = await api('/api/auth/test');
+    if (data.org) {
+      orgSettings.activeOrgKey = data.org.key || orgSettings.activeOrgKey;
+      updateActiveOrgLabel(data.org);
+    }
     dot.className = 'conn-dot connected';
     text.textContent = 'Connected';
     if (authBtn) authBtn.style.display = 'none';
@@ -347,8 +356,126 @@ async function loadProfile() {
   }
 }
 
+async function loadOrgSettings() {
+  try {
+    orgSettings = await api('/api/auth/orgs');
+    const active = getActiveOrg();
+    if (active) updateActiveOrgLabel(active);
+    renderOrgSelect();
+    return orgSettings;
+  } catch (err) {
+    orgSettings = { activeOrgKey: 'default', orgs: [] };
+    return orgSettings;
+  }
+}
+
+function getActiveOrg() {
+  return (orgSettings.orgs || []).find((org) => org.key === orgSettings.activeOrgKey)
+    || (orgSettings.orgs || []).find((org) => org.isActive);
+}
+
+function updateActiveOrgLabel(org = getActiveOrg()) {
+  const label = $('activeOrgLabel');
+  if (!label || !org) return;
+  label.textContent = org.label || org.key || 'Salesforce Org';
+  label.title = org.instanceUrl || org.loginUrl || '';
+}
+
+function renderOrgSelect() {
+  const select = $('orgSelect');
+  if (!select) return;
+  const orgs = orgSettings.orgs || [];
+  select.innerHTML = [
+    ...orgs.map((org) => `<option value="${escapeHtml(org.key)}" ${org.key === orgSettings.activeOrgKey ? 'selected' : ''}>${escapeHtml(org.label || org.key)}${org.hasRefreshToken ? ' - connected' : ''}</option>`),
+    '<option value="__new__">Add new org...</option>'
+  ].join('');
+}
+
+function openOrgModal() {
+  closeProfileMenu();
+  loadOrgSettings().then(() => {
+    fillOrgForm(getActiveOrg());
+    $('orgOverlay').classList.add('open');
+  });
+}
+
+function closeOrgModal() {
+  $('orgOverlay').classList.remove('open');
+}
+
+function fillOrgForm(org = {}) {
+  $('orgLabel').value = org?.label || '';
+  $('orgKey').value = org?.key || '';
+  $('orgKey').disabled = Boolean(org?.key && org.key !== '__new__');
+  $('orgEnvironment').value = org?.environment === 'sandbox' ? 'sandbox' : 'production';
+  $('orgLoginUrl').value = org?.loginUrl || ($('orgEnvironment').value === 'sandbox' ? 'https://test.salesforce.com' : 'https://login.salesforce.com');
+  $('orgClientId').value = org?.hasClientId ? '' : (org?.clientId || '');
+  $('orgClientSecret').value = '';
+  $('orgInstanceUrl').value = org?.instanceUrl || '';
+  $('orgNote').textContent = org?.key
+    ? 'Secrets stay on the server. Enter Client Secret only when adding an org or replacing the saved secret.'
+    : 'Add a Connected App client id and secret, then approve OAuth in Salesforce.';
+}
+
+function switchOrgFromSelect(key) {
+  if (key === '__new__') {
+    fillOrgForm({ key: '', environment: 'production', loginUrl: 'https://login.salesforce.com' });
+    return;
+  }
+  const org = (orgSettings.orgs || []).find((item) => item.key === key);
+  fillOrgForm(org);
+}
+
+async function switchOrg(key, reload = true) {
+  const data = await api('/api/auth/orgs/active', {
+    method: 'POST',
+    body: JSON.stringify({ key })
+  });
+  orgSettings.activeOrgKey = data.activeOrgKey;
+  updateActiveOrgLabel(data.org);
+  if (reload) window.location.reload();
+}
+
+function setOrgEnvDefaults() {
+  const env = $('orgEnvironment').value;
+  const current = $('orgLoginUrl').value.trim();
+  if (!current || current === 'https://login.salesforce.com' || current === 'https://test.salesforce.com') {
+    $('orgLoginUrl').value = env === 'sandbox' ? 'https://test.salesforce.com' : 'https://login.salesforce.com';
+  }
+}
+
+function toggleOrgSecret(event) {
+  const input = $('orgClientSecret');
+  input.type = input.type === 'password' ? 'text' : 'password';
+  event.currentTarget.textContent = input.type === 'password' ? 'Show' : 'Hide';
+}
+
+async function saveOrgAndConnect() {
+  const payload = {
+    label: $('orgLabel').value.trim(),
+    key: $('orgKey').value.trim() || $('orgLabel').value.trim(),
+    environment: $('orgEnvironment').value,
+    loginUrl: $('orgLoginUrl').value.trim(),
+    clientId: $('orgClientId').value.trim(),
+    clientSecret: $('orgClientSecret').value.trim(),
+    instanceUrl: $('orgInstanceUrl').value.trim()
+  };
+  try {
+    const data = await api('/api/auth/orgs', {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    });
+    orgSettings.activeOrgKey = data.activeOrgKey;
+    updateActiveOrgLabel(data.org);
+    connectSalesforce();
+  } catch (err) {
+    $('orgNote').textContent = err.message;
+  }
+}
+
 function connectSalesforce() {
-  window.location.href = '/auth/salesforce';
+  const activeKey = orgSettings.activeOrgKey || getActiveOrg()?.key;
+  window.location.href = activeKey ? `/auth/salesforce?org=${encodeURIComponent(activeKey)}` : '/auth/salesforce';
 }
 
 async function logoutSalesforce() {
@@ -442,7 +569,8 @@ function renderListViewSelect() {
 
 async function handleListViewChange(value) {
   currentViewId = value;
-  currentPage = 1;
+  visibleRecordCount = RENDER_CHUNK_SIZE;
+  nextRecordsUrl = null;
   sortState = { field: null, direction: 'asc' };
   await loadData();
 }
@@ -466,36 +594,30 @@ async function loadData() {
       const viewId = currentViewId.slice(3);
       const data = await api(`/api/${currentObject}/listviews/${viewId}/results`);
       currentRecords = data.records || [];
+      nextRecordsUrl = data.nextRecordsUrl || null;
+      totalRecords = data.totalSize || currentRecords.length;
       currentColumns = normalizeListViewColumns(data.columns);
     } else {
-      const params = new URLSearchParams({
-        page: String(currentPage),
-        pageSize: String(pageSize)
-      });
+      const params = new URLSearchParams();
       if (search) params.set('search', search);
       const query = `?${params.toString()}`;
       const data = await api(`/api/${currentObject}${query}`);
       currentRecords = data.records || [];
+      nextRecordsUrl = data.nextRecordsUrl || null;
       totalRecords = data.totalSize || currentRecords.length;
       applyLocalView();
     }
 
-    if (currentViewId.startsWith('sf:')) {
-      totalRecords = currentRecords.length;
-    }
-
+    visibleRecordCount = RENDER_CHUNK_SIZE;
     applySort();
     await renderCurrentView();
     updatePagination();
-    updateBadge(currentObject, currentRecords.length);
-    $('pageSub').textContent = `${totalRecords} records available`;
-    $('recCount').textContent = currentViewMode === 'kanban'
-      ? `${currentRecords.length} records`
-      : currentViewId.startsWith('sf:')
-      ? `${currentRecords.length} records`
-      : `${pageRangeStart()}-${pageRangeEnd()} of ${totalRecords}`;
+    updateBadge(currentObject, totalRecords || currentRecords.length);
+    updateRecordCounts();
+    await verifyListCountWhenSmall();
     $('stateLoading').style.display = 'none';
     showActiveView();
+    queueLazyLoadIfNeeded();
   } catch (err) {
     $('stateLoading').style.display = 'none';
     $('stateError').style.display = 'flex';
@@ -574,7 +696,7 @@ function renderTable() {
     return;
   }
 
-  $('tbody').innerHTML = recordsToRender.map((record) => `
+  const rowHtml = recordsToRender.map((record) => `
     <tr onclick="openRecordDetail('${currentObject}', '${record.Id}')">
       ${currentColumns.map((field) => `<td class="${fieldColumnClass(field)}">${formatValue(field, getValue(record, field), record)}</td>`).join('')}
       <td class="actions-col">
@@ -594,6 +716,16 @@ function renderTable() {
       </td>
     </tr>
   `).join('');
+  const canLoadMore = nextRecordsUrl || visibleRecordCount < currentRecords.length;
+  $('tbody').innerHTML = `
+    ${rowHtml}
+    <tr id="lazyLoadSentinel" class="lazy-load-row">
+      <td colspan="${currentColumns.length + 1}">
+        ${loadingMoreRecords ? 'Loading more records...' : canLoadMore ? 'Scroll to load more records' : 'All loaded'}
+      </td>
+    </tr>
+  `;
+  observeLazySentinel();
 }
 
 function updateViewToggle() {
@@ -859,10 +991,137 @@ async function moveKanbanRecord(id, nextValue) {
 }
 
 function getRecordsToRender() {
-  if (currentViewId.startsWith('sf:')) return currentRecords;
-  if (currentRecords.length <= pageSize) return currentRecords;
-  const start = (currentPage - 1) * pageSize;
-  return currentRecords.slice(start, start + pageSize);
+  return currentRecords.slice(0, visibleRecordCount);
+}
+
+function appendUniqueRecords(records = []) {
+  const seen = new Set(currentRecords.map((record) => record.Id));
+  records.forEach((record) => {
+    if (!record?.Id || seen.has(record.Id)) return;
+    seen.add(record.Id);
+    currentRecords.push(record);
+  });
+}
+
+function lazyEndpoint(cursor) {
+  const params = new URLSearchParams({ cursor });
+  if (currentViewId.startsWith('sf:')) {
+    return `/api/${currentObject}/listviews/${currentViewId.slice(3)}/results?${params.toString()}`;
+  }
+  return `/api/${currentObject}?${params.toString()}`;
+}
+
+async function loadMoreRecords() {
+  if (loadingMoreRecords || !nextRecordsUrl) return false;
+  loadingMoreRecords = true;
+  updatePagination();
+  try {
+    const data = await api(lazyEndpoint(nextRecordsUrl));
+    appendUniqueRecords(data.records || []);
+    nextRecordsUrl = data.nextRecordsUrl || null;
+    totalRecords = data.totalSize || totalRecords || currentRecords.length;
+    applyLocalView();
+    applySort();
+    await renderCurrentView();
+    updatePagination();
+    updateBadge(currentObject, totalRecords || currentRecords.length);
+    updateRecordCounts();
+    return true;
+  } catch (err) {
+    toast(err.message, 'err');
+    return false;
+  } finally {
+    loadingMoreRecords = false;
+    updatePagination();
+    queueLazyLoadIfNeeded();
+  }
+}
+
+async function showMoreVisibleRecords() {
+  visibleRecordCount = Math.min(visibleRecordCount + RENDER_CHUNK_SIZE, currentRecords.length);
+  await renderCurrentView();
+  updatePagination();
+  updateRecordCounts();
+  if (visibleRecordCount >= currentRecords.length && nextRecordsUrl) {
+    await loadMoreRecords();
+  } else {
+    queueLazyLoadIfNeeded();
+  }
+}
+
+function shouldLazyLoadMore() {
+  if (viewingDetail || currentViewMode !== 'table' || $('tableCard')?.style.display === 'none') return false;
+  const tableCard = $('tableCard');
+  if (!tableCard) return false;
+  const rect = tableCard.getBoundingClientRect();
+  return rect.bottom < window.innerHeight + 360;
+}
+
+async function handleLazyScroll() {
+  if (loadingMoreRecords || !shouldLazyLoadMore()) return;
+  if (visibleRecordCount < currentRecords.length) {
+    await showMoreVisibleRecords();
+    return;
+  }
+  if (nextRecordsUrl) await loadMoreRecords();
+}
+
+function queueLazyLoadIfNeeded() {
+  if (lazyLoadQueued) return;
+  lazyLoadQueued = true;
+  setTimeout(() => {
+    lazyLoadQueued = false;
+    handleLazyScroll();
+  }, 0);
+}
+
+function observeLazySentinel() {
+  const sentinel = $('lazyLoadSentinel');
+  if (!sentinel) return;
+  if (!lazyObserver) {
+    lazyObserver = new IntersectionObserver((entries) => {
+      if (entries.some((entry) => entry.isIntersecting)) handleLazyScroll();
+    }, { root: null, rootMargin: '700px 0px', threshold: 0 });
+  }
+  lazyObserver.disconnect();
+  lazyObserver.observe(sentinel);
+}
+
+function loadedRangeText() {
+  const shown = Math.min(visibleRecordCount, currentRecords.length);
+  if (!totalRecords) return `${shown} shown`;
+  return `${shown} of ${totalRecords}`;
+}
+
+function updateRecordCounts() {
+  const shown = Math.min(visibleRecordCount, currentRecords.length);
+  const totalLabel = totalRecords || currentRecords.length;
+  $('pageSub').textContent = `${totalLabel} records available`;
+  $('recCount').textContent = currentViewMode === 'kanban'
+    ? `${currentRecords.length} loaded`
+    : `${shown} shown`;
+}
+
+async function verifyListCountWhenSmall() {
+  if (totalRecords > 100 || nextRecordsUrl) return;
+  try {
+    const search = $('objSearch')?.value || '';
+    const params = new URLSearchParams();
+    if (search) params.set('search', search);
+    const data = await api(`/api/${currentObject}/count${params.toString() ? `?${params.toString()}` : ''}`);
+    const count = Number(data.totalSize || 0);
+    if (count !== totalRecords) {
+      totalRecords = count;
+      updateRecordCounts();
+      updateBadge(currentObject, totalRecords || currentRecords.length);
+    }
+    if (count <= currentRecords.length && count <= 100) {
+      const orgLabel = data.org?.label ? ` in ${data.org.label}` : '';
+      $('lazyHint').textContent = `Salesforce returned ${count} ${currentObject} records${orgLabel}`;
+    }
+  } catch {
+    // Count is only diagnostic; the list itself already loaded successfully.
+  }
 }
 
 function sortBy(field) {
@@ -892,8 +1151,10 @@ async function switchObject(objectName) {
   if (viewingDetail) restoreListContent(false);
   currentObject = objectName;
   currentRecords = [];
-  currentPage = 1;
   totalRecords = 0;
+  nextRecordsUrl = null;
+  visibleRecordCount = RENDER_CHUNK_SIZE;
+  loadingMoreRecords = false;
   currentViewId = 'all';
   currentViewMode = 'table';
   sortState = { field: null, direction: 'asc' };
@@ -927,20 +1188,19 @@ function updateBadge(objectName, count) {
 
 function handleObjSearch(value) {
   clearTimeout(searchTimer);
-  currentPage = 1;
+  visibleRecordCount = RENDER_CHUNK_SIZE;
+  nextRecordsUrl = null;
   currentViewId = currentViewId.startsWith('sf:') ? 'all' : currentViewId;
   $('listViewSelect').value = currentViewId;
   searchTimer = setTimeout(loadData, value ? 350 : 0);
 }
 
 function pageRangeStart() {
-  if (!totalRecords || !currentRecords.length) return 0;
-  return (currentPage - 1) * pageSize + 1;
+  return currentRecords.length ? 1 : 0;
 }
 
 function pageRangeEnd() {
-  if (!totalRecords || !currentRecords.length) return 0;
-  return Math.min(currentPage * pageSize, totalRecords);
+  return Math.min(visibleRecordCount, currentRecords.length);
 }
 
 function updatePagination() {
@@ -951,29 +1211,16 @@ function updatePagination() {
     return;
   }
 
-  const isServerPaged = !currentViewId.startsWith('sf:');
-  bar.style.display = isServerPaged ? 'flex' : 'none';
-  if (!isServerPaged) return;
-
-  const totalPages = Math.max(Math.ceil(totalRecords / pageSize), 1);
-  $('pageSizeSelect').value = String(pageSize);
-  $('pageStatus').textContent = `Page ${currentPage} of ${totalPages}`;
-  $('prevPageBtn').disabled = currentPage <= 1;
-  $('nextPageBtn').disabled = currentPage >= totalPages;
-}
-
-async function changePage(direction) {
-  const totalPages = Math.max(Math.ceil(totalRecords / pageSize), 1);
-  const nextPage = Math.min(Math.max(currentPage + direction, 1), totalPages);
-  if (nextPage === currentPage) return;
-  currentPage = nextPage;
-  await loadData();
-}
-
-async function changePageSize(value) {
-  pageSize = Number(value) || 25;
-  currentPage = 1;
-  await loadData();
+  bar.style.display = 'flex';
+  $('pageStatus').textContent = loadingMoreRecords
+    ? 'Loading more...'
+    : `Showing ${loadedRangeText()}`;
+  const lazyHint = $('lazyHint');
+  if (lazyHint) {
+    lazyHint.textContent = nextRecordsUrl || visibleRecordCount < currentRecords.length
+      ? 'Scroll to load more'
+      : 'All loaded';
+  }
 }
 
 function toggleSidebar() {
@@ -3092,7 +3339,11 @@ document.addEventListener('scroll', (event) => {
   if (event.target?.closest?.('.kanban-stage-menu')) return;
   closeKanbanMenus();
 }, true);
-window.addEventListener('resize', () => closeKanbanMenus());
+window.addEventListener('resize', () => {
+  closeKanbanMenus();
+  queueLazyLoadIfNeeded();
+});
+window.addEventListener('scroll', handleLazyScroll, { passive: true });
 
 document.addEventListener('DOMContentLoaded', () => {
   listContentHtml = $('content').innerHTML;
@@ -3105,7 +3356,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
   refreshSidebarIcons();
-  checkConnection().then(async (connection) => {
+  loadOrgSettings().then(() => checkConnection()).then(async (connection) => {
     if (connection?.success) {
       await loadListViews();
       await loadData();
