@@ -6,6 +6,7 @@ const fs      = require('fs');
 const crypto  = require('crypto');
 
 const app = express();
+app.set('trust proxy', true);
 app.use(express.json({ limit: process.env.JSON_BODY_LIMIT || '25mb' }));
 app.use(express.static(path.join(__dirname, 'public')));
 
@@ -23,12 +24,29 @@ const SF = {
 };
 
 const DEFAULT_ORG_KEY = 'default';
-const ORGS_PATH = path.join(__dirname, 'sf-orgs.local.json');
+const ORGS_PATH = process.env.SF_ORGS_PATH || path.join(__dirname, 'sf-orgs.local.json');
 let orgStore = loadOrgStore();
 applyActiveOrg();
 
 function normalizeUrl(url) {
   return url ? url.replace(/\/+$/, '') : url;
+}
+
+function isLocalUrl(url = '') {
+  return /^https?:\/\/(?:localhost|127\.0\.0\.1|\[::1\])(?::\d+)?(?:\/|$)/i.test(String(url || ''));
+}
+
+function requestBaseUrl(req) {
+  const configured = normalizeUrl(process.env.PUBLIC_BASE_URL || process.env.APP_BASE_URL || process.env.RENDER_EXTERNAL_URL || '');
+  if (configured) return configured;
+  if (req?.get) return `${req.protocol}://${req.get('host')}`;
+  return `http://localhost:${PORT}`;
+}
+
+function requestRedirectUri(req, org = activeOrg()) {
+  if (process.env.SF_REDIRECT_URI) return process.env.SF_REDIRECT_URI;
+  if (org?.redirectUri && !isLocalUrl(org.redirectUri)) return org.redirectUri;
+  return `${requestBaseUrl(req)}/oauth/callback`;
 }
 
 function sanitizeOrgKey(value) {
@@ -86,6 +104,7 @@ function loadOrgStore() {
 }
 
 function saveOrgStore() {
+  fs.mkdirSync(path.dirname(ORGS_PATH), { recursive: true });
   fs.writeFileSync(ORGS_PATH, `${JSON.stringify(orgStore, null, 2)}\n`);
 }
 
@@ -1371,7 +1390,7 @@ app.get('/api/auth/config', (req, res) => {
   res.json({
     loginUrl: SF.loginUrl,
     instanceUrl: SF.instanceUrl,
-    redirectUri: SF.redirectUri,
+    redirectUri: requestRedirectUri(req),
     hasClientId: Boolean(SF.clientId),
     hasClientSecret: Boolean(SF.clientSecret),
     hasRefreshToken: Boolean(SF.refreshToken)
@@ -1404,7 +1423,7 @@ app.post('/api/auth/orgs', (req, res) => {
     refreshToken: existing.refreshToken || '',
     instanceUrl: normalizeUrl(body.instanceUrl || existing.instanceUrl || ''),
     loginUrl,
-    redirectUri: body.redirectUri || existing.redirectUri || process.env.SF_REDIRECT_URI || `http://localhost:${PORT}/oauth/callback`
+    redirectUri: body.redirectUri || requestRedirectUri(req, existing)
   };
 
   if (!org.clientId) return res.status(400).json({ error: 'Client ID is required' });
@@ -1564,8 +1583,11 @@ app.get('/auth/salesforce', (req, res) => {
 
   const state = crypto.randomBytes(16).toString('hex');
   const pkce = createPkcePair();
+  const redirectUri = requestRedirectUri(req);
+  SF.redirectUri = redirectUri;
   oauthStates.set(state, {
     orgKey: orgStore.activeOrgKey,
+    redirectUri,
     codeVerifier: pkce.verifier,
     createdAt: Date.now()
   });
@@ -1573,7 +1595,7 @@ app.get('/auth/salesforce', (req, res) => {
   const params = new URLSearchParams({
     response_type: 'code',
     client_id: SF.clientId,
-    redirect_uri: SF.redirectUri,
+    redirect_uri: redirectUri,
     scope: 'api refresh_token offline_access',
     state,
     code_challenge: pkce.challenge,
@@ -1602,6 +1624,7 @@ app.get('/oauth/callback', async (req, res) => {
       throw new Error('OAuth state was not found. Start again from /auth/salesforce.');
     }
     switchActiveOrg(oauthState.orgKey);
+    SF.redirectUri = oauthState.redirectUri || requestRedirectUri(req);
 
     const params = new URLSearchParams({
       grant_type: 'authorization_code',
