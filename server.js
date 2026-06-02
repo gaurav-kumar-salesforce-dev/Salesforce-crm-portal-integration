@@ -690,6 +690,124 @@ async function buildSOQL(objectName, search, extraWhere, limit = null, offset = 
   return soql;
 }
 
+async function relatedQuery(objectName, fields, where, limit = 5) {
+  const selectFields = await fieldsCsvForObject(objectName, fields);
+  const soql = `SELECT ${selectFields} FROM ${objectName} WHERE ${where} ORDER BY ${OBJECTS[objectName].orderBy} LIMIT ${limit}`;
+  const data = await sfGet('/query', { q: soql });
+  return {
+    records: data.records || [],
+    totalSize: data.totalSize || 0
+  };
+}
+
+async function emptyRelatedList(key, objectName, title, message = '') {
+  return { key, objectName, title, records: [], totalSize: 0, message };
+}
+
+async function buildRelatedList(key, objectName, title, fields, where, limit = 5) {
+  const data = await relatedQuery(objectName, fields, where, limit);
+  return { key, objectName, title, ...data };
+}
+
+async function getOpportunityContactRoleRelated(contactId) {
+  const data = await sfGet('/query', {
+    q: `
+      SELECT Id, OpportunityId, Opportunity.Name, Opportunity.StageName, Opportunity.Amount, Opportunity.CloseDate, Opportunity.AccountId, Opportunity.Account.Name
+      FROM OpportunityContactRole
+      WHERE ContactId = '${escapeSOQL(contactId)}'
+      ORDER BY Opportunity.CloseDate DESC
+      LIMIT 5
+    `.replace(/\s+/g, ' ').trim()
+  });
+  return {
+    key: 'opportunities',
+    objectName: 'Opportunity',
+    title: 'Opportunities',
+    totalSize: data.totalSize || 0,
+    records: (data.records || []).map((role) => ({
+      Id: role.OpportunityId,
+      ...(role.Opportunity || {})
+    })).filter((record) => record.Id)
+  };
+}
+
+async function getOpportunityCaseRelated(opportunityId) {
+  const caseFields = await getObjectFieldSet('Case');
+  const lookupField = ['OpportunityId', 'Opportunity__c', 'RelatedOpportunity__c', 'Related_Opportunity__c']
+    .find((field) => caseFields.has(field));
+  if (!lookupField) {
+    return emptyRelatedList('cases', 'Case', 'Cases', 'No Case lookup to Opportunity was found in this Salesforce org.');
+  }
+  return buildRelatedList(
+    'cases',
+    'Case',
+    'Cases',
+    'Id, CaseNumber, Subject, Status, Priority, Type, AccountId, Account.Name, CreatedDate',
+    `${lookupField} = '${escapeSOQL(opportunityId)}'`
+  );
+}
+
+async function safeRelatedList(factory, fallback) {
+  try {
+    return await factory();
+  } catch (err) {
+    console.warn(`Related list warning (${fallback.title}):`, err.response?.data?.[0]?.message || err.response?.data?.message || err.message);
+    return {
+      ...fallback,
+      records: [],
+      totalSize: 0,
+      message: fallback.message || 'This related list could not be loaded for the connected Salesforce org.'
+    };
+  }
+}
+
+async function getRelatedListsForRecord(objectName, id) {
+  const safeId = escapeSOQL(id);
+  if (objectName === 'Account') {
+    return Promise.all([
+      safeRelatedList(
+        () => buildRelatedList('contacts', 'Contact', 'Contacts', 'Id, Name, Title, Email, Phone, AccountId, Account.Name', `AccountId = '${safeId}'`),
+        { key: 'contacts', objectName: 'Contact', title: 'Contacts' }
+      ),
+      safeRelatedList(
+        () => buildRelatedList('opportunities', 'Opportunity', 'Opportunities', 'Id, Name, StageName, Amount, CloseDate, AccountId, Account.Name', `AccountId = '${safeId}'`),
+        { key: 'opportunities', objectName: 'Opportunity', title: 'Opportunities' }
+      ),
+      safeRelatedList(
+        () => buildRelatedList('cases', 'Case', 'Cases', 'Id, CaseNumber, Subject, Status, Priority, Type, AccountId, Account.Name, CreatedDate', `AccountId = '${safeId}'`),
+        { key: 'cases', objectName: 'Case', title: 'Cases' }
+      )
+    ]);
+  }
+  if (objectName === 'Contact') {
+    return Promise.all([
+      safeRelatedList(
+        () => getOpportunityContactRoleRelated(id),
+        { key: 'opportunities', objectName: 'Opportunity', title: 'Opportunities' }
+      ),
+      safeRelatedList(
+        () => buildRelatedList('cases', 'Case', 'Cases', 'Id, CaseNumber, Subject, Status, Priority, Type, ContactId, AccountId, Account.Name, CreatedDate', `ContactId = '${safeId}'`),
+        { key: 'cases', objectName: 'Case', title: 'Cases' }
+      )
+    ]);
+  }
+  if (objectName === 'Opportunity') {
+    return [await safeRelatedList(
+      () => getOpportunityCaseRelated(id),
+      { key: 'cases', objectName: 'Case', title: 'Cases' }
+    )];
+  }
+  if (objectName === 'Campaign') {
+    return [
+      await safeRelatedList(
+        () => buildRelatedList('opportunities', 'Opportunity', 'Opportunities', 'Id, Name, StageName, Amount, CloseDate, CampaignId, AccountId, Account.Name', `CampaignId = '${safeId}'`),
+        { key: 'opportunities', objectName: 'Opportunity', title: 'Opportunities' }
+      )
+    ];
+  }
+  return [];
+}
+
 function queryMoreEndpoint(nextRecordsUrl = '') {
   const raw = String(nextRecordsUrl || '').trim();
   if (!raw) throw new Error('Missing Salesforce query cursor');
@@ -1666,6 +1784,18 @@ app.get('/api/:object/:id/activity', async (req, res) => {
     });
   } catch (err) {
     handleSFError(err, res, `${object} activity ${id}`);
+  }
+});
+
+app.get('/api/:object/:id/related', async (req, res) => {
+  const { object, id } = req.params;
+  if (!OBJECTS[object]) return res.status(400).json({ error: `Unknown object: ${object}` });
+
+  try {
+    const lists = await getRelatedListsForRecord(object, id);
+    res.json({ object, id, lists });
+  } catch (err) {
+    handleSFError(err, res, `Related lists ${object}/${id}`);
   }
 });
 

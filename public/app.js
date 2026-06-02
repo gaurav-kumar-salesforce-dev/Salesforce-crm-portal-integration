@@ -1663,9 +1663,9 @@ async function openRecordDetail(objectName, id) {
     renderRecordDetailPage(objectName, record, fields, displayFields, title, id);
     if (objectName === 'Campaign') {
       activeCampaign = record;
-      await Promise.all([loadCampaignMembers(id), loadRecordActivity(objectName, id)]);
+      await Promise.all([loadRelatedRecords(objectName, id), loadCampaignMembers(id), loadRecordActivity(objectName, id)]);
     } else {
-      await loadRecordActivity(objectName, id);
+      await Promise.all([loadRelatedRecords(objectName, id), loadRecordActivity(objectName, id)]);
     }
   } catch (err) {
     $('content').innerHTML = `
@@ -1764,21 +1764,132 @@ function getSummaryFields(objectName) {
 }
 
 function renderRelatedPanel(objectName) {
-  if (objectName === 'Campaign') return renderCampaignMembersShell();
-  return `
-    <div class="related-panel no-margin">
-      <div class="related-head">
-        <div>
-          <h3>Related Records</h3>
-          <p>Open related records from lookup links in Details.</p>
+  const configs = getRelatedListConfigs(objectName);
+  if (!configs.length && objectName !== 'Campaign') {
+    return `
+      <div class="related-panel no-margin">
+        <div class="related-head">
+          <div>
+            <h3>Related Records</h3>
+            <p>Open related records from lookup links in Details.</p>
+          </div>
+        </div>
+        <div class="table-empty">
+          <h3>No portal related list configured</h3>
+          <p>Use the Details tab or Salesforce Activity Timeline for this record.</p>
         </div>
       </div>
-      <div class="table-empty">
-        <h3>No portal related list configured</h3>
-        <p>Use the Details tab or Salesforce Activity Timeline for this record.</p>
+    `;
+  }
+
+  return `
+    ${configs.map((config, index) => renderRelatedListShell(config, index === 0)).join('')}
+    ${objectName === 'Campaign' ? renderCampaignMembersShell(!configs.length) : ''}
+  `;
+}
+
+function getRelatedListConfigs(objectName) {
+  return {
+    Account: [
+      { key: 'contacts', objectName: 'Contact', title: 'Contacts', fields: ['Name', 'Title', 'Email', 'Phone'] },
+      { key: 'opportunities', objectName: 'Opportunity', title: 'Opportunities', fields: ['Name', 'StageName', 'Amount', 'CloseDate'] },
+      { key: 'cases', objectName: 'Case', title: 'Cases', fields: ['CaseNumber', 'Subject', 'Status', 'Priority'] }
+    ],
+    Contact: [
+      { key: 'opportunities', objectName: 'Opportunity', title: 'Opportunities', fields: ['Name', 'StageName', 'Amount', 'CloseDate'] },
+      { key: 'cases', objectName: 'Case', title: 'Cases', fields: ['CaseNumber', 'Subject', 'Status', 'Priority'] }
+    ],
+    Opportunity: [
+      { key: 'cases', objectName: 'Case', title: 'Cases', fields: ['CaseNumber', 'Subject', 'Status', 'Priority'] }
+    ],
+    Campaign: [
+      { key: 'opportunities', objectName: 'Opportunity', title: 'Opportunities', fields: ['Name', 'StageName', 'Amount', 'CloseDate'] }
+    ]
+  }[objectName] || [];
+}
+
+function renderRelatedListShell(config, noMargin = false) {
+  return `
+    <div class="related-panel ${noMargin ? 'no-margin' : ''}" id="relatedPanel-${escapeHtml(config.key)}">
+      <div class="related-head">
+        <div>
+          <h3>${objectIcon(config.objectName)}<span id="relatedTitle-${escapeHtml(config.key)}">${escapeHtml(config.title)}</span></h3>
+          <p>${escapeHtml(relatedListSubtitle(config.objectName))}</p>
+        </div>
+      </div>
+      <div class="related-list-body" id="relatedList-${escapeHtml(config.key)}">
+        <div class="state-box compact">Loading ${escapeHtml(config.title.toLowerCase())}...</div>
       </div>
     </div>
   `;
+}
+
+function relatedListSubtitle(objectName) {
+  return {
+    Contact: 'Contacts associated with this account.',
+    Opportunity: 'Opportunities associated with this record.',
+    Case: 'Cases associated with this record.'
+  }[objectName] || 'Related records associated with this record.';
+}
+
+async function loadRelatedRecords(objectName, id) {
+  const configs = getRelatedListConfigs(objectName);
+  if (!configs.length) return;
+
+  try {
+    const data = await api(`/api/${objectName}/${id}/related`);
+    const listsByKey = Object.fromEntries((data.lists || []).map((list) => [list.key, list]));
+    configs.forEach((config) => renderRelatedList(config, listsByKey[config.key] || { records: [], totalSize: 0 }));
+  } catch (err) {
+    configs.forEach((config) => {
+      const body = $(`relatedList-${config.key}`);
+      if (body) body.innerHTML = `<div class="error-state compact"><p>${escapeHtml(err.message)}</p></div>`;
+    });
+  }
+}
+
+function renderRelatedList(config, list) {
+  const body = $(`relatedList-${config.key}`);
+  const title = $(`relatedTitle-${config.key}`);
+  if (!body) return;
+
+  const records = list.records || [];
+  if (title) title.textContent = `${config.title} (${Number(list.totalSize || records.length)})`;
+  if (list.message && !records.length) {
+    body.innerHTML = `<div class="table-empty related-empty"><h3>No ${escapeHtml(config.title.toLowerCase())} found</h3><p>${escapeHtml(list.message)}</p></div>`;
+    return;
+  }
+  if (!records.length) {
+    body.innerHTML = `<div class="table-empty related-empty"><h3>No ${escapeHtml(config.title.toLowerCase())} found</h3></div>`;
+    return;
+  }
+
+  body.innerHTML = `
+    <div class="mini-table-wrap related-table-wrap">
+      <table class="mini-table related-table">
+        <thead>
+          <tr>${config.fields.map((field) => `<th>${escapeHtml(labelFor(field))}</th>`).join('')}</tr>
+        </thead>
+        <tbody>
+          ${records.map((record) => `
+            <tr onclick="openRecordDetail('${config.objectName}', '${escapeJs(record.Id)}')">
+              ${config.fields.map((field) => `<td>${renderRelatedCell(config.objectName, record, field)}</td>`).join('')}
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>
+    </div>
+    ${Number(list.totalSize || records.length) > records.length ? '<div class="related-view-all">Showing first 5 records</div>' : ''}
+  `;
+}
+
+function renderRelatedCell(objectName, record, field) {
+  const value = getValue(record, field);
+  if (value === null || value === undefined || value === '') return '<span class="cell-empty">-</span>';
+  if (field === 'Name' || field === 'CaseNumber') {
+    return `<button class="cell-button-link" onclick="event.stopPropagation(); openRecordDetail('${objectName}', '${escapeJs(record.Id)}')">${escapeHtml(value)}</button>`;
+  }
+  return formatValue(field, value, record);
 }
 
 function showRecordTab(name) {
@@ -1866,9 +1977,9 @@ function closeDetailModal() {
   $('detailEditBtn').style.display = 'inline-flex';
 }
 
-function renderCampaignMembersShell() {
+function renderCampaignMembersShell(noMargin = false) {
   return `
-    <div class="related-panel">
+    <div class="related-panel ${noMargin ? 'no-margin' : ''}">
       <div class="related-head">
         <div>
           <h3>Campaign Members</h3>
@@ -2856,10 +2967,18 @@ function renderRecordActivity(warnings = []) {
 function renderActivityToolbar() {
   return `
     <div class="activity-actions">
-      <button class="activity-action activity-action-task" title="New Task" onclick="openActivityModal('task')">${utilityIconSvg('task')}<span>New Task</span></button>
-      <button class="activity-action activity-action-call" title="Log a Call" onclick="openActivityModal('call')">${utilityIconSvg('call')}<span>Log a Call</span></button>
-      <button class="activity-action activity-action-event" title="New Event" onclick="openActivityModal('event')">${utilityIconSvg('event')}<span>New Event</span></button>
-      <button class="activity-action activity-action-email" title="Email" onclick="openActivityModal('email')">${utilityIconSvg('email')}<span>Email</span></button>
+      <div class="activity-action-group activity-action-task" title="New Task">
+        <button class="activity-action" aria-label="New Task" onclick="openActivityModal('task')">${utilityIconSvg('task')}</button>
+      </div>
+      <div class="activity-action-group activity-action-call" title="Log a Call">
+        <button class="activity-action" aria-label="Log a Call" onclick="openActivityModal('call')">${utilityIconSvg('call')}</button>
+      </div>
+      <div class="activity-action-group activity-action-event" title="New Event">
+        <button class="activity-action" aria-label="New Event" onclick="openActivityModal('event')">${utilityIconSvg('event')}</button>
+      </div>
+      <div class="activity-action-group activity-action-email" title="Email">
+        <button class="activity-action" aria-label="Email" onclick="openActivityModal('email')">${utilityIconSvg('email')}</button>
+      </div>
     </div>
     <div class="activity-filter">
       <span>Filters: All time &bull; All activities &bull; All types</span>
