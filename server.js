@@ -290,11 +290,17 @@ async function sfPost(endpoint, body) {
   return res.data;
 }
 
-async function sfPatch(endpoint, body) {
+async function sfPatch(endpoint, body, config = {}) {
   const token = await getAccessToken();
-  await axios.patch(`${baseUrl()}${endpoint}`, body, {
-    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }
+  const res = await axios.patch(`${baseUrl()}${endpoint}`, body, {
+    ...config,
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+      ...(config.headers || {})
+    }
   });
+  return res.data;
 }
 
 async function sfDelete(endpoint) {
@@ -690,6 +696,124 @@ async function buildSOQL(objectName, search, extraWhere, limit = null, offset = 
   return soql;
 }
 
+async function relatedQuery(objectName, fields, where, limit = 5) {
+  const selectFields = await fieldsCsvForObject(objectName, fields);
+  const soql = `SELECT ${selectFields} FROM ${objectName} WHERE ${where} ORDER BY ${OBJECTS[objectName].orderBy} LIMIT ${limit}`;
+  const data = await sfGet('/query', { q: soql });
+  return {
+    records: data.records || [],
+    totalSize: data.totalSize || 0
+  };
+}
+
+async function emptyRelatedList(key, objectName, title, message = '') {
+  return { key, objectName, title, records: [], totalSize: 0, message };
+}
+
+async function buildRelatedList(key, objectName, title, fields, where, limit = 5) {
+  const data = await relatedQuery(objectName, fields, where, limit);
+  return { key, objectName, title, ...data };
+}
+
+async function getOpportunityContactRoleRelated(contactId) {
+  const data = await sfGet('/query', {
+    q: `
+      SELECT Id, OpportunityId, Opportunity.Name, Opportunity.StageName, Opportunity.Amount, Opportunity.CloseDate, Opportunity.AccountId, Opportunity.Account.Name
+      FROM OpportunityContactRole
+      WHERE ContactId = '${escapeSOQL(contactId)}'
+      ORDER BY Opportunity.CloseDate DESC
+      LIMIT 5
+    `.replace(/\s+/g, ' ').trim()
+  });
+  return {
+    key: 'opportunities',
+    objectName: 'Opportunity',
+    title: 'Opportunities',
+    totalSize: data.totalSize || 0,
+    records: (data.records || []).map((role) => ({
+      Id: role.OpportunityId,
+      ...(role.Opportunity || {})
+    })).filter((record) => record.Id)
+  };
+}
+
+async function getOpportunityCaseRelated(opportunityId) {
+  const caseFields = await getObjectFieldSet('Case');
+  const lookupField = ['OpportunityId', 'Opportunity__c', 'RelatedOpportunity__c', 'Related_Opportunity__c']
+    .find((field) => caseFields.has(field));
+  if (!lookupField) {
+    return emptyRelatedList('cases', 'Case', 'Cases', 'No Case lookup to Opportunity was found in this Salesforce org.');
+  }
+  return buildRelatedList(
+    'cases',
+    'Case',
+    'Cases',
+    'Id, CaseNumber, Subject, Status, Priority, Type, AccountId, Account.Name, CreatedDate',
+    `${lookupField} = '${escapeSOQL(opportunityId)}'`
+  );
+}
+
+async function safeRelatedList(factory, fallback) {
+  try {
+    return await factory();
+  } catch (err) {
+    console.warn(`Related list warning (${fallback.title}):`, err.response?.data?.[0]?.message || err.response?.data?.message || err.message);
+    return {
+      ...fallback,
+      records: [],
+      totalSize: 0,
+      message: fallback.message || 'This related list could not be loaded for the connected Salesforce org.'
+    };
+  }
+}
+
+async function getRelatedListsForRecord(objectName, id) {
+  const safeId = escapeSOQL(id);
+  if (objectName === 'Account') {
+    return Promise.all([
+      safeRelatedList(
+        () => buildRelatedList('contacts', 'Contact', 'Contacts', 'Id, Name, Title, Email, Phone, AccountId, Account.Name', `AccountId = '${safeId}'`),
+        { key: 'contacts', objectName: 'Contact', title: 'Contacts' }
+      ),
+      safeRelatedList(
+        () => buildRelatedList('opportunities', 'Opportunity', 'Opportunities', 'Id, Name, StageName, Amount, CloseDate, AccountId, Account.Name', `AccountId = '${safeId}'`),
+        { key: 'opportunities', objectName: 'Opportunity', title: 'Opportunities' }
+      ),
+      safeRelatedList(
+        () => buildRelatedList('cases', 'Case', 'Cases', 'Id, CaseNumber, Subject, Status, Priority, Type, AccountId, Account.Name, CreatedDate', `AccountId = '${safeId}'`),
+        { key: 'cases', objectName: 'Case', title: 'Cases' }
+      )
+    ]);
+  }
+  if (objectName === 'Contact') {
+    return Promise.all([
+      safeRelatedList(
+        () => getOpportunityContactRoleRelated(id),
+        { key: 'opportunities', objectName: 'Opportunity', title: 'Opportunities' }
+      ),
+      safeRelatedList(
+        () => buildRelatedList('cases', 'Case', 'Cases', 'Id, CaseNumber, Subject, Status, Priority, Type, ContactId, AccountId, Account.Name, CreatedDate', `ContactId = '${safeId}'`),
+        { key: 'cases', objectName: 'Case', title: 'Cases' }
+      )
+    ]);
+  }
+  if (objectName === 'Opportunity') {
+    return [await safeRelatedList(
+      () => getOpportunityCaseRelated(id),
+      { key: 'cases', objectName: 'Case', title: 'Cases' }
+    )];
+  }
+  if (objectName === 'Campaign') {
+    return [
+      await safeRelatedList(
+        () => buildRelatedList('opportunities', 'Opportunity', 'Opportunities', 'Id, Name, StageName, Amount, CloseDate, CampaignId, AccountId, Account.Name', `CampaignId = '${safeId}'`),
+        { key: 'opportunities', objectName: 'Opportunity', title: 'Opportunities' }
+      )
+    ];
+  }
+  return [];
+}
+
 function queryMoreEndpoint(nextRecordsUrl = '') {
   const raw = String(nextRecordsUrl || '').trim();
   if (!raw) throw new Error('Missing Salesforce query cursor');
@@ -721,6 +845,141 @@ function stripHtml(value = '') {
     .replace(/&gt;/g, '>')
     .replace(/&quot;/g, '"')
     .trim();
+}
+
+function chatterSegmentFromClient(segment = {}) {
+  if (segment.type === 'Mention' && segment.id) {
+    return { type: 'Mention', id: segment.id };
+  }
+  if (segment.type === 'Link' && segment.url) {
+    return [
+      { type: 'MarkupBegin', markupType: 'Hyperlink', url: segment.url },
+      { type: 'Text', text: segment.text || segment.url },
+      { type: 'MarkupEnd', markupType: 'Hyperlink' }
+    ];
+  }
+  return { type: 'Text', text: String(segment.text || '') };
+}
+
+function chatterBodyFromSegments(segments = []) {
+  const messageSegments = (segments || [])
+    .map(chatterSegmentFromClient)
+    .flat()
+    .filter((segment) => segment.type === 'Mention' || segment.type === 'MarkupBegin' || segment.type === 'MarkupEnd' || segment.text);
+  return {
+    messageSegments: messageSegments.length ? messageSegments : [{ type: 'Text', text: ' ' }]
+  };
+}
+
+function normalizeChatterSegments(segments = []) {
+  const normalized = [];
+  for (let i = 0; i < (segments || []).length; i += 1) {
+    const segment = segments[i] || {};
+    if (segment.type === 'MarkupBegin' && segment.markupType === 'Hyperlink') {
+      const textSegment = (segments || [])[i + 1] || {};
+      normalized.push({
+        type: 'Link',
+        text: textSegment.text || segment.url || '',
+        url: segment.url || ''
+      });
+      while ((segments || [])[i + 1]?.type !== 'MarkupEnd' && i + 1 < (segments || []).length) i += 1;
+      if ((segments || [])[i + 1]?.type === 'MarkupEnd') i += 1;
+      continue;
+    }
+    if (segment.type === 'MarkupBegin' || segment.type === 'MarkupEnd') continue;
+    if (segment.htmlTag && !segment.text && !segment.name && !segment.url) continue;
+    normalized.push({
+      type: segment.type || 'Text',
+      text: segment.text || segment.name || '',
+      name: segment.name || segment.user?.displayName || segment.record?.name || '',
+      url: segment.url || segment.record?.url || '',
+      id: segment.id || segment.user?.id || segment.record?.id || ''
+    });
+  }
+  return normalized;
+}
+
+function normalizeChatterComments(capabilities = {}) {
+  const comments = capabilities.comments?.page?.items || capabilities.comments?.items || [];
+  return comments.map((comment) => ({
+    id: comment.id,
+    actor: {
+      id: comment.user?.id || comment.actor?.id || '',
+      name: comment.user?.displayName || comment.actor?.displayName || comment.actor?.name || 'User'
+    },
+    createdDate: comment.createdDate,
+    segments: normalizeChatterSegments(comment.body?.messageSegments)
+  }));
+}
+
+function salesforceIdFromValue(value = '') {
+  const match = String(value || '').match(/[a-zA-Z0-9]{15}(?:[a-zA-Z0-9]{3})?/);
+  return match ? match[0] : '';
+}
+
+function chatterPollChoiceId(choice = {}) {
+  const candidates = [
+    choice.id,
+    choice.choiceId,
+    choice.value,
+    choice.choice?.id,
+    choice.pollChoice?.id,
+    choice.url,
+    choice.selfUrl,
+    choice.resourceUrl
+  ];
+  for (const candidate of candidates) {
+    const id = salesforceIdFromValue(candidate);
+    if (id) return id;
+  }
+  return '';
+}
+
+function normalizeChatterPoll(capabilities = {}) {
+  const poll = capabilities.poll;
+  if (!poll) return null;
+  const choices = poll.choices || poll.pollChoices || poll.options || [];
+  return {
+    id: poll.id || '',
+    myChoiceId: poll.myChoiceId || poll.myChoice?.id || '',
+    choices: choices.map((choice) => ({
+      id: chatterPollChoiceId(choice),
+      text: choice.text || choice.label || choice.name || choice.choice?.text || choice.pollChoice?.text || '',
+      voteCount: choice.voteCount || choice.votes || 0
+    }))
+  };
+}
+
+async function resolveChatterPollChoiceId(feedElementId, submittedChoiceId) {
+  const submitted = String(submittedChoiceId || '').trim();
+  if (salesforceIdFromValue(submitted) === submitted) return submitted;
+
+  const poll = await sfGet(`/chatter/feed-elements/${encodeURIComponent(feedElementId)}/capabilities/poll`);
+  const normalized = normalizeChatterPoll({ poll });
+  const choice = (normalized?.choices || []).find((item) => (
+    item.id === submitted || item.text === submitted
+  ));
+  return choice?.id || submitted;
+}
+
+function normalizeChatterItem(item = {}) {
+  const capabilities = item.capabilities || {};
+  return {
+    id: item.id,
+    type: item.type || item.feedElementType || '',
+    actor: {
+      id: item.actor?.id || '',
+      name: item.actor?.displayName || item.actor?.name || 'Salesforce User'
+    },
+    createdDate: item.createdDate,
+    relativeCreatedDate: item.relativeCreatedDate || '',
+    segments: normalizeChatterSegments(item.body?.messageSegments),
+    text: stripHtml(item.body?.text || (item.body?.messageSegments || []).map((segment) => segment.text || segment.name || '').join(' ')),
+    likeCount: capabilities.chatterLikes?.page?.total || capabilities.chatterLikes?.total || 0,
+    commentCount: capabilities.comments?.page?.total || capabilities.comments?.total || 0,
+    comments: normalizeChatterComments(capabilities),
+    poll: normalizeChatterPoll(capabilities)
+  };
 }
 
 function cleanTemplateBody(value = '') {
@@ -1666,6 +1925,110 @@ app.get('/api/:object/:id/activity', async (req, res) => {
     });
   } catch (err) {
     handleSFError(err, res, `${object} activity ${id}`);
+  }
+});
+
+app.get('/api/:object/:id/related', async (req, res) => {
+  const { object, id } = req.params;
+  if (!OBJECTS[object]) return res.status(400).json({ error: `Unknown object: ${object}` });
+
+  try {
+    const lists = await getRelatedListsForRecord(object, id);
+    res.json({ object, id, lists });
+  } catch (err) {
+    handleSFError(err, res, `Related lists ${object}/${id}`);
+  }
+});
+
+app.get('/api/:object/:id/chatter', async (req, res) => {
+  const { object, id } = req.params;
+  if (!OBJECTS[object]) return res.status(400).json({ error: `Unknown object: ${object}` });
+
+  try {
+    const data = await sfGet(`/chatter/feeds/record/${encodeURIComponent(id)}/feed-elements`, {
+      pageSize: 20
+    });
+    res.json({
+      items: (data.elements || data.items || []).map(normalizeChatterItem),
+      nextPageUrl: data.nextPageUrl || data.nextPageToken || null
+    });
+  } catch (err) {
+    handleSFError(err, res, `Chatter feed ${object}/${id}`);
+  }
+});
+
+app.post('/api/:object/:id/chatter', async (req, res) => {
+  const { object, id } = req.params;
+  if (!OBJECTS[object]) return res.status(400).json({ error: `Unknown object: ${object}` });
+
+  const type = String(req.body?.type || 'post').toLowerCase();
+  const body = chatterBodyFromSegments(req.body?.segments);
+  const payload = {
+    subjectId: id,
+    feedElementType: 'FeedItem',
+    body
+  };
+
+  if (type === 'poll') {
+    const choices = (req.body?.choices || []).map((choice) => String(choice || '').trim()).filter(Boolean).slice(0, 10);
+    if (choices.length < 2) return res.status(400).json({ error: 'Poll requires at least two choices' });
+    payload.capabilities = {
+      poll: {
+        choices
+      }
+    };
+  }
+
+  try {
+    const item = await sfPost('/chatter/feed-elements', payload);
+    res.json({ item: normalizeChatterItem(item) });
+  } catch (err) {
+    handleSFError(err, res, `Create Chatter ${object}/${id}`);
+  }
+});
+
+app.post('/api/chatter/feed-elements/:feedElementId/comments', async (req, res) => {
+  const text = String(req.body?.text || '').trim();
+  if (!text) return res.status(400).json({ error: 'Comment is required' });
+
+  try {
+    const comment = await sfPost(
+      `/chatter/feed-elements/${encodeURIComponent(req.params.feedElementId)}/capabilities/comments/items`,
+      { body: { messageSegments: [{ type: 'Text', text }] } }
+    );
+    res.json({ comment });
+  } catch (err) {
+    handleSFError(err, res, `Chatter comment ${req.params.feedElementId}`);
+  }
+});
+
+app.post('/api/chatter/feed-elements/:feedElementId/likes', async (req, res) => {
+  try {
+    const like = await sfPost(
+      `/chatter/feed-elements/${encodeURIComponent(req.params.feedElementId)}/capabilities/chatter-likes/items`,
+      {}
+    );
+    res.json({ like });
+  } catch (err) {
+    handleSFError(err, res, `Chatter like ${req.params.feedElementId}`);
+  }
+});
+
+app.post('/api/chatter/feed-elements/:feedElementId/poll-vote', async (req, res) => {
+  const submittedChoiceId = String(req.body?.choiceId || '').trim();
+  if (!submittedChoiceId) return res.status(400).json({ error: 'Poll choice is required' });
+
+  try {
+    const choiceId = await resolveChatterPollChoiceId(req.params.feedElementId, submittedChoiceId);
+    if (!salesforceIdFromValue(choiceId)) return res.status(400).json({ error: 'Poll choice id is missing. Refresh Chatter and try again.' });
+    const vote = await sfPatch(
+      `/chatter/feed-elements/${encodeURIComponent(req.params.feedElementId)}/capabilities/poll`,
+      { myChoiceId: choiceId },
+      { params: { myChoiceId: choiceId } }
+    );
+    res.json({ vote });
+  } catch (err) {
+    handleSFError(err, res, `Chatter poll vote ${req.params.feedElementId}`);
   }
 });
 

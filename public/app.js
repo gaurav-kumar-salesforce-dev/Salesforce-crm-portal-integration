@@ -151,6 +151,7 @@ let expandedActivityIds = new Set();
 let activityLookupState = {};
 let emailComposerState = {};
 let orgSettings = { activeOrgKey: 'default', orgs: [] };
+let chatterState = { activeTab: 'post', loadedFor: '', mentions: [] };
 
 const $ = (id) => document.getElementById(id);
 
@@ -217,6 +218,12 @@ function utilityIconSvg(key) {
     call: '<svg viewBox="0 0 24 24"><path d="M7 4l3 3-2 2c1.2 2.4 3.1 4.3 5.5 5.5l2-2 3 3-1.7 3c-.4.7-1.2 1-2 .8C9.9 18.6 5.4 14.1 4.2 9.2c-.2-.8.1-1.6.8-2L7 4z"/></svg>',
     event: '<svg viewBox="0 0 24 24"><path d="M7 2h2v3h6V2h2v3h2a2 2 0 012 2v12a2 2 0 01-2 2H5a2 2 0 01-2-2V7a2 2 0 012-2h2V2zm12 8H5v9h14v-9z"/></svg>',
     email: '<svg viewBox="0 0 24 24"><path d="M4 5h16a2 2 0 012 2v10a2 2 0 01-2 2H4a2 2 0 01-2-2V7a2 2 0 012-2zm8 8l8-5.2V7l-8 5-8-5v.8L12 13z"/></svg>',
+    like: '<svg viewBox="0 0 24 24"><path d="M8 21H4V9h4v12zm2 0V9l5-6 1.4 1.4L14.6 9H20a2 2 0 012 2l-1.2 7a3 3 0 01-3 3H10z"/></svg>',
+    comment: '<svg viewBox="0 0 24 24"><path d="M4 5h16a2 2 0 012 2v8a2 2 0 01-2 2H9l-5 4v-4a2 2 0 01-2-2V7a2 2 0 012-2z"/></svg>',
+    search: '<svg viewBox="0 0 24 24"><path d="M10 4a6 6 0 014.7 9.7l4.6 4.6-1.4 1.4-4.6-4.6A6 6 0 1110 4zm0 2a4 4 0 100 8 4 4 0 000-8z"/></svg>',
+    refresh: '<svg viewBox="0 0 24 24"><path d="M17.7 6.3A8 8 0 104 12h2a6 6 0 111.8 4.2L10 14H4v6l2.4-2.4A8 8 0 0019.9 12h-2a6 6 0 00-1.8-4.2L14 10h6V4l-2.3 2.3z"/></svg>',
+    sort: '<svg viewBox="0 0 24 24"><path d="M7 4l4 4H8v12H6V8H3l4-4zm10 16l-4-4h3V4h2v12h3l-4 4z"/></svg>',
+    user: '<svg viewBox="0 0 24 24"><path d="M12 12a4 4 0 100-8 4 4 0 000 8zm-7 8a7 7 0 0114 0H5zm14-9v3h3v2h-3v3h-2v-3h-3v-2h3v-3h2z"/></svg>',
     attach: '<svg viewBox="0 0 24 24"><path d="M8 17.5l8.7-8.7a2.5 2.5 0 00-3.5-3.5l-9.1 9.1a4.5 4.5 0 006.4 6.4l8.2-8.2 1.4 1.4-8.2 8.2a6.5 6.5 0 11-9.2-9.2l9.1-9.1a4.5 4.5 0 016.4 6.4l-8.7 8.7a2.5 2.5 0 01-3.5-3.5l7.8-7.8 1.4 1.4-7.8 7.8a.5.5 0 10.7.7z"/></svg>',
     merge: '<svg viewBox="0 0 24 24"><path d="M4 5h7v2H6v10h5v2H4V5zm9 0h7v14h-7v-2h5V7h-5V5zm-2.2 5.4L8.2 13l2.6 2.6-1.4 1.4L5.4 13l4-4 1.4 1.4zm2.4 5.2l2.6-2.6-2.6-2.6 1.4-1.4 4 4-4 4-1.4-1.4z"/></svg>',
     template: '<svg viewBox="0 0 24 24"><path d="M5 3h11l3 3v15H5V3zm10 2H7v14h10V7h-2V5zM9 10h6v2H9v-2zm0 4h6v2H9v-2z"/></svg>',
@@ -1663,9 +1670,9 @@ async function openRecordDetail(objectName, id) {
     renderRecordDetailPage(objectName, record, fields, displayFields, title, id);
     if (objectName === 'Campaign') {
       activeCampaign = record;
-      await Promise.all([loadCampaignMembers(id), loadRecordActivity(objectName, id)]);
+      await Promise.all([loadRelatedRecords(objectName, id), loadCampaignMembers(id), loadRecordActivity(objectName, id)]);
     } else {
-      await loadRecordActivity(objectName, id);
+      await Promise.all([loadRelatedRecords(objectName, id), loadRecordActivity(objectName, id)]);
     }
   } catch (err) {
     $('content').innerHTML = `
@@ -1721,18 +1728,37 @@ function renderRecordDetailPage(objectName, record, fields, displayFields, title
         </section>
         <aside class="record-side">
           <div class="activity-card">
-            <div class="activity-head">
-              <h3>Activity</h3>
-              <button class="cell-button-link" onclick="loadRecordActivity('${objectName}', '${id}')">Refresh</button>
+            <div class="side-tabs">
+              <button class="side-tab active" id="sideActivityBtn" onclick="showSideTab('activity')">Activity</button>
+              <button class="side-tab" id="sideChatterBtn" onclick="showSideTab('chatter')">Chatter</button>
             </div>
-            <div id="activityTimeline">
-              <div class="activity-empty"><p>Loading activities...</p></div>
+            <div id="sideActivityPanel">
+              <div class="activity-head">
+                <h3>Activity</h3>
+                <button class="cell-button-link" onclick="loadRecordActivity('${objectName}', '${id}')">Refresh</button>
+              </div>
+              <div id="activityTimeline">
+                <div class="activity-empty"><p>Loading activities...</p></div>
+              </div>
+            </div>
+            <div id="sideChatterPanel" style="display:none">
+              ${renderChatterPanel(objectName)}
             </div>
           </div>
         </aside>
       </div>
     </div>
   `;
+}
+
+function showSideTab(name) {
+  $('sideActivityPanel').style.display = name === 'activity' ? 'block' : 'none';
+  $('sideChatterPanel').style.display = name === 'chatter' ? 'block' : 'none';
+  $('sideActivityBtn').classList.toggle('active', name === 'activity');
+  $('sideChatterBtn').classList.toggle('active', name === 'chatter');
+  if (name === 'chatter' && detailRecordState?.id && chatterState.loadedFor !== detailRecordState.id) {
+    loadChatterFeed();
+  }
 }
 
 function renderConfiguredDetailSections(objectName, record, fields, fallbackFields) {
@@ -1764,21 +1790,555 @@ function getSummaryFields(objectName) {
 }
 
 function renderRelatedPanel(objectName) {
-  if (objectName === 'Campaign') return renderCampaignMembersShell();
-  return `
-    <div class="related-panel no-margin">
-      <div class="related-head">
-        <div>
-          <h3>Related Records</h3>
-          <p>Open related records from lookup links in Details.</p>
+  const configs = getRelatedListConfigs(objectName);
+  if (!configs.length && objectName !== 'Campaign') {
+    return `
+      <div class="related-panel no-margin">
+        <div class="related-head">
+          <div>
+            <h3>Related Records</h3>
+            <p>Open related records from lookup links in Details.</p>
+          </div>
+        </div>
+        <div class="table-empty">
+          <h3>No portal related list configured</h3>
+          <p>Use the Details tab or Salesforce Activity Timeline for this record.</p>
         </div>
       </div>
-      <div class="table-empty">
-        <h3>No portal related list configured</h3>
-        <p>Use the Details tab or Salesforce Activity Timeline for this record.</p>
+    `;
+  }
+
+  return `
+    ${configs.map((config, index) => renderRelatedListShell(config, index === 0)).join('')}
+    ${objectName === 'Campaign' ? renderCampaignMembersShell(!configs.length) : ''}
+  `;
+}
+
+function getRelatedListConfigs(objectName) {
+  return {
+    Account: [
+      { key: 'contacts', objectName: 'Contact', title: 'Contacts', fields: ['Name', 'Title', 'Email', 'Phone'] },
+      { key: 'opportunities', objectName: 'Opportunity', title: 'Opportunities', fields: ['Name', 'StageName', 'Amount', 'CloseDate'] },
+      { key: 'cases', objectName: 'Case', title: 'Cases', fields: ['CaseNumber', 'Subject', 'Status', 'Priority'] }
+    ],
+    Contact: [
+      { key: 'opportunities', objectName: 'Opportunity', title: 'Opportunities', fields: ['Name', 'StageName', 'Amount', 'CloseDate'] },
+      { key: 'cases', objectName: 'Case', title: 'Cases', fields: ['CaseNumber', 'Subject', 'Status', 'Priority'] }
+    ],
+    Opportunity: [
+      { key: 'cases', objectName: 'Case', title: 'Cases', fields: ['CaseNumber', 'Subject', 'Status', 'Priority'] }
+    ],
+    Campaign: [
+      { key: 'opportunities', objectName: 'Opportunity', title: 'Opportunities', fields: ['Name', 'StageName', 'Amount', 'CloseDate'] }
+    ]
+  }[objectName] || [];
+}
+
+function renderRelatedListShell(config, noMargin = false) {
+  return `
+    <div class="related-panel ${noMargin ? 'no-margin' : ''}" id="relatedPanel-${escapeHtml(config.key)}">
+      <div class="related-head">
+        <div>
+          <h3>${objectIcon(config.objectName)}<span id="relatedTitle-${escapeHtml(config.key)}">${escapeHtml(config.title)}</span></h3>
+          <p>${escapeHtml(relatedListSubtitle(config.objectName))}</p>
+        </div>
+      </div>
+      <div class="related-list-body" id="relatedList-${escapeHtml(config.key)}">
+        <div class="state-box compact">Loading ${escapeHtml(config.title.toLowerCase())}...</div>
       </div>
     </div>
   `;
+}
+
+function relatedListSubtitle(objectName) {
+  return {
+    Contact: 'Contacts associated with this account.',
+    Opportunity: 'Opportunities associated with this record.',
+    Case: 'Cases associated with this record.'
+  }[objectName] || 'Related records associated with this record.';
+}
+
+async function loadRelatedRecords(objectName, id) {
+  const configs = getRelatedListConfigs(objectName);
+  if (!configs.length) return;
+
+  try {
+    const data = await api(`/api/${objectName}/${id}/related`);
+    const listsByKey = Object.fromEntries((data.lists || []).map((list) => [list.key, list]));
+    configs.forEach((config) => renderRelatedList(config, listsByKey[config.key] || { records: [], totalSize: 0 }));
+  } catch (err) {
+    configs.forEach((config) => {
+      const body = $(`relatedList-${config.key}`);
+      if (body) body.innerHTML = `<div class="error-state compact"><p>${escapeHtml(err.message)}</p></div>`;
+    });
+  }
+}
+
+function renderRelatedList(config, list) {
+  const body = $(`relatedList-${config.key}`);
+  const title = $(`relatedTitle-${config.key}`);
+  if (!body) return;
+
+  const records = list.records || [];
+  if (title) title.textContent = `${config.title} (${Number(list.totalSize || records.length)})`;
+  if (list.message && !records.length) {
+    body.innerHTML = `<div class="table-empty related-empty"><h3>No ${escapeHtml(config.title.toLowerCase())} found</h3><p>${escapeHtml(list.message)}</p></div>`;
+    return;
+  }
+  if (!records.length) {
+    body.innerHTML = `<div class="table-empty related-empty"><h3>No ${escapeHtml(config.title.toLowerCase())} found</h3></div>`;
+    return;
+  }
+
+  body.innerHTML = `
+    <div class="mini-table-wrap related-table-wrap">
+      <table class="mini-table related-table">
+        <thead>
+          <tr>${config.fields.map((field) => `<th>${escapeHtml(labelFor(field))}</th>`).join('')}</tr>
+        </thead>
+        <tbody>
+          ${records.map((record) => `
+            <tr onclick="openRecordDetail('${config.objectName}', '${escapeJs(record.Id)}')">
+              ${config.fields.map((field) => `<td>${renderRelatedCell(config.objectName, record, field)}</td>`).join('')}
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>
+    </div>
+    ${Number(list.totalSize || records.length) > records.length ? '<div class="related-view-all">Showing first 5 records</div>' : ''}
+  `;
+}
+
+function renderRelatedCell(objectName, record, field) {
+  const value = getValue(record, field);
+  if (value === null || value === undefined || value === '') return '<span class="cell-empty">-</span>';
+  if (field === 'Name' || field === 'CaseNumber') {
+    return `<button class="cell-button-link" onclick="event.stopPropagation(); openRecordDetail('${objectName}', '${escapeJs(record.Id)}')">${escapeHtml(value)}</button>`;
+  }
+  return formatValue(field, value, record);
+}
+
+function renderChatterPanel(objectName) {
+  return `
+    <div class="chatter-wrap">
+      ${renderChatterComposer(objectName)}
+      <div class="chatter-tools">
+        <button class="chatter-sort" title="Sort feed">${utilityIconSvg('sort')}</button>
+        <div class="chatter-search">
+          ${utilityIconSvg('search')}
+          <input id="chatterSearch" placeholder="Search this feed..." oninput="renderChatterFeedItems()">
+        </div>
+        <button class="chatter-refresh" title="Refresh feed" onclick="loadChatterFeed(true)">${utilityIconSvg('refresh')}</button>
+      </div>
+      <div id="chatterFeed" class="chatter-feed">
+        <div class="activity-empty"><p>Open Chatter to load this feed.</p></div>
+      </div>
+    </div>
+  `;
+}
+
+function renderChatterComposer(objectName) {
+  return `
+    <div class="chatter-composer">
+      <div class="chatter-publisher-tabs">
+        <button class="chatter-publisher-tab active" id="chatterPostTab" onclick="setChatterComposerTab('post')">Post</button>
+        <button class="chatter-publisher-tab" id="chatterPollTab" onclick="setChatterComposerTab('poll')">Poll</button>
+      </div>
+      <div id="chatterPostComposer">
+        <div class="chatter-editor-wrap">
+          <div class="chatter-editor" id="chatterEditor" contenteditable="true" data-placeholder="Share an update..."
+            oninput="handleChatterEditorInput(event)" onkeyup="handleChatterEditorInput(event)"></div>
+          <div class="chatter-mention-menu" id="chatterMentionMenu"></div>
+        </div>
+        <div class="chatter-format-row">
+          <button title="Bold" onclick="formatChatterEditor('bold')"><strong>B</strong></button>
+          <button title="Italic" onclick="formatChatterEditor('italic')"><em>I</em></button>
+          <button title="Underline" onclick="formatChatterEditor('underline')"><u>U</u></button>
+          <button title="Link" onclick="createChatterLink()">${utilityIconSvg('link')}</button>
+          <button title="Mention User" onclick="openChatterMentionSearch()">${utilityIconSvg('user')}</button>
+        </div>
+        <div class="chatter-publisher-foot">
+          <span>To this ${escapeHtml(objectName.toLowerCase())}</span>
+          <button class="btn btn-primary" id="chatterShareBtn" onclick="submitChatterPost()">Share</button>
+        </div>
+      </div>
+      <div id="chatterPollComposer" style="display:none">
+        <label class="form-label" for="chatterPollQuestion">Question</label>
+        <textarea class="form-ctrl chatter-poll-question" id="chatterPollQuestion" placeholder="What would you like to ask?"></textarea>
+        <label class="form-label" for="chatterPollChoice1">Choice 1</label>
+        <input class="form-ctrl" id="chatterPollChoice1">
+        <label class="form-label" for="chatterPollChoice2">Choice 2</label>
+        <input class="form-ctrl" id="chatterPollChoice2">
+        <div id="chatterExtraChoices"></div>
+        <div class="chatter-publisher-foot">
+          <button class="btn btn-primary" onclick="addChatterPollChoice()">Add new choice</button>
+          <button class="btn btn-primary" id="chatterAskBtn" onclick="submitChatterPoll()">Ask</button>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function setChatterComposerTab(tab) {
+  chatterState.activeTab = tab;
+  $('chatterPostTab')?.classList.toggle('active', tab === 'post');
+  $('chatterPollTab')?.classList.toggle('active', tab === 'poll');
+  if ($('chatterPostComposer')) $('chatterPostComposer').style.display = tab === 'post' ? 'block' : 'none';
+  if ($('chatterPollComposer')) $('chatterPollComposer').style.display = tab === 'poll' ? 'block' : 'none';
+}
+
+async function loadChatterFeed(force = false) {
+  if (!detailRecordState?.id) return;
+  const feed = $('chatterFeed');
+  if (!feed) return;
+  chatterState.loadedFor = detailRecordState.id;
+  feed.innerHTML = '<div class="activity-empty"><p>Loading Chatter...</p></div>';
+  try {
+    const data = await api(`/api/${detailRecordState.objectName}/${detailRecordState.id}/chatter`);
+    chatterState.items = data.items || [];
+    renderChatterFeedItems();
+  } catch (err) {
+    feed.innerHTML = `<div class="error-state compact"><p>${escapeHtml(err.message)}</p></div>`;
+  }
+}
+
+function renderChatterFeedItems() {
+  const feed = $('chatterFeed');
+  if (!feed) return;
+  const search = String($('chatterSearch')?.value || '').toLowerCase();
+  const items = (chatterState.items || []).filter((item) => !search || `${item.text} ${item.actor?.name}`.toLowerCase().includes(search));
+  feed.innerHTML = items.map(renderChatterItem).join('') || '<div class="activity-empty"><p>No Chatter posts to show.</p></div>';
+}
+
+function renderChatterItem(item) {
+  return `
+    <article class="chatter-item">
+      <div class="chatter-item-main">
+        <div class="chatter-avatar">${escapeHtml((item.actor?.name || 'U').slice(0, 1).toUpperCase())}</div>
+        <div class="chatter-body">
+          <div class="chatter-meta">
+            <button class="cell-button-link">${escapeHtml(item.actor?.name || 'Salesforce User')}</button>
+            <span>${escapeHtml(item.relativeCreatedDate || formatActivityTime(item.createdDate))}</span>
+          </div>
+          <div class="chatter-text">${renderChatterSegments(item.segments)}</div>
+          ${item.poll ? renderChatterPoll(item) : ''}
+        </div>
+      </div>
+      <div class="chatter-actions">
+        <button onclick="likeChatterItem('${escapeJs(item.id)}')">${utilityIconSvg('like')} Like${item.likeCount ? ` (${item.likeCount})` : ''}</button>
+        <button onclick="$('chatterComment-${escapeJs(item.id)}')?.focus()">${utilityIconSvg('comment')} Comment${item.commentCount ? ` (${item.commentCount})` : ''}</button>
+      </div>
+      <div class="chatter-comments">
+        ${(item.comments || []).slice(0, 3).map((comment) => `
+          <div class="chatter-comment">
+            <strong>${escapeHtml(comment.actor?.name || 'User')}</strong>
+            <span>${renderChatterSegments(comment.segments)}</span>
+          </div>
+        `).join('')}
+        <div class="chatter-comment-box">
+          <div class="chatter-avatar small">${escapeHtml((currentUser?.name || 'U').slice(0, 1).toUpperCase())}</div>
+          <input id="chatterComment-${escapeHtml(item.id)}" placeholder="Write a comment..." onkeydown="submitChatterComment(event, '${escapeJs(item.id)}')">
+        </div>
+      </div>
+    </article>
+  `;
+}
+
+function renderChatterSegments(segments = []) {
+  return (segments.length ? segments : [{ type: 'Text', text: '' }]).map((segment) => {
+    if (segment.type === 'Mention') return `<button class="cell-button-link">@${escapeHtml(segment.name || segment.text || 'User')}</button>`;
+    if (segment.url) return `<a class="cell-email" href="${escapeHtml(segment.url)}" target="_blank" rel="noreferrer">${escapeHtml(segment.text || segment.url)}</a>`;
+    return escapeHtml(segment.text || '');
+  }).join('');
+}
+
+function renderChatterPoll(item) {
+  const choices = item.poll?.choices || [];
+  const myChoiceId = item.poll?.myChoiceId || '';
+  const showResults = item.poll?.showResults || (myChoiceId && !item.poll?.changingVote);
+  if (showResults) return renderChatterPollResults(item, choices, myChoiceId);
+  return `
+    <div class="chatter-poll">
+      ${choices.map((choice) => `
+        <label>
+          <input type="radio" name="poll-${escapeHtml(item.id)}" value="${escapeHtml(choice.id || choice.text)}" data-choice-id="${escapeHtml(choice.id || '')}" ${choice.id && choice.id === myChoiceId ? 'checked' : ''}>
+          <span>${escapeHtml(choice.text || choice.label || '')}</span>
+        </label>
+      `).join('')}
+      <div class="chatter-poll-actions">
+        <button class="btn btn-primary" onclick="voteChatterPoll('${escapeJs(item.id)}')">Vote</button>
+        <button class="cell-button-link" type="button" onclick="viewChatterPollResults('${escapeJs(item.id)}')">View results</button>
+      </div>
+    </div>
+  `;
+}
+
+function renderChatterPollResults(item, choices = [], myChoiceId = '') {
+  const totalVotes = choices.reduce((sum, choice) => sum + Number(choice.voteCount || 0), 0);
+  return `
+    <div class="chatter-poll chatter-poll-results">
+      ${choices.map((choice) => {
+        const votes = Number(choice.voteCount || 0);
+        const percent = totalVotes ? Math.round((votes / totalVotes) * 100) : 0;
+        const selected = choice.id && choice.id === myChoiceId;
+        return `
+          <div class="chatter-poll-result${selected ? ' selected' : ''}">
+            <div class="chatter-poll-result-head">
+              <span>${escapeHtml(choice.text || choice.label || '')} (${votes})</span>
+              <span>${percent}%</span>
+            </div>
+            <div class="chatter-poll-bar" aria-hidden="true">
+              <span style="width:${percent}%"></span>
+            </div>
+          </div>
+        `;
+      }).join('')}
+      <div class="chatter-poll-actions">
+        <button class="btn btn-primary" onclick="changeChatterPollVote('${escapeJs(item.id)}')">Change vote</button>
+        <button class="cell-button-link" type="button" onclick="loadChatterFeed(true)">Refresh</button>
+      </div>
+    </div>
+  `;
+}
+
+function viewChatterPollResults(feedElementId) {
+  const item = (chatterState.items || []).find((entry) => entry.id === feedElementId);
+  if (item?.poll) {
+    item.poll.showResults = true;
+    item.poll.changingVote = false;
+  }
+  renderChatterFeedItems();
+}
+
+function changeChatterPollVote(feedElementId) {
+  const item = (chatterState.items || []).find((entry) => entry.id === feedElementId);
+  if (item?.poll) {
+    item.poll.showResults = false;
+    item.poll.changingVote = true;
+  }
+  renderChatterFeedItems();
+}
+
+function formatChatterEditor(command) {
+  $('chatterEditor')?.focus();
+  document.execCommand(command);
+}
+
+function createChatterLink() {
+  const url = prompt('Enter link URL');
+  if (!url) return;
+  const editor = $('chatterEditor');
+  editor?.focus();
+  const selection = window.getSelection();
+  if (selection && !selection.isCollapsed) {
+    document.execCommand('createLink', false, url);
+    return;
+  }
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.textContent = url;
+  anchor.target = '_blank';
+  anchor.rel = 'noreferrer';
+  const range = selection?.rangeCount ? selection.getRangeAt(0) : null;
+  if (range) {
+    range.insertNode(document.createTextNode(' '));
+    range.insertNode(anchor);
+    range.collapse(false);
+  } else {
+    editor?.append(anchor, document.createTextNode(' '));
+  }
+}
+
+function collectChatterSegments(root = $('chatterEditor')) {
+  const segments = [];
+  function walk(node) {
+    if (node.nodeType === Node.TEXT_NODE) {
+      if (node.textContent) segments.push({ type: 'Text', text: node.textContent });
+      return;
+    }
+    if (node.nodeType !== Node.ELEMENT_NODE) return;
+    if (node.dataset?.mentionId) {
+      segments.push({ type: 'Mention', id: node.dataset.mentionId, name: node.textContent.replace(/^@/, '') });
+      return;
+    }
+    if (node.tagName === 'BR') {
+      segments.push({ type: 'Text', text: '\n' });
+      return;
+    }
+    if (node.tagName === 'A') {
+      segments.push({ type: 'Link', text: node.textContent, url: node.href });
+      return;
+    }
+    node.childNodes.forEach(walk);
+  }
+  root?.childNodes.forEach(walk);
+  return mergeTextSegments(segments).filter((segment) => segment.type !== 'Text' || segment.text.trim());
+}
+
+function mergeTextSegments(segments) {
+  return segments.reduce((acc, segment) => {
+    const last = acc[acc.length - 1];
+    if (last?.type === 'Text' && segment.type === 'Text') last.text += segment.text;
+    else acc.push(segment);
+    return acc;
+  }, []);
+}
+
+async function submitChatterPost() {
+  const segments = collectChatterSegments();
+  if (!segments.length) return toast('Write a post first', 'info');
+  await saveChatter({ type: 'post', segments }, 'chatterShareBtn');
+  $('chatterEditor').innerHTML = '';
+}
+
+function addChatterPollChoice() {
+  const wrap = $('chatterExtraChoices');
+  const count = wrap.querySelectorAll('input').length + 3;
+  wrap.insertAdjacentHTML('beforeend', `
+    <label class="form-label" for="chatterPollChoice${count}">Choice ${count}</label>
+    <input class="form-ctrl" id="chatterPollChoice${count}">
+  `);
+}
+
+async function submitChatterPoll() {
+  const question = $('chatterPollQuestion')?.value.trim();
+  const choices = [...document.querySelectorAll('[id^="chatterPollChoice"]')]
+    .map((input) => input.value.trim())
+    .filter(Boolean);
+  if (!question || choices.length < 2) return toast('Add a question and at least two choices', 'info');
+  await saveChatter({ type: 'poll', segments: [{ type: 'Text', text: question }], choices }, 'chatterAskBtn');
+  $('chatterPollQuestion').value = '';
+  document.querySelectorAll('[id^="chatterPollChoice"]').forEach((input) => { input.value = ''; });
+  $('chatterExtraChoices').innerHTML = '';
+}
+
+async function saveChatter(payload, buttonId) {
+  if (!detailRecordState?.id) return;
+  const btn = $(buttonId);
+  try {
+    if (btn) btn.disabled = true;
+    await api(`/api/${detailRecordState.objectName}/${detailRecordState.id}/chatter`, {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    });
+    await loadChatterFeed(true);
+    toast('Chatter updated', 'ok');
+  } catch (err) {
+    toast(err.message, 'err');
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+async function submitChatterComment(event, feedElementId) {
+  if (event.key !== 'Enter' || !event.target.value.trim()) return;
+  event.preventDefault();
+  try {
+    await api(`/api/chatter/feed-elements/${feedElementId}/comments`, {
+      method: 'POST',
+      body: JSON.stringify({ text: event.target.value.trim() })
+    });
+    event.target.value = '';
+    await loadChatterFeed(true);
+  } catch (err) {
+    toast(err.message, 'err');
+  }
+}
+
+async function likeChatterItem(feedElementId) {
+  try {
+    await api(`/api/chatter/feed-elements/${feedElementId}/likes`, { method: 'POST', body: JSON.stringify({}) });
+    await loadChatterFeed(true);
+  } catch (err) {
+    toast(err.message, 'err');
+  }
+}
+
+async function voteChatterPoll(feedElementId) {
+  const selected = document.querySelector(`input[name="poll-${CSS.escape(feedElementId)}"]:checked`);
+  if (!selected) return toast('Select a poll choice first', 'info');
+  const choiceId = selected.dataset.choiceId || selected.value;
+  try {
+    await api(`/api/chatter/feed-elements/${feedElementId}/poll-vote`, {
+      method: 'POST',
+      body: JSON.stringify({ choiceId })
+    });
+    await loadChatterFeed(true);
+  } catch (err) {
+    toast(err.message, 'err');
+  }
+}
+
+function handleChatterEditorInput() {
+  const selection = window.getSelection();
+  const text = selection?.anchorNode?.textContent || '';
+  const beforeCaret = text.slice(0, selection?.anchorOffset || 0);
+  const match = beforeCaret.match(/@([\w .-]{1,40})$/);
+  if (!match) return closeChatterMentionMenu();
+  searchChatterMentions(match[1]);
+}
+
+function openChatterMentionSearch() {
+  $('chatterEditor')?.focus();
+  searchChatterMentions('');
+}
+
+async function searchChatterMentions(term) {
+  const menu = $('chatterMentionMenu');
+  if (!menu) return;
+  try {
+    const data = await api(`/api/lookup/User?search=${encodeURIComponent(term || '')}`);
+    menu.innerHTML = (data.records || []).slice(0, 6).map((user) => `
+      <button type="button" onclick="insertChatterMention('${escapeJs(user.Id)}', '${escapeJs(user.Name || user.Username || 'User')}')">
+        <span>${escapeHtml(user.Name || user.Username || 'User')}</span>
+        <small>${escapeHtml(user.Email || user.Username || '')}</small>
+      </button>
+    `).join('') || '<div class="lookup-empty">No users found</div>';
+    menu.classList.add('open');
+  } catch {
+    closeChatterMentionMenu();
+  }
+}
+
+function insertChatterMention(id, name) {
+  const editor = $('chatterEditor');
+  if (!editor) return;
+  editor.focus();
+  const selection = window.getSelection();
+  if (selection?.anchorNode?.nodeType === Node.TEXT_NODE) {
+    const node = selection.anchorNode;
+    const offset = selection.anchorOffset || 0;
+    const before = node.textContent.slice(0, offset);
+    const after = node.textContent.slice(offset);
+    const match = before.match(/@([\w .-]{0,40})$/);
+    if (match) {
+      node.textContent = `${before.slice(0, match.index)}${after}`;
+      const range = document.createRange();
+      range.setStart(node, before.slice(0, match.index).length);
+      range.collapse(true);
+      selection.removeAllRanges();
+      selection.addRange(range);
+    }
+  }
+  const mention = document.createElement('span');
+  mention.className = 'chatter-mention';
+  mention.dataset.mentionId = id;
+  mention.contentEditable = 'false';
+  mention.textContent = `@${name}`;
+  const range = selection?.rangeCount ? selection.getRangeAt(0) : null;
+  if (range) {
+    range.deleteContents();
+    range.insertNode(document.createTextNode(' '));
+    range.insertNode(mention);
+    range.collapse(false);
+  } else {
+    editor.append(mention, document.createTextNode(' '));
+  }
+  closeChatterMentionMenu();
+}
+
+function closeChatterMentionMenu() {
+  $('chatterMentionMenu')?.classList.remove('open');
 }
 
 function showRecordTab(name) {
@@ -1866,9 +2426,9 @@ function closeDetailModal() {
   $('detailEditBtn').style.display = 'inline-flex';
 }
 
-function renderCampaignMembersShell() {
+function renderCampaignMembersShell(noMargin = false) {
   return `
-    <div class="related-panel">
+    <div class="related-panel ${noMargin ? 'no-margin' : ''}">
       <div class="related-head">
         <div>
           <h3>Campaign Members</h3>
@@ -2856,10 +3416,18 @@ function renderRecordActivity(warnings = []) {
 function renderActivityToolbar() {
   return `
     <div class="activity-actions">
-      <button class="activity-action activity-action-task" title="New Task" onclick="openActivityModal('task')">${utilityIconSvg('task')}<span>New Task</span></button>
-      <button class="activity-action activity-action-call" title="Log a Call" onclick="openActivityModal('call')">${utilityIconSvg('call')}<span>Log a Call</span></button>
-      <button class="activity-action activity-action-event" title="New Event" onclick="openActivityModal('event')">${utilityIconSvg('event')}<span>New Event</span></button>
-      <button class="activity-action activity-action-email" title="Email" onclick="openActivityModal('email')">${utilityIconSvg('email')}<span>Email</span></button>
+      <div class="activity-action-group activity-action-task" title="New Task">
+        <button class="activity-action" aria-label="New Task" onclick="openActivityModal('task')">${utilityIconSvg('task')}</button>
+      </div>
+      <div class="activity-action-group activity-action-call" title="Log a Call">
+        <button class="activity-action" aria-label="Log a Call" onclick="openActivityModal('call')">${utilityIconSvg('call')}</button>
+      </div>
+      <div class="activity-action-group activity-action-event" title="New Event">
+        <button class="activity-action" aria-label="New Event" onclick="openActivityModal('event')">${utilityIconSvg('event')}</button>
+      </div>
+      <div class="activity-action-group activity-action-email" title="Email">
+        <button class="activity-action" aria-label="Email" onclick="openActivityModal('email')">${utilityIconSvg('email')}</button>
+      </div>
     </div>
     <div class="activity-filter">
       <span>Filters: All time &bull; All activities &bull; All types</span>
