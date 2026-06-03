@@ -152,6 +152,8 @@ let activityLookupState = {};
 let emailComposerState = {};
 let orgSettings = { activeOrgKey: 'default', orgs: [] };
 let chatterState = { activeTab: 'post', loadedFor: '', mentions: [] };
+let modalObject = null;
+let modalPresetValues = {};
 
 const $ = (id) => document.getElementById(id);
 
@@ -194,16 +196,30 @@ function objectLocalViews() {
 
 function objectIcon(objectName) {
   const key = OBJECT_META[objectName]?.icon || String(objectName).toLowerCase();
-  return `<span class="object-icon object-icon-${key}" aria-hidden="true">${standardIconSvg(key)}</span>`;
+  return `<span class="object-icon object-icon-${key}" aria-hidden="true">${standardIconImage(key)}</span>`;
+}
+
+function standardIconImage(key) {
+  const images = {
+    account: 'account_120.png',
+    contact: 'contact_120.png',
+    opportunity: 'new_opportunity_120.png',
+    case: 'case_120.png',
+    lead: 'lead_120.png',
+    campaign: 'campaign_120.png'
+  };
+  const file = images[key];
+  if (!file) return standardIconSvg(key);
+  return `<img src="/images/${file}" alt="" class="object-icon-img" loading="lazy">`;
 }
 
 function standardIconSvg(key) {
   const icons = {
-    account: '<svg viewBox="0 0 24 24"><path d="M4 20V6l8-3 8 3v14h-5v-6H9v6H4zm3-2h2v-4H7v4zm0-6h2V9H7v3zm4 0h2V9h-2v3zm4 0h2V9h-2v3z"/></svg>',
-    contact: '<svg viewBox="0 0 24 24"><path d="M12 12a4 4 0 100-8 4 4 0 000 8zm-7 8a7 7 0 0114 0H5zm11-9.2a5.8 5.8 0 00-8 0 7.6 7.6 0 018 0z"/></svg>',
-    opportunity: '<svg viewBox="0 0 24 24"><path d="M8 3h8l2 4v5a6 6 0 11-12 0V7l2-4zm1.2 2L8 7h8l-1.2-2H9.2zM12 9a3 3 0 00-1 5.83V17h2v-2.17A3 3 0 0012 9zm0 1.6a1.4 1.4 0 110 2.8 1.4 1.4 0 010-2.8z"/></svg>',
-    case: '<svg viewBox="0 0 24 24"><path d="M9 5V3h6v2h4a2 2 0 012 2v11a2 2 0 01-2 2H5a2 2 0 01-2-2V7a2 2 0 012-2h4zm2 0h2V4h-2v1zm-6 5h14V7H5v3z"/></svg>',
-    lead: '<svg viewBox="0 0 24 24"><path d="M12 3l2.4 5 5.5.8-4 3.9.9 5.5-4.8-2.6-4.8 2.6.9-5.5-4-3.9 5.5-.8L12 3z"/></svg>',
+    account: '<svg viewBox="0 0 24 24"><path d="M5 20V8.2L12 5l7 3.2V20h-5v-5h-4v5H5zm2-2h2v-3H7v3zm0-5h2v-2H7v2zm4 0h2v-2h-2v2zm4 0h2v-2h-2v2zm0 5h2v-3h-2v3zM8.3 9h7.4L12 7.3 8.3 9z"/></svg>',
+    contact: '<svg viewBox="0 0 24 24"><path d="M12 12.2a3.9 3.9 0 100-7.8 3.9 3.9 0 000 7.8zM5 20a7 7 0 0114 0H5zm3.4-6.8a6.7 6.7 0 007.2 0 8.9 8.9 0 00-7.2 0z"/></svg>',
+    opportunity: '<svg viewBox="0 0 24 24"><path d="M5 8.3l3.3 2.2L12 5l3.7 5.5L19 8.3V16a3 3 0 01-3 3H8a3 3 0 01-3-3V8.3zm3 5.4V16a1 1 0 001 1h6a1 1 0 001-1v-2.3l-1.4.9-2.6-3.9-2.6 3.9L8 13.7zM7 7a2 2 0 110-4 2 2 0 010 4zm10 0a2 2 0 110-4 2 2 0 010 4zm-5-2a2 2 0 110-4 2 2 0 010 4z"/></svg>',
+    case: '<svg viewBox="0 0 24 24"><path d="M9 5V3h6v2h4a2 2 0 012 2v11a2 2 0 01-2 2H5a2 2 0 01-2-2V7a2 2 0 012-2h4zm2 0h2V4h-2v1zM5 10h14V7H5v3zm0 2v6h14v-6h-5v2h-4v-2H5z"/></svg>',
+    lead: '<svg viewBox="0 0 24 24"><path d="M12 3a3 3 0 110 6 3 3 0 010-6zM5 12a4 4 0 014-4h6a4 4 0 014 4v1h-4l-3 7-3-7H5v-1zm6.2 1l.8 2 .8-2h-1.6z"/></svg>',
     campaign: '<svg viewBox="0 0 24 24"><path d="M12 3a9 9 0 109 9 9 9 0 00-9-9zm0 3a6 6 0 11-6 6 6 6 0 016-6zm0 2.5a3.5 3.5 0 103.5 3.5A3.5 3.5 0 0012 8.5z"/></svg>',
     user: '<svg viewBox="0 0 24 24"><path d="M12 12a4 4 0 100-8 4 4 0 000 8zm-6 8a6 6 0 0112 0H6z"/></svg>'
   };
@@ -235,11 +251,30 @@ function utilityIconSvg(key) {
   return icons[key] || '';
 }
 
+function activityIconKey(type) {
+  const text = String(type || '').toLowerCase();
+  if (text.includes('event')) return 'event';
+  if (text.includes('call')) return 'call';
+  if (text.includes('email')) return 'email';
+  return 'task';
+}
+
+function activityIconImage(type) {
+  const key = activityIconKey(type);
+  const images = {
+    task: 'task_120.png',
+    call: 'log_a_call_120.png',
+    event: 'event_120.png',
+    email: 'email_120.png'
+  };
+  return `<img src="/images/${images[key]}" alt="" class="activity-icon-img" loading="lazy">`;
+}
+
 function refreshSidebarIcons() {
   document.querySelectorAll('.nav-item[data-obj]').forEach((item) => {
     const icon = item.querySelector('.nav-icon');
-    const meta = OBJECT_META[item.dataset.obj];
-    if (icon && meta) icon.innerHTML = standardIconSvg(meta.icon);
+    const objectName = item.dataset.obj;
+    if (icon && OBJECT_META[objectName]) icon.innerHTML = objectIcon(objectName);
   });
 }
 
@@ -331,7 +366,7 @@ async function checkConnection() {
   const text = status.querySelector('.conn-text');
   const authBtn = $('authBtn');
 
-  try {
+    try {
     const data = await api('/api/auth/test');
     if (data.org) {
       orgSettings.activeOrgKey = data.org.key || orgSettings.activeOrgKey;
@@ -1303,31 +1338,34 @@ function handleSearchKeydown(event) {
 
 function openCreate() {
   editingRecord = null;
-  openRecordModal(`New ${currentObject}`, {});
+  openRecordModal(`New ${currentObject}`, {}, null, currentObject);
 }
 
 function openEdit(id) {
   editingRecord = currentRecords.find((record) => record.Id === id);
-  openRecordModal(`Edit ${currentObject}`, editingRecord || {});
+  openRecordModal(`Edit ${currentObject}`, editingRecord || {}, null, currentObject);
 }
 
-async function openRecordModal(title, record, fields = null) {
-  const meta = OBJECT_META[currentObject];
-  $('modalObjIcon').innerHTML = objectIcon(currentObject);
+async function openRecordModal(title, record, fields = null, objectName = currentObject, options = {}) {
+  modalObject = objectName;
+  modalPresetValues = options.presetValues || {};
+  const meta = OBJECT_META[objectName];
+  $('modalObjIcon').innerHTML = objectIcon(objectName);
   $('modalTitle').textContent = title;
-  const fullFields = fields || await getEditableFields(record);
-  const sections = getLayoutSections(currentObject, fullFields);
+  const fullFields = fields || await getEditableFields(record, objectName);
+  const sections = getLayoutSections(objectName, fullFields);
   $('modalBody').innerHTML = sections.length
-    ? renderFormSections(sections, record)
-    : `<div class="form-grid">${fullFields.map((field) => renderFieldControl(field.name || field, record, field)).join('')}</div>`;
+    ? renderFormSections(sections, record, objectName)
+    : `<div class="form-grid">${fullFields.map((field) => renderFieldControl(field.name || field, record, field, objectName)).join('')}</div>`;
+  appendPresetHiddenFields();
   $('modalOverlay').classList.add('open');
   setupDependentPicklists(fullFields);
 }
 
-async function getEditableFields(record) {
+async function getEditableFields(record, objectName = currentObject) {
   try {
-    const data = await api(`/api/${currentObject}/fields`);
-    const layoutSections = getLayoutSections(currentObject, data.fields || []);
+    const data = await api(`/api/${objectName}/fields`);
+    const layoutSections = getLayoutSections(objectName, data.fields || []);
     if (layoutSections.length) return layoutSections.flatMap((section) => section.fields);
 
     const fields = data.fields
@@ -1335,9 +1373,9 @@ async function getEditableFields(record) {
       .filter((field) => !['Id', 'IsDeleted', 'CreatedDate', 'CreatedById', 'LastModifiedDate', 'LastModifiedById', 'SystemModstamp', 'LastViewedDate', 'LastReferencedDate'].includes(field.name))
       .filter((field) => field.type !== 'address')
       .slice(0, 80);
-    return fields.length ? fields : OBJECT_META[currentObject].editable.map((name) => ({ name, label: labelFor(name) }));
+    return fields.length ? fields : OBJECT_META[objectName].editable.map((name) => ({ name, label: labelFor(name) }));
   } catch (err) {
-    return OBJECT_META[currentObject].editable.map((name) => ({ name, label: labelFor(name) }));
+    return OBJECT_META[objectName].editable.map((name) => ({ name, label: labelFor(name) }));
   }
 }
 
@@ -1401,20 +1439,20 @@ function normalizeFieldKey(value = '') {
   return String(value).toLowerCase().replace(/[^a-z0-9]/g, '');
 }
 
-function renderFormSections(sections, record) {
+function renderFormSections(sections, record, objectName = currentObject) {
   return sections.map((section) => `
     <section class="form-section">
       <div class="form-section-title">${utilityIconSvg('chevronDown')}<span>${escapeHtml(section.title)}</span></div>
       <div class="form-grid">
-        ${section.fields.map((field) => renderFieldControl(field.name, record, field)).join('')}
+        ${section.fields.map((field) => renderFieldControl(field.name, record, field, objectName)).join('')}
       </div>
     </section>
   `).join('');
 }
 
-function renderFieldControl(field, record, fieldMeta = {}) {
+function renderFieldControl(field, record, fieldMeta = {}, objectName = currentObject) {
   fieldMeta = typeof fieldMeta === 'string' ? { name: field, label: labelFor(field) } : fieldMeta;
-  const lookup = OBJECT_META[currentObject].lookups?.[field] || (fieldMeta.referenceTo?.length ? { object: fieldMeta.referenceTo[0], label: fieldMeta.label || labelFor(field) } : null);
+  const lookup = OBJECT_META[objectName].lookups?.[field] || (fieldMeta.referenceTo?.length ? { object: fieldMeta.referenceTo[0], label: fieldMeta.label || labelFor(field) } : null);
   const label = fieldMeta.layoutLabel || fieldMeta.label || lookup?.label || labelFor(field);
   const type = fieldMeta.type || 'string';
   const value = record[field] ?? getDefaultFieldValue(field, fieldMeta, type);
@@ -1505,6 +1543,27 @@ function renderFieldControl(field, record, fieldMeta = {}) {
       <input class="form-ctrl" id="field-${field}" name="${field}" type="${inputType}" value="${escapeHtml(formatEditableValue(value, type))}" ${disabled}>
     </div>
   `;
+}
+
+function appendPresetHiddenFields() {
+  const entries = Object.entries(modalPresetValues || {})
+    .filter(([, value]) => {
+      if (value === null || value === undefined || value === '') return false;
+      return ['string', 'number', 'boolean'].includes(typeof value);
+    });
+  if (!entries.length) return;
+  const wrapper = document.createElement('div');
+  wrapper.hidden = true;
+  const existingNames = new Set([...$('modalBody').querySelectorAll('[name]')].map((input) => input.name));
+  entries.forEach(([field, value]) => {
+    if (existingNames.has(field)) return;
+    const input = document.createElement('input');
+    input.type = 'hidden';
+    input.name = field;
+    input.value = value;
+    wrapper.appendChild(input);
+  });
+  if (wrapper.children.length) $('modalBody').appendChild(wrapper);
 }
 
 function renderPicklistOptions(values = [], selected) {
@@ -1615,7 +1674,7 @@ function lookupSearch(field, objectName, value) {
       $(`field-${field}`).value = '';
       return;
     }
-    try {
+  try {
       const data = await api(`/api/lookup/${objectName}?search=${encodeURIComponent(value)}`);
       box.innerHTML = (data.records || []).map((record) => `
         <button type="button" class="lookup-item" onclick="selectLookup('${field}', '${record.Id}', '${encodeURIComponent(record.Name)}')">
@@ -1639,6 +1698,8 @@ function selectLookup(field, id, name) {
 
 function closeModal() {
   $('modalOverlay').classList.remove('open');
+  modalObject = null;
+  modalPresetValues = {};
 }
 
 async function openRecordDetail(objectName, id) {
@@ -1817,19 +1878,19 @@ function renderRelatedPanel(objectName) {
 function getRelatedListConfigs(objectName) {
   return {
     Account: [
-      { key: 'contacts', objectName: 'Contact', title: 'Contacts', fields: ['Name', 'Title', 'Email', 'Phone'] },
-      { key: 'opportunities', objectName: 'Opportunity', title: 'Opportunities', fields: ['Name', 'StageName', 'Amount', 'CloseDate'] },
-      { key: 'cases', objectName: 'Case', title: 'Cases', fields: ['CaseNumber', 'Subject', 'Status', 'Priority'] }
+      { key: 'contacts', objectName: 'Contact', title: 'Contacts', fields: ['Name', 'Title', 'Email', 'Phone'], parentLookup: 'AccountId' },
+      { key: 'opportunities', objectName: 'Opportunity', title: 'Opportunities', fields: ['Name', 'StageName', 'Amount', 'CloseDate'], parentLookup: 'AccountId' },
+      { key: 'cases', objectName: 'Case', title: 'Cases', fields: ['CaseNumber', 'Subject', 'Status', 'Priority'], parentLookup: 'AccountId' }
     ],
     Contact: [
-      { key: 'opportunities', objectName: 'Opportunity', title: 'Opportunities', fields: ['Name', 'StageName', 'Amount', 'CloseDate'] },
-      { key: 'cases', objectName: 'Case', title: 'Cases', fields: ['CaseNumber', 'Subject', 'Status', 'Priority'] }
+      { key: 'opportunities', objectName: 'Opportunity', title: 'Opportunities', fields: ['Name', 'StageName', 'Amount', 'CloseDate'], parentLookup: 'AccountId', sourceField: 'AccountId', sourceNameField: 'Account.Name' },
+      { key: 'cases', objectName: 'Case', title: 'Cases', fields: ['CaseNumber', 'Subject', 'Status', 'Priority'], parentLookup: 'ContactId' }
     ],
     Opportunity: [
-      { key: 'cases', objectName: 'Case', title: 'Cases', fields: ['CaseNumber', 'Subject', 'Status', 'Priority'] }
+      { key: 'cases', objectName: 'Case', title: 'Cases', fields: ['CaseNumber', 'Subject', 'Status', 'Priority'], parentLookup: 'AccountId', sourceField: 'AccountId', sourceNameField: 'Account.Name' }
     ],
     Campaign: [
-      { key: 'opportunities', objectName: 'Opportunity', title: 'Opportunities', fields: ['Name', 'StageName', 'Amount', 'CloseDate'] }
+      { key: 'opportunities', objectName: 'Opportunity', title: 'Opportunities', fields: ['Name', 'StageName', 'Amount', 'CloseDate'], parentLookup: 'CampaignId' }
     ]
   }[objectName] || [];
 }
@@ -1841,6 +1902,12 @@ function renderRelatedListShell(config, noMargin = false) {
         <div>
           <h3>${objectIcon(config.objectName)}<span id="relatedTitle-${escapeHtml(config.key)}">${escapeHtml(config.title)}</span></h3>
           <p>${escapeHtml(relatedListSubtitle(config.objectName))}</p>
+        </div>
+        <div class="related-actions">
+          <button class="btn btn-primary btn-related-new" onclick="openRelatedCreate('${escapeJs(config.key)}')">
+            <span aria-hidden="true">+</span>
+            New
+          </button>
         </div>
       </div>
       <div class="related-list-body" id="relatedList-${escapeHtml(config.key)}">
@@ -2355,7 +2422,8 @@ function editCurrentDetailRecord() {
   openRecordModal(
     `Edit ${detailRecordState.objectName}`,
     detailRecordState.record,
-    detailRecordState.fields
+    detailRecordState.fields,
+    detailRecordState.objectName
   );
 }
 
@@ -2662,6 +2730,33 @@ function defaultEmailRecipient() {
     label: currentActivityTargetLabel(),
     email: record.Email
   };
+}
+
+function openRelatedCreate(configKey) {
+  if (!detailRecordState) return;
+  const config = getRelatedListConfigs(detailRecordState.objectName).find((item) => item.key === configKey);
+  if (!config) return;
+
+  editingRecord = null;
+  detailLookupLabels = {};
+  const record = buildRelatedCreateRecord(config);
+  openRecordModal(`New ${config.objectName}`, record, null, config.objectName, { presetValues: record });
+}
+
+function buildRelatedCreateRecord(config) {
+  const parent = detailRecordState?.record || {};
+  const record = {};
+  const sourceField = config.sourceField || 'Id';
+  const sourceValue = sourceField === 'Id' ? detailRecordState.id : getValue(parent, sourceField);
+  if (!config.parentLookup || !sourceValue) return record;
+
+  record[config.parentLookup] = sourceValue;
+  const relationshipName = config.parentLookup.replace(/Id$/, '');
+  const sourceName = config.sourceNameField
+    ? getValue(parent, config.sourceNameField)
+    : parent.Name || parent.Subject || parent.CaseNumber || '';
+  if (sourceName) record[relationshipName] = { Name: sourceName };
+  return record;
 }
 
 function initializeEmailComposer() {
@@ -3140,7 +3235,7 @@ function ensureActivityModal() {
     <div class="modal activity-modal" onclick="event.stopPropagation()">
       <div class="modal-head activity-modal-head">
         <div class="modal-title-group">
-          <span class="activity-modal-icon" id="activityModalIcon">${utilityIconSvg('task')}</span>
+          <span class="activity-modal-icon activity-icon-task" id="activityModalIcon">${activityIconImage('task')}</span>
           <h2 id="activityModalTitle">New Activity</h2>
         </div>
         <button class="close-btn" onclick="closeActivityModal()">
@@ -3169,7 +3264,8 @@ function openActivityModal(type) {
   initializeActivityLookups();
   if (type === 'email') initializeEmailComposer();
   $('activityModalTitle').textContent = activityModalTitle(type);
-  $('activityModalIcon').innerHTML = utilityIconSvg(type === 'call' ? 'call' : type === 'event' ? 'event' : type === 'email' ? 'email' : 'task');
+  $('activityModalIcon').className = `activity-modal-icon ${activityIconClass(type)}`;
+  $('activityModalIcon').innerHTML = activityIconImage(type);
   $('activitySaveBtn').textContent = type === 'email' ? 'Send' : 'Save';
   $('activityModalBody').innerHTML = renderActivityForm(type);
   if (type === 'email') {
@@ -3417,16 +3513,16 @@ function renderActivityToolbar() {
   return `
     <div class="activity-actions">
       <div class="activity-action-group activity-action-task" title="New Task">
-        <button class="activity-action" aria-label="New Task" onclick="openActivityModal('task')">${utilityIconSvg('task')}</button>
+        <button class="activity-action" aria-label="New Task" onclick="openActivityModal('task')">${activityIconImage('task')}</button>
       </div>
       <div class="activity-action-group activity-action-call" title="Log a Call">
-        <button class="activity-action" aria-label="Log a Call" onclick="openActivityModal('call')">${utilityIconSvg('call')}</button>
+        <button class="activity-action" aria-label="Log a Call" onclick="openActivityModal('call')">${activityIconImage('call')}</button>
       </div>
       <div class="activity-action-group activity-action-event" title="New Event">
-        <button class="activity-action" aria-label="New Event" onclick="openActivityModal('event')">${utilityIconSvg('event')}</button>
+        <button class="activity-action" aria-label="New Event" onclick="openActivityModal('event')">${activityIconImage('event')}</button>
       </div>
       <div class="activity-action-group activity-action-email" title="Email">
-        <button class="activity-action" aria-label="Email" onclick="openActivityModal('email')">${utilityIconSvg('email')}</button>
+        <button class="activity-action" aria-label="Email" onclick="openActivityModal('email')">${activityIconImage('email')}</button>
       </div>
     </div>
     <div class="activity-filter">
@@ -3537,17 +3633,11 @@ function toggleActivitySection(button) {
 }
 
 function activityIconLabel(type) {
-  const text = String(type || '').toLowerCase();
-  const key = text.includes('event') ? 'event' : text.includes('call') ? 'call' : text.includes('email') ? 'email' : 'task';
-  return utilityIconSvg(key);
+  return activityIconImage(type);
 }
 
 function activityIconClass(type) {
-  const text = String(type || '').toLowerCase();
-  if (text.includes('event')) return 'activity-icon-event';
-  if (text.includes('call')) return 'activity-icon-call';
-  if (text.includes('email')) return 'activity-icon-email';
-  return 'activity-icon-task';
+  return `activity-icon-${activityIconKey(type)}`;
 }
 
 function formatActivityTime(value) {
@@ -3759,6 +3849,7 @@ async function sendCampaignEmail() {
 }
 
 async function saveRecord() {
+  const objectName = modalObject || currentObject;
   const body = {};
   $('modalBody').querySelectorAll('[name]').forEach((input) => {
     if (input.disabled || input.dataset.readonly === 'true') return;
@@ -3776,13 +3867,13 @@ async function saveRecord() {
   try {
     $('saveBtn').disabled = true;
     if (editingRecord) {
-      await api(`/api/${currentObject}/${editingRecord.Id}`, {
+      await api(`/api/${objectName}/${editingRecord.Id}`, {
         method: 'PATCH',
         body: JSON.stringify(body)
       });
       toast('Record updated', 'ok');
     } else {
-      await api(`/api/${currentObject}`, {
+      await api(`/api/${objectName}`, {
         method: 'POST',
         body: JSON.stringify(body)
       });

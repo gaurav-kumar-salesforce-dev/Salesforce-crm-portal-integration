@@ -103,17 +103,28 @@ body {
   flex-shrink: 0;
 }
 
+.brand-logo{
+    width:32px;
+    height:32px;
+    object-fit:contain;
+}
+
 .brand-icon {
   width: 36px; height: 36px;
   background: linear-gradient(135deg, #0176D3, #014486);
   border-radius: var(--r-md);
-  display: flex;
+  display: none;
   align-items: center;
   justify-content: center;
   box-shadow: 0 0 0 4px rgba(1,118,211,0.2);
   flex-shrink: 0;
 }
 
+.sidebar-logo{
+    width:60px;
+    height:auto;
+    object-fit:contain;
+}
 .brand-name {
   display: block;
   font-size: 14px;
@@ -196,6 +207,20 @@ body {
   width: 17px;
   height: 17px;
   fill: currentColor;
+}
+
+.nav-icon img {
+  width: 17px;
+  height: 17px;
+  object-fit: contain;
+  display: block;
+}
+
+.nav-icon .object-icon {
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+  box-shadow: none;
 }
 
 .nav-label {
@@ -553,12 +578,19 @@ body {
   fill: currentColor;
 }
 
+.object-icon-img {
+  width: 72%;
+  height: 72%;
+  object-fit: contain;
+  display: block;
+}
+
 .object-icon-account { background: #5867e8; }
 .object-icon-contact { background: #a094ed; }
-.object-icon-opportunity { background: #ffb75d; }
-.object-icon-case { background: #ff538a; }
-.object-icon-lead { background: #00a1df; }
-.object-icon-campaign { background: #8a3ffc; }
+.object-icon-opportunity { background: #ff5d2d; }
+.object-icon-case { background: #f2cf5b; }
+.object-icon-lead { background: #00a99d; }
+.object-icon-campaign { background: #a094ed; }
 .object-icon-user { background: #607d8b; }
 
 .page-title {
@@ -1826,15 +1858,26 @@ textarea.form-ctrl { resize: vertical; min-height: 80px; line-height: 1.5; }
   height: 20px;
 }
 
+.activity-action .activity-icon-img {
+  width: 28px;
+  height: 28px;
+  padding: 6px;
+  border-radius: var(--r-sm);
+  background: currentColor;
+  object-fit: contain;
+  display: block;
+  box-shadow: 0 6px 14px rgba(16, 24, 40, 0.14);
+}
+
 .activity-action-menu svg {
   width: 14px;
   height: 14px;
 }
 
-.activity-action-event { color: #8a3ffc; }
-.activity-action-task { color: #2e844a; }
-.activity-action-call { color: #0b827c; }
-.activity-action-email { color: #747474; }
+.activity-action-event { color: #b55cff; }
+.activity-action-task { color: #35b66f; }
+.activity-action-call { color: #18aaa6; }
+.activity-action-email { color: #8c8c8c; }
 
 .activity-settings {
   display: inline-flex;
@@ -1940,9 +1983,16 @@ textarea.form-ctrl { resize: vertical; min-height: 80px; line-height: 1.5; }
   z-index: 1;
 }
 
-.activity-icon-event { background: #8a3ffc; color: white; border-color: #8a3ffc; }
-.activity-icon-task { background: #2e844a; color: white; border-color: #2e844a; }
-.activity-icon-call { background: #0b827c; color: white; border-color: #0b827c; }
+.activity-icon-img {
+  width: 72%;
+  height: 72%;
+  object-fit: contain;
+  display: block;
+}
+
+.activity-icon-event { background: #b55cff; color: white; border-color: #b55cff; }
+.activity-icon-task { background: #35b66f; color: white; border-color: #35b66f; }
+.activity-icon-call { background: #18aaa6; color: white; border-color: #18aaa6; }
 .activity-icon-email { background: #8c8c8c; color: white; border-color: #8c8c8c; }
 
 .activity-content {
@@ -2427,6 +2477,18 @@ textarea.form-ctrl { resize: vertical; min-height: 80px; line-height: 1.5; }
 
 .related-actions { flex-wrap: wrap; justify-content: flex-end; }
 
+.btn-related-new {
+  min-height: 34px;
+  padding: 7px 13px;
+  box-shadow: 0 8px 18px rgba(11, 126, 208, 0.18);
+}
+
+.btn-related-new span {
+  font-size: 15px;
+  line-height: 1;
+  margin-top: -1px;
+}
+
 .member-modal-toolbar {
   justify-content: space-between;
   margin-bottom: 14px;
@@ -2554,17 +2616,25 @@ textarea.form-ctrl { resize: vertical; min-height: 80px; line-height: 1.5; }
 }
 
 .activity-modal-icon {
-  width: 20px;
-  height: 20px;
-  color: var(--text-2);
+  width: 32px;
+  height: 32px;
+  border-radius: var(--r-sm);
+  border: 1px solid transparent;
+  color: white;
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  flex-shrink: 0;
 }
 
 .activity-modal-icon svg {
   width: 16px;
   height: 16px;
+}
+
+.activity-modal-icon .activity-icon-img {
+  width: 72%;
+  height: 72%;
 }
 
 .activity-modal-body {
@@ -3398,6 +3468,20 @@ body {
 .sidebar-brand {
   padding: 18px 18px 16px;
   border-bottom-color: rgba(255, 255, 255, 0.09);
+  gap: 12px;
+  min-height: 74px;
+}
+
+.sidebar-logo {
+  width: 82px;
+  height: 38px;
+  padding: 6px 8px;
+  object-fit: contain;
+  background: rgba(255, 255, 255, 0.96);
+  border: 1px solid rgba(226, 236, 248, 0.5);
+  border-radius: 8px;
+  box-shadow: 0 10px 22px rgba(0, 0, 0, 0.18);
+  flex-shrink: 0;
 }
 
 .brand-icon {
@@ -3409,8 +3493,10 @@ body {
 }
 
 .brand-name {
-  font-size: 15px;
+  font-size: 15.5px;
   letter-spacing: 0;
+  line-height: 1.15;
+  white-space: nowrap;
 }
 
 .brand-sub {
@@ -3547,12 +3633,19 @@ body {
   height: 23px;
 }
 
-.object-icon-account { background: linear-gradient(135deg, #4f6bed, #2f55d4); }
-.object-icon-contact { background: linear-gradient(135deg, #14b8a6, #087c72); }
-.object-icon-opportunity { background: linear-gradient(135deg, #f59e0b, #d76b00); }
-.object-icon-case { background: linear-gradient(135deg, #ef476f, #bd1f4d); }
-.object-icon-lead { background: linear-gradient(135deg, #00a6df, #0277ad); }
-.object-icon-campaign { background: linear-gradient(135deg, #7c3aed, #2563eb); }
+.object-icon-img {
+  width: 72%;
+  height: 72%;
+  object-fit: contain;
+  display: block;
+}
+
+.object-icon-account { background: #5867e8; }
+.object-icon-contact { background: #a094ed; }
+.object-icon-opportunity { background: #ff5d2d; }
+.object-icon-case { background: #f2cf5b; }
+.object-icon-lead { background: #00a99d; }
+.object-icon-campaign { background: #a094ed; }
 .object-icon-user { background: linear-gradient(135deg, #64748b, #334155); }
 
 .page-title {
@@ -4072,6 +4165,12 @@ body.sidebar-collapsed .sidebar-brand {
   padding: 18px 12px 16px;
 }
 
+body.sidebar-collapsed .sidebar-logo {
+  width: 50px;
+  height: 42px;
+  padding: 6px;
+}
+
 body.sidebar-collapsed .brand-text,
 body.sidebar-collapsed .sidebar-section-label,
 body.sidebar-collapsed .nav-label,
@@ -4537,6 +4636,12 @@ body.sidebar-collapsed .content {
   body.sidebar-collapsed .sidebar-brand {
     justify-content: flex-start;
     padding: 18px 18px 16px;
+  }
+
+  body.sidebar-collapsed .sidebar-logo {
+    width: 82px;
+    height: 38px;
+    padding: 6px 8px;
   }
 
   body.sidebar-collapsed .brand-icon {
