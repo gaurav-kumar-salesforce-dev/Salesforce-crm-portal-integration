@@ -1178,15 +1178,18 @@ function normalizeActivity(record, source) {
     };
   }
 
+  const type = record.TaskSubtype || 'Task';
+  const isEmailTask = String(type).toLowerCase().includes('email');
   return {
     id: record.Id,
-    type: record.TaskSubtype || 'Task',
+    type,
     subject: record.Subject || 'Task',
     actor: record.Owner?.Name || '',
     target: record.Who?.Name || '',
     targetId: record.WhoId || '',
     targetObject: objectFromId(record.WhoId),
-    when: record.ActivityDate || record.CreatedDate,
+    when: isEmailTask ? record.CreatedDate || record.ActivityDate : record.ActivityDate || record.CreatedDate,
+    dueDate: record.ActivityDate || '',
     status: record.Status || '',
     isClosed: Boolean(record.IsClosed),
     body: record.Description || ''
@@ -1205,16 +1208,22 @@ function extractEmailRecipient(value = '') {
   return match ? match[1].trim().toLowerCase() : '';
 }
 
-function dedupeCampaignEmailActivities(records) {
+function emailAddressIdentity(value = '') {
+  const text = String(value || '').toLowerCase();
+  const match = text.match(/[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}/i);
+  return match ? match[0] : text.trim();
+}
+
+function dedupeEmailActivities(records) {
   const emailKeys = new Set(records
     .filter((record) => record.id?.startsWith('02s'))
-    .map((record) => `${normalizeEmailSubject(record.subject)}|${String(record.target || '').toLowerCase()}`));
+    .map((record) => `${normalizeEmailSubject(record.subject)}|${emailAddressIdentity(record.target)}`));
 
   if (!emailKeys.size) return records;
 
   return records.filter((record) => {
     if (!record.id?.startsWith('00T') || !String(record.type || '').toLowerCase().includes('email')) return true;
-    const key = `${normalizeEmailSubject(record.subject)}|${extractEmailRecipient(record.body)}`;
+    const key = `${normalizeEmailSubject(record.subject)}|${emailAddressIdentity(extractEmailRecipient(record.body))}`;
     return !emailKeys.has(key);
   });
 }
@@ -1936,7 +1945,7 @@ app.get('/api/:object/:id/activity', async (req, res) => {
       if (result.status !== 'fulfilled') return [];
       return (result.value.records || []).map((record) => normalizeActivity(record, queries[index].source));
     });
-    if (object === 'Campaign') records = dedupeCampaignEmailActivities(records);
+    records = dedupeEmailActivities(records);
 
     records.sort((a, b) => new Date(b.when || 0) - new Date(a.when || 0));
     res.json({
@@ -2140,7 +2149,6 @@ app.post('/api/:object/:id/activity', async (req, res) => {
         Array.isArray(req.body.attachments) ? req.body.attachments : [],
         attachmentParentId
       );
-      const attachmentNames = uploadedAttachments.map((file) => file.name);
       const relatedRecordId = req.body.whatId || (!recipientId || recipientId !== id ? id : '');
       const emailInput = {
         emailAddressesArray: toAddresses,
@@ -2163,24 +2171,7 @@ app.post('/api/:object/:id/activity', async (req, res) => {
       const failures = extractActionFailures(emailResult);
       if (failures.length) return res.status(400).json({ error: failures.join('; '), result: emailResult });
 
-      const taskResult = await createTaskActivity({
-        Subject: `Email: ${subject}`,
-        Status: 'Completed',
-        Priority: 'Normal',
-        ActivityDate: new Date().toISOString().slice(0, 10),
-        Description: [
-          `From: ${from.email || from.label || 'Current User'}`,
-          `To: ${toAddresses.join(', ')}`,
-          ccAddresses.length ? `Cc: ${ccAddresses.join(', ')}` : '',
-          bccAddresses.length ? `Bcc: ${bccAddresses.join(', ')}` : '',
-          attachmentNames.length ? `Attachments: ${attachmentNames.join(', ')}` : '',
-          '',
-          stripHtml(body)
-        ].filter((line) => line !== '').join('\n'),
-        ...owner,
-        ...relation
-      }, 'Email');
-      return res.json({ success: true, result: emailResult, taskResult });
+      return res.json({ success: true, result: emailResult });
     }
 
     res.status(400).json({ error: 'Activity type must be task, call, event, or email' });

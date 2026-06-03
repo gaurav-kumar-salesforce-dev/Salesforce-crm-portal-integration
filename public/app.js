@@ -3642,19 +3642,37 @@ function activityIconClass(type) {
 
 function formatActivityTime(value) {
   if (!value) return '';
+  if (isDateOnlyValue(value)) return formatActivityDateOnly(value);
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return '';
   return date.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
 }
 
 function formatActivityMonth(value) {
-  const date = value ? new Date(value) : new Date();
+  const date = isDateOnlyValue(value) ? dateFromDateOnly(value) : value ? new Date(value) : new Date();
   return date.toLocaleString(undefined, { month: 'long', year: 'numeric' });
+}
+
+function isDateOnlyValue(value) {
+  return /^\d{4}-\d{2}-\d{2}$/.test(String(value || ''));
+}
+
+function dateFromDateOnly(value) {
+  const [year, month, day] = String(value || '').split('-').map(Number);
+  return new Date(year, month - 1, day);
+}
+
+function formatActivityDateOnly(value) {
+  const date = dateFromDateOnly(value);
+  if (Number.isNaN(date.getTime())) return '';
+  return date.toLocaleString(undefined, { month: 'short', day: 'numeric' });
 }
 
 function isUpcomingActivity(item) {
   if (item.isClosed) return false;
-  const when = item.when ? new Date(item.when) : null;
+  const type = String(item.type || '').toLowerCase();
+  if (type.includes('task') || type.includes('call') || type.includes('event')) return true;
+  const when = isDateOnlyValue(item.when) ? dateFromDateOnly(item.when) : item.when ? new Date(item.when) : null;
   if (!when || Number.isNaN(when.getTime())) return false;
   return when.getTime() >= new Date().setHours(0, 0, 0, 0);
 }
