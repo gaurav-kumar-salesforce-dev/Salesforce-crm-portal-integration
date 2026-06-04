@@ -625,6 +625,21 @@ const OBJECTS = {
     orderBy     : 'CreatedDate DESC',
     searchFields: ['Name', 'Type', 'Status']
   },
+  Task: {
+    fields      : 'Id, Subject, Status, Priority, ActivityDate, TaskSubtype, WhoId, Who.Name, WhatId, What.Name, OwnerId, Owner.Name, Description, CreatedDate',
+    orderBy     : 'CreatedDate DESC',
+    searchFields: ['Subject', 'Status', 'Priority', 'Description']
+  },
+  Event: {
+    fields      : 'Id, Subject, StartDateTime, EndDateTime, IsAllDayEvent, Location, WhoId, Who.Name, WhatId, What.Name, OwnerId, Owner.Name, Description, CreatedDate',
+    orderBy     : 'StartDateTime DESC',
+    searchFields: ['Subject', 'Location', 'Description']
+  },
+  EmailMessage: {
+    fields      : 'Id, Subject, FromName, FromAddress, ToAddress, CcAddress, BccAddress, MessageDate, Status, RelatedToId, RelatedTo.Name, CreatedById, CreatedBy.Name, CreatedDate, TextBody',
+    orderBy     : 'MessageDate DESC',
+    searchFields: ['Subject', 'FromAddress', 'ToAddress']
+  },
   Pricebook2: {
     fields      : 'Id, Name, IsActive, Description',
     orderBy     : 'Name',
@@ -1099,6 +1114,9 @@ function objectFromId(id) {
     '500': 'Case',
     '00Q': 'Lead',
     '701': 'Campaign',
+    '00T': 'Task',
+    '00U': 'Event',
+    '02s': 'EmailMessage',
     '005': 'User'
   }[prefix] || '';
 }
@@ -1150,6 +1168,7 @@ function normalizeActivity(record, source) {
   if (source === 'EmailMessage') {
     return {
       id: record.Id,
+      objectName: 'EmailMessage',
       type: 'Email',
       subject: record.Subject || 'Email',
       actor: record.FromName || record.FromAddress || '',
@@ -1164,6 +1183,7 @@ function normalizeActivity(record, source) {
   if (source === 'Event') {
     return {
       id: record.Id,
+      objectName: 'Event',
       type: 'Event',
       subject: record.Subject || 'Event',
       actor: record.Owner?.Name || '',
@@ -1182,6 +1202,7 @@ function normalizeActivity(record, source) {
   const isEmailTask = String(type).toLowerCase().includes('email');
   return {
     id: record.Id,
+    objectName: 'Task',
     type,
     subject: record.Subject || 'Task',
     actor: record.Owner?.Name || '',

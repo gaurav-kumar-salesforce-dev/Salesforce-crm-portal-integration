@@ -38,6 +38,38 @@ const OBJECT_META = {
     columns: ['Name', 'Type', 'Status', 'StartDate', 'EndDate', 'IsActive', 'NumberOfContacts', 'NumberOfLeads'],
     editable: ['Name', 'Type', 'Status', 'StartDate', 'EndDate', 'IsActive', 'Description']
   },
+  Task: {
+    title: 'Tasks',
+    icon: 'task',
+    columns: ['Subject', 'Status', 'Priority', 'ActivityDate', 'Who.Name', 'What.Name'],
+    editable: ['Subject', 'Status', 'Priority', 'ActivityDate', 'WhoId', 'WhatId', 'Description'],
+    lookups: {
+      WhoId: { object: 'Contact', label: 'Name' },
+      WhatId: { object: 'Account', label: 'Related To' },
+      OwnerId: { object: 'User', label: 'Assigned To' }
+    }
+  },
+  Event: {
+    title: 'Events',
+    icon: 'event',
+    columns: ['Subject', 'StartDateTime', 'EndDateTime', 'Location', 'Who.Name', 'What.Name'],
+    editable: ['Subject', 'StartDateTime', 'EndDateTime', 'IsAllDayEvent', 'Location', 'WhoId', 'WhatId', 'Description'],
+    lookups: {
+      WhoId: { object: 'Contact', label: 'Name' },
+      WhatId: { object: 'Account', label: 'Related To' },
+      OwnerId: { object: 'User', label: 'Assigned To' }
+    }
+  },
+  EmailMessage: {
+    title: 'Email Messages',
+    icon: 'email',
+    columns: ['Subject', 'FromAddress', 'ToAddress', 'MessageDate', 'Status', 'RelatedTo.Name'],
+    editable: ['Subject', 'Status', 'RelatedToId'],
+    lookups: {
+      RelatedToId: { object: 'Account', label: 'Related To' },
+      CreatedById: { object: 'User', label: 'Created By' }
+    }
+  },
   User: {
     title: 'Users',
     icon: 'user',
@@ -110,6 +142,36 @@ const OBJECT_FIELD_LAYOUTS = {
       'BudgetedCost', 'ActualCost', 'ExpectedResponse', 'NumberSent', 'ParentId', 'Event',
       { name: 'CreatedById', readOnly: true }, { name: 'LastModifiedById', readOnly: true }, 'Description'
     ] }
+  ],
+  Task: [
+    { title: 'Task Information', fields: [
+      { name: 'OwnerId', readOnly: true }, 'Subject', 'ActivityDate', 'Status', 'Priority',
+      'WhoId', 'WhatId', 'Description'
+    ] },
+    { title: 'Additional Information', fields: [
+      'TaskSubtype', { name: 'CreatedDate', readOnly: true }, { name: 'CreatedById', readOnly: true },
+      { name: 'LastModifiedDate', readOnly: true }, { name: 'LastModifiedById', readOnly: true }
+    ] }
+  ],
+  Event: [
+    { title: 'Calendar Details', fields: [
+      { name: 'OwnerId', readOnly: true }, 'Subject', 'IsAllDayEvent', 'StartDateTime', 'EndDateTime',
+      'WhoId', 'WhatId', 'Location', 'Description'
+    ] },
+    { title: 'System Information', fields: [
+      { name: 'CreatedDate', readOnly: true }, { name: 'CreatedById', readOnly: true },
+      { name: 'LastModifiedDate', readOnly: true }, { name: 'LastModifiedById', readOnly: true }
+    ] }
+  ],
+  EmailMessage: [
+    { title: 'Information', fields: [
+      'RelatedToId', 'Status', 'MessageDate', { name: 'CreatedById', readOnly: true },
+      { name: 'CreatedDate', readOnly: true }
+    ] },
+    { title: 'Address Information', fields: [
+      'FromAddress', 'FromName', 'ToAddress', 'CcAddress', 'BccAddress'
+    ] },
+    { title: 'Message Content', fields: ['Subject', 'TextBody', 'HtmlBody'] }
   ]
 };
 
@@ -194,9 +256,18 @@ function objectLocalViews() {
   return getLocalViews()[currentObject] || [];
 }
 
-function objectIcon(objectName) {
-  const key = OBJECT_META[objectName]?.icon || String(objectName).toLowerCase();
+function objectIcon(objectName, record = null) {
+  const key = objectIconKey(objectName, record);
   return `<span class="object-icon object-icon-${key}" aria-hidden="true">${standardIconImage(key)}</span>`;
+}
+
+function objectIconKey(objectName, record = null) {
+  if (objectName === 'Task') {
+    const subtype = String(record?.TaskSubtype || record?.Subject || '').toLowerCase();
+    if (subtype.includes('call')) return 'call';
+    if (subtype.includes('email')) return 'email';
+  }
+  return OBJECT_META[objectName]?.icon || String(objectName).toLowerCase();
 }
 
 function standardIconImage(key) {
@@ -206,7 +277,11 @@ function standardIconImage(key) {
     opportunity: 'new_opportunity_120.png',
     case: 'case_120.png',
     lead: 'lead_120.png',
-    campaign: 'campaign_120.png'
+    campaign: 'campaign_120.png',
+    task: 'task_120.png',
+    event: 'event_120.png',
+    email: 'email_120.png',
+    call: 'log_a_call_120.png'
   };
   const file = images[key];
   if (!file) return standardIconSvg(key);
@@ -286,7 +361,11 @@ function objectFromId(id) {
     '006': 'Opportunity',
     '500': 'Case',
     '00Q': 'Lead',
-    '701': 'Campaign'
+    '701': 'Campaign',
+    '00T': 'Task',
+    '00U': 'Event',
+    '02s': 'EmailMessage',
+    '005': 'User'
   }[prefix] || currentObject;
 }
 
@@ -1753,7 +1832,7 @@ function renderRecordDetailPage(objectName, record, fields, displayFields, title
       <div class="record-hero">
         <div class="record-title-row">
           <div class="page-title-group">
-            <div class="page-icon">${objectIcon(objectName)}</div>
+            <div class="page-icon">${objectIcon(objectName, record)}</div>
             <div>
               <div class="record-kicker">${escapeHtml(objectName)}</div>
               <h1 class="page-title">${escapeHtml(title)}</h1>
@@ -3556,6 +3635,7 @@ function renderUpcomingSection(items) {
 
 function renderActivityItem(item) {
   const expanded = expandedActivityIds.has(item.id);
+  const activityObject = activityRecordObject(item);
   const target = item.targetId && item.targetObject && OBJECT_META[item.targetObject]
     ? `<button class="cell-button-link" onclick="openRecordDetail('${item.targetObject}', '${item.targetId}')">${escapeHtml(item.target)}</button>`
     : escapeHtml(item.target || '');
@@ -3573,7 +3653,7 @@ function renderActivityItem(item) {
       <div class="activity-icon ${activityIconClass(item.type)}">${activityIconLabel(item.type)}</div>
       <div class="activity-content">
         <div class="activity-title-row">
-          <button class="cell-button-link activity-title" onclick="toggleActivity('${item.id}')">${escapeHtml(item.subject || item.type)}</button>
+          <button class="cell-button-link activity-title" onclick="openActivityRecordDetail('${escapeJs(activityObject)}', '${escapeJs(item.id)}')">${escapeHtml(item.subject || item.type)}</button>
           <span>${escapeHtml(meta)}</span>
         </div>
         <div class="activity-meta">
@@ -3584,6 +3664,21 @@ function renderActivityItem(item) {
       <button class="activity-menu" aria-label="Activity actions">${utilityIconSvg('chevronDown')}</button>
     </div>
   `;
+}
+
+function activityRecordObject(item) {
+  if (item.objectName && OBJECT_META[item.objectName]) return item.objectName;
+  const fromId = objectFromId(item.id);
+  if (fromId && OBJECT_META[fromId]) return fromId;
+  const type = String(item.type || '').toLowerCase();
+  if (type.includes('email')) return 'EmailMessage';
+  if (type.includes('event')) return 'Event';
+  return 'Task';
+}
+
+function openActivityRecordDetail(objectName, id) {
+  if (!id || !OBJECT_META[objectName]) return;
+  openRecordDetail(objectName, id);
 }
 
 function renderActivityDetails(item) {
