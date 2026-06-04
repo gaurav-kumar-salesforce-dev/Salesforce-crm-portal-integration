@@ -591,6 +591,10 @@ body {
 .object-icon-case { background: #f2cf5b; }
 .object-icon-lead { background: #00a99d; }
 .object-icon-campaign { background: #a094ed; }
+.object-icon-task { background: #35b66f; }
+.object-icon-call { background: #18aaa6; }
+.object-icon-event { background: #b55cff; }
+.object-icon-email { background: #8c8c8c; }
 .object-icon-user { background: #607d8b; }
 
 .page-title {
@@ -3646,6 +3650,10 @@ body {
 .object-icon-case { background: #f2cf5b; }
 .object-icon-lead { background: #00a99d; }
 .object-icon-campaign { background: #a094ed; }
+.object-icon-task { background: #35b66f; }
+.object-icon-call { background: #18aaa6; }
+.object-icon-event { background: #b55cff; }
+.object-icon-email { background: #8c8c8c; }
 .object-icon-user { background: linear-gradient(135deg, #64748b, #334155); }
 
 .page-title {
