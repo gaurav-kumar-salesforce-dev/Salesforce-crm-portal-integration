@@ -5,10 +5,56 @@ const path    = require('path');
 const fs      = require('fs');
 const crypto  = require('crypto');
 
+const bcrypt = require('bcrypt');
+const jwt    = require('jsonwebtoken');
+const { supabase, getUserWithPermissions, writeAuditLog } = require('./db');
+
+const JWT_SECRET     = process.env.JWT_SECRET;
+const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '8h';
+
 const app = express();
 app.set('trust proxy', true);
 app.use(express.json({ limit: process.env.JSON_BODY_LIMIT || '25mb' }));
 app.use(express.static(path.join(__dirname, 'public')));
+
+// Verifies JWT on every request. Attaches req.user = { id, email, role, name }
+function checkAuth(req, res, next) {
+  const header = req.headers.authorization || '';
+  const token  = header.startsWith('Bearer ') ? header.slice(7) : null;
+
+  if (!token) {
+    return res.status(401).json({ error: 'Login required', code: 'NO_TOKEN' });
+  }
+
+  if (!JWT_SECRET) {
+    console.error('JWT_SECRET is not set in .env');
+    return res.status(500).json({ error: 'Server misconfiguration' });
+  }
+
+  try {
+    req.user = jwt.verify(token, JWT_SECRET);
+    next();
+  } catch (err) {
+    const code = err.name === 'TokenExpiredError' ? 'TOKEN_EXPIRED' : 'TOKEN_INVALID';
+    return res.status(401).json({ error: 'Session expired. Please log in again.', code });
+  }
+}
+
+// Role gate — use AFTER checkAuth. Roles in order: super_admin > admin > manager > employee > readonly
+const ROLE_LEVELS = { super_admin: 5, admin: 4, manager: 3, employee: 2, readonly: 1 };
+
+function checkRole(minimumRole) {
+  return (req, res, next) => {
+    const userLevel = ROLE_LEVELS[req.user?.role] || 0;
+    const minLevel  = ROLE_LEVELS[minimumRole] || 0;
+    if (userLevel >= minLevel) return next();
+    return res.status(403).json({
+      error: `This action requires ${minimumRole} role or higher.`,
+      code: 'INSUFFICIENT_ROLE'
+    });
+  };
+}
+
 
 const PORT = process.env.PORT || 3000;
 
@@ -1406,8 +1452,479 @@ async function uploadEmailAttachments(files = [], parentId = '') {
   return uploaded;
 }
 
+
+// POST /api/auth/login
+// Body: { email, password }
+// Returns: { token, user: { id, email, name, role }, permissions: {...} }
+app.post('/api/auth/login', async (req, res) => {
+  const { email, password } = req.body || {};
+
+  if (!email || !password) {
+    return res.status(400).json({ error: 'Email and password are required' });
+  }
+
+  try {
+    // 1. Look up the user by email
+    const { data: user, error } = await supabase
+      .from('users')
+      .select('id, email, name, role, password_hash, is_active, must_change_pw')
+      .eq('email', email.toLowerCase().trim())
+      .single();
+
+    if (error || !user) {
+      // Generic message — don't reveal whether email exists
+      return res.status(401).json({ error: 'Invalid email or password' });
+    }
+
+    if (!user.is_active) {
+      return res.status(403).json({ error: 'Account is deactivated. Contact your administrator.' });
+    }
+
+    // 2. Compare password with bcrypt hash
+    const passwordOk = await bcrypt.compare(password, user.password_hash);
+    if (!passwordOk) {
+      // Log failed attempt
+      await writeAuditLog({
+        userId: user.id,
+        userEmail: user.email,
+        userRole: user.role,
+        action: 'failed_login',
+        ipAddress: req.ip
+      });
+      return res.status(401).json({ error: 'Invalid email or password' });
+    }
+
+    // 3. Load full permissions
+    const userData = await getUserWithPermissions(user.id);
+    if (!userData) {
+      return res.status(403).json({ error: 'Could not load user permissions' });
+    }
+
+    // 4. Sign JWT — embed role so middleware doesn't need DB on every request
+    const tokenPayload = {
+      id:    user.id,
+      email: user.email,
+      name:  user.name,
+      role:  user.role
+    };
+    const token = jwt.sign(tokenPayload, JWT_SECRET, { expiresIn: JWT_EXPIRES_IN });
+
+    // 5. Update last_login_at
+    await supabase
+      .from('users')
+      .update({ last_login_at: new Date().toISOString() })
+      .eq('id', user.id);
+
+    // 6. Log successful login
+    await writeAuditLog({
+      userId:    user.id,
+      userEmail: user.email,
+      userRole:  user.role,
+      action:    'login',
+      ipAddress: req.ip
+    });
+
+    res.json({
+      token,
+      mustChangePw: user.must_change_pw,
+      user: {
+        id:      userData.id,
+        email:   userData.email,
+        name:    userData.name,
+        role:    userData.role,
+        profile: userData.profile
+      },
+      permissions: userData.permissions   // { Account: {can_read, can_create, can_edit, can_delete}, ... }
+    });
+
+  } catch (err) {
+    console.error('Login error:', err.message);
+    res.status(500).json({ error: 'Login failed. Please try again.' });
+  }
+});
+
+
+// POST /api/auth/logout
+// Replaces your existing logout route — adds audit log
+// If you already have app.post('/api/auth/logout', ...) — REPLACE IT with this one.
+// Note: we keep the Salesforce token revocation logic that's already in your file.
+// Only the Supabase audit log line is new — add it to your existing logout handler:
+//   await writeAuditLog({ userId: req.user?.id, userEmail: req.user?.email, userRole: req.user?.role, action: 'logout', ipAddress: req.ip });
+
+
+// GET /api/portal/me
+// Returns current user + full permissions. Called after login and on page load.
+// Protected by JWT middleware.
+app.get('/api/portal/me', checkAuth, async (req, res) => {
+  try {
+    const userData = await getUserWithPermissions(req.user.id);
+    if (!userData) {
+      return res.status(404).json({ error: 'User not found or deactivated' });
+    }
+    res.json({
+      id:          userData.id,
+      email:       userData.email,
+      name:        userData.name,
+      role:        userData.role,
+      profile:     userData.profile,
+      permissions: userData.permissions,
+      lastLoginAt: userData.last_login_at
+    });
+  } catch (err) {
+    console.error('GET /api/portal/me error:', err.message);
+    res.status(500).json({ error: 'Could not load user profile' });
+  }
+});
+
+
+
+
+// POST /api/portal/users — create new portal user (admin+ only)
+app.post('/api/portal/users', checkAuth, checkRole('admin'), async (req, res) => {
+  const { email, name, password, role, profileId } = req.body || {};
+
+  if (!email || !name || !password) {
+    return res.status(400).json({ error: 'Email, name, and password are required' });
+  }
+
+  const validRoles = ['super_admin', 'admin', 'manager', 'employee', 'readonly'];
+  if (role && !validRoles.includes(role)) {
+    return res.status(400).json({ error: 'Invalid role' });
+  }
+
+  // Admins cannot create super_admin users
+  if (role === 'super_admin' && req.user.role !== 'super_admin') {
+    return res.status(403).json({ error: 'Only super admins can create super admin accounts' });
+  }
+
+  try {
+    const passwordHash = await bcrypt.hash(password, 12);
+
+    const { data: newUser, error } = await supabase
+      .from('users')
+      .insert({
+        email:         email.toLowerCase().trim(),
+        name:          name.trim(),
+        password_hash: passwordHash,
+        role:          role || 'employee',
+        is_active:     true,
+        must_change_pw: true,
+        created_by:    req.user.id
+      })
+      .select('id, email, name, role')
+      .single();
+
+    if (error) {
+      if (error.code === '23505') {
+        return res.status(409).json({ error: 'A user with this email already exists' });
+      }
+      throw error;
+    }
+
+    // Assign profile if provided
+    if (profileId) {
+      await supabase
+        .from('user_profile_assignments')
+        .insert({ user_id: newUser.id, profile_id: profileId, assigned_by: req.user.id });
+    }
+
+    await writeAuditLog({
+      userId:    req.user.id,
+      userEmail: req.user.email,
+      userRole:  req.user.role,
+      action:    'create_user',
+      payload:   { createdUserId: newUser.id, email: newUser.email, role: newUser.role },
+      ipAddress: req.ip
+    });
+
+    res.status(201).json({ success: true, user: newUser });
+  } catch (err) {
+    console.error('POST /api/portal/users error:', err.message);
+    res.status(500).json({ error: 'Could not create user' });
+  }
+});
+
+
+// PATCH /api/portal/users/:id — update user (admin+ only)
+app.patch('/api/portal/users/:id', checkAuth, checkRole('admin'), async (req, res) => {
+  const { id } = req.params;
+  const { role, isActive, profileId, mustChangePw } = req.body || {};
+
+  // Admins cannot modify super_admin users (only super_admin can)
+  if (req.user.role !== 'super_admin') {
+    const { data: target } = await supabase
+      .from('users')
+      .select('role')
+      .eq('id', id)
+      .single();
+    if (target?.role === 'super_admin') {
+      return res.status(403).json({ error: 'Only super admins can modify super admin accounts' });
+    }
+  }
+
+  try {
+    const updates = {};
+    if (role !== undefined) updates.role = role;
+    if (isActive !== undefined) updates.is_active = isActive;
+    if (mustChangePw !== undefined) updates.must_change_pw = mustChangePw;
+    updates.updated_at = new Date().toISOString();
+
+    // Handle optional password change on edit
+    if (req.body?.password) {
+      updates.password_hash = await bcrypt.hash(req.body.password, 12);
+      updates.must_change_pw = false;
+    }
+
+    if (Object.keys(updates).length > 1) {
+      // more than just updated_at
+      const { error } = await supabase
+        .from("users")
+        .update(updates)
+        .eq("id", id);
+      if (error) throw error;
+    }
+
+    // Update profile assignment if provided
+    if (profileId) {
+      await supabase
+        .from("user_profile_assignments")
+        .upsert(
+          {
+            user_id: id,
+            profile_id: profileId,
+            assigned_by: req.user.id,
+            assigned_at: new Date().toISOString(),
+          },
+          { onConflict: "user_id" },
+        );
+    }
+
+    // Sync permission sets if provided
+    if (Array.isArray(req.body?.permissionSetIds)) {
+      await supabase
+        .from("user_permission_set_assignments")
+        .delete()
+        .eq("user_id", id);
+      if (req.body.permissionSetIds.length) {
+        await supabase.from("user_permission_set_assignments").insert(
+          req.body.permissionSetIds.map((psId) => ({
+            user_id: id,
+            perm_set_id: psId,
+            assigned_by: req.user.id,
+          })),
+        );
+      }
+    }
+
+    await writeAuditLog({
+      userId: req.user.id,
+      userEmail: req.user.email,
+      userRole: req.user.role,
+      action: "update_user",
+      payload: { targetUserId: id, changes: updates },
+      ipAddress: req.ip,
+    });
+
+    res.json({ success: true });
+  } catch (err) {
+    console.error('PATCH /api/portal/users error:', err.message);
+    res.status(500).json({ error: 'Could not update user' });
+  }
+});
+
+
+// ── GET user's permission sets
+app.get('/api/portal/users/:id/permission-sets', checkAuth, checkRole('admin'), async (req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from('user_permission_set_assignments')
+      .select('perm_set_id, permission_sets(id, name, description)')
+      .eq('user_id', req.params.id);
+    if (error) throw error;
+    res.json({ permissionSets: (data||[]).map(r => r.permission_sets).filter(Boolean) });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+
+// ── POST /api/portal/profiles
+app.post('/api/portal/profiles', checkAuth, checkRole('admin'), async (req, res) => {
+  const { name, description, permissions = [] } = req.body || {};
+  if (!name) return res.status(400).json({ error: 'Profile name is required' });
+  try {
+    const { data: profile, error } = await supabase
+      .from('profiles')
+      .insert({ name: name.trim(), description: description?.trim() || null, created_by: req.user.id })
+      .select('id').single();
+    if (error) throw error;
+    if (permissions.length) {
+      await supabase.from('profile_object_permissions').insert(
+        permissions.map(p => ({ profile_id: profile.id, ...p }))
+      );
+    }
+    await writeAuditLog({ userId: req.user.id, userEmail: req.user.email, userRole: req.user.role, action: 'create_profile', payload: { name }, ipAddress: req.ip });
+    res.status(201).json({ success: true, id: profile.id });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// ── PATCH /api/portal/profiles/:id
+app.patch('/api/portal/profiles/:id', checkAuth, checkRole('admin'), async (req, res) => {
+  const { name, description, permissions = [] } = req.body || {};
+  try {
+    if (name) await supabase.from('profiles').update({ name, description: description || null }).eq('id', req.params.id);
+    if (permissions.length) {
+      await supabase.from('profile_object_permissions').delete().eq('profile_id', req.params.id);
+      await supabase.from('profile_object_permissions').insert(
+        permissions.map(p => ({ profile_id: req.params.id, ...p }))
+      );
+    }
+    await writeAuditLog({ userId: req.user.id, userEmail: req.user.email, userRole: req.user.role, action: 'update_profile', payload: { id: req.params.id, name }, ipAddress: req.ip });
+    res.json({ success: true });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// ── DELETE /api/portal/profiles/:id
+app.delete('/api/portal/profiles/:id', checkAuth, checkRole('admin'), async (req, res) => {
+  try {
+    const { count } = await supabase.from('user_profile_assignments').select('*', { count: 'exact', head: true }).eq('profile_id', req.params.id);
+    if (count > 0) return res.status(409).json({ error: 'Cannot delete a profile that is assigned to users' });
+    await supabase.from('profile_object_permissions').delete().eq('profile_id', req.params.id);
+    await supabase.from('profiles').delete().eq('id', req.params.id);
+    res.json({ success: true });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// ── POST /api/portal/permission-sets
+app.post('/api/portal/permission-sets', checkAuth, checkRole('admin'), async (req, res) => {
+  const { name, description, permissions = [] } = req.body || {};
+  if (!name) return res.status(400).json({ error: 'Name is required' });
+  try {
+    const { data: ps, error } = await supabase
+      .from('permission_sets')
+      .insert({ name: name.trim(), description: description?.trim() || null, created_by: req.user.id })
+      .select('id').single();
+    if (error) throw error;
+    if (permissions.length) {
+      await supabase.from('permission_set_object_perms').insert(
+        permissions.map(p => ({ perm_set_id: ps.id, ...p }))
+      );
+    }
+    await writeAuditLog({ userId: req.user.id, userEmail: req.user.email, userRole: req.user.role, action: 'create_perm_set', payload: { name }, ipAddress: req.ip });
+    res.status(201).json({ success: true, id: ps.id });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// ── PATCH /api/portal/permission-sets/:id
+app.patch('/api/portal/permission-sets/:id', checkAuth, checkRole('admin'), async (req, res) => {
+  const { name, description, permissions = [] } = req.body || {};
+  try {
+    if (name) await supabase.from('permission_sets').update({ name, description: description || null }).eq('id', req.params.id);
+    if (permissions.length) {
+      await supabase.from('permission_set_object_perms').delete().eq('perm_set_id', req.params.id);
+      await supabase.from('permission_set_object_perms').insert(
+        permissions.map(p => ({ perm_set_id: req.params.id, ...p }))
+      );
+    }
+    await writeAuditLog({ userId: req.user.id, userEmail: req.user.email, userRole: req.user.role, action: 'update_perm_set', payload: { id: req.params.id }, ipAddress: req.ip });
+    res.json({ success: true });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// ── DELETE /api/portal/permission-sets/:id
+app.delete('/api/portal/permission-sets/:id', checkAuth, checkRole('admin'), async (req, res) => {
+  try {
+    await supabase.from('user_permission_set_assignments').delete().eq('perm_set_id', req.params.id);
+    await supabase.from('permission_set_object_perms').delete().eq('perm_set_id', req.params.id);
+    await supabase.from('permission_sets').delete().eq('id', req.params.id);
+    res.json({ success: true });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// ── GET /api/portal/audit-log
+app.get('/api/portal/audit-log', checkAuth, checkRole('admin'), async (req, res) => {
+  try {
+    const limit = Math.min(parseInt(req.query.limit) || 100, 500);
+    const { data, error } = await supabase
+      .from('audit_log')
+      .select('id, created_at, user_email, user_role, action, sf_object, record_id, ip_address')
+      .order('created_at', { ascending: false })
+      .limit(limit);
+    if (error) throw error;
+    res.json({ logs: data || [] });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+
+// GET /api/portal/profiles — list all profiles (admin+ only)
+app.get('/api/portal/profiles', checkAuth, checkRole('admin'), async (req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from('profiles')
+      .select(`
+        id, name, description, is_active, created_at,
+        profile_object_permissions ( sf_object, can_read, can_create, can_edit, can_delete )
+      `)
+      .order('name');
+
+    if (error) throw error;
+    res.json({ profiles: data || [] });
+  } catch (err) {
+    console.error('GET /api/portal/profiles error:', err.message);
+    res.status(500).json({ error: 'Could not load profiles' });
+  }
+});
+
+
+// GET /api/portal/users — list all portal users (admin+ only)
+app.get('/api/portal/users', checkAuth, checkRole('admin'), async (req, res) => {
+  try {
+    const { data, error } = await supabase.rpc('get_portal_users');
+    if (error) throw error;
+
+    res.json({
+      users: (data || []).map(u => ({
+        id:           u.id,
+        email:        u.email,
+        name:         u.name,
+        role:         u.role,
+        isActive:     u.is_active,
+        mustChangePw: u.must_change_pw,
+        createdAt:    u.created_at,
+        lastLoginAt:  u.last_login_at,
+        profile:      u.profile_id ? { id: u.profile_id, name: u.profile_name } : null
+      }))
+    });
+  } catch (err) {
+    console.error('GET /api/portal/users error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/portal/permission-sets — list all permission sets (admin+ only)
+// THIS WAS MISSING — it was accidentally replaced by a duplicate users route
+app.get('/api/portal/permission-sets', checkAuth, checkRole('admin'), async (req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from('permission_sets')
+      .select(`
+        id,
+        name,
+        description,
+        is_active,
+        created_at,
+        permission_set_object_perms ( sf_object, can_read, can_create, can_edit, can_delete )
+      `)
+      .order('name');
+
+    if (error) throw error;
+    res.json({ permissionSets: data || [] });
+  } catch (err) {
+    console.error('GET /api/portal/permission-sets error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Auth test
-app.get('/api/auth/test', async (req, res) => {
+app.get('/api/auth/test', checkAuth, async (req, res) => {
   try {
     await getAccessToken();
     res.json({ success: true, instance: SF.instanceUrl, connectUrl: '/auth/salesforce', org: publicOrg(activeOrg()) });
@@ -1581,7 +2098,7 @@ app.post('/api/auth/logout', async (req, res) => {
   res.json({ success: true });
 });
 
-app.get('/api/me', async (req, res) => {
+app.get('/api/me', checkAuth, async (req, res) => {
   try {
     const data = await sfGet('/chatter/users/me');
     res.json({
@@ -1700,7 +2217,7 @@ app.get('/oauth/callback', async (req, res) => {
   }
 });
 
-app.get('/api/lookup/:object', async (req, res) => {
+app.get('/api/lookup/:object', checkAuth, async (req, res) => {
   const { object } = req.params;
   const search = String(req.query.search || '').trim().replace(/'/g, "\\'");
 
@@ -1734,7 +2251,7 @@ app.get('/api/lookup/:object', async (req, res) => {
   }
 });
 
-app.get('/api/:object/listviews', async (req, res) => {
+app.get('/api/:object/listviews', checkAuth, async (req, res) => {
   const { object } = req.params;
   if (!OBJECTS[object]) return res.status(400).json({ error: `Unknown object: ${object}` });
 
@@ -1783,7 +2300,7 @@ app.get('/api/debug/data-source', async (req, res) => {
   }
 });
 
-app.get('/api/:object/listviews/:id/results', async (req, res) => {
+app.get('/api/:object/listviews/:id/results', checkAuth, async (req, res) => {
   const { object, id } = req.params;
   if (!OBJECTS[object]) return res.status(400).json({ error: `Unknown object: ${object}` });
 
@@ -1814,7 +2331,7 @@ app.get('/api/:object/listviews/:id/results', async (req, res) => {
   }
 });
 
-app.get('/api/:object/fields', async (req, res) => {
+app.get('/api/:object/fields', checkAuth, async (req, res) => {
   const { object } = req.params;
   if (!OBJECTS[object]) return res.status(400).json({ error: `Unknown object: ${object}` });
 
@@ -1841,7 +2358,7 @@ app.get('/api/:object/fields', async (req, res) => {
 });
 
 // Global SOSL search
-app.get('/api/search/global', async (req, res) => {
+app.get('/api/search/global', checkAuth, async (req, res) => {
   const q = (req.query.q || '').trim();
   if (!q) return res.json({ searchRecords: [] });
 
@@ -1869,7 +2386,7 @@ app.get('/api/search/global', async (req, res) => {
 });
 
 // Get picklist values for a field (helper for dropdowns)
-app.get('/api/meta/:object/picklist/:field', async (req, res) => {
+app.get('/api/meta/:object/picklist/:field', checkAuth, async (req, res) => {
   const { object, field } = req.params;
   try {
     const data = await sfGet(`/sobjects/${object}/describe`);
@@ -1881,7 +2398,7 @@ app.get('/api/meta/:object/picklist/:field', async (req, res) => {
   }
 });
 
-app.get('/api/campaigns/:id/members', async (req, res) => {
+app.get('/api/campaigns/:id/members', checkAuth, async (req, res) => {
   const campaignId = escapeSOQL(req.params.id);
   try {
     const soql = `
@@ -1915,7 +2432,7 @@ app.delete('/api/campaigns/:id/members/:memberId', async (req, res) => {
   }
 });
 
-app.get('/api/:object/:id/activity', async (req, res) => {
+app.get('/api/:object/:id/activity', checkAuth, async (req, res) => {
   const { object, id } = req.params;
   if (!OBJECTS[object]) return res.status(400).json({ error: `Unknown object: ${object}` });
 
@@ -1981,7 +2498,7 @@ app.get('/api/:object/:id/activity', async (req, res) => {
   }
 });
 
-app.get('/api/:object/:id/related', async (req, res) => {
+app.get('/api/:object/:id/related', checkAuth, async (req, res) => {
   const { object, id } = req.params;
   if (!OBJECTS[object]) return res.status(400).json({ error: `Unknown object: ${object}` });
 
@@ -1993,7 +2510,7 @@ app.get('/api/:object/:id/related', async (req, res) => {
   }
 });
 
-app.get('/api/:object/:id/chatter', async (req, res) => {
+app.get('/api/:object/:id/chatter', checkAuth, async (req, res) => {
   const { object, id } = req.params;
   if (!OBJECTS[object]) return res.status(400).json({ error: `Unknown object: ${object}` });
 
@@ -2010,7 +2527,7 @@ app.get('/api/:object/:id/chatter', async (req, res) => {
   }
 });
 
-app.post('/api/:object/:id/chatter', async (req, res) => {
+app.post('/api/:object/:id/chatter', checkAuth, async (req, res) => {
   const { object, id } = req.params;
   if (!OBJECTS[object]) return res.status(400).json({ error: `Unknown object: ${object}` });
 
@@ -2085,7 +2602,7 @@ app.post('/api/chatter/feed-elements/:feedElementId/poll-vote', async (req, res)
   }
 });
 
-app.post('/api/:object/:id/activity', async (req, res) => {
+app.post('/api/:object/:id/activity', checkAuth, async (req, res) => {
   const { object, id } = req.params;
   if (!OBJECTS[object]) return res.status(400).json({ error: `Unknown object: ${object}` });
 
@@ -2488,8 +3005,9 @@ app.post('/api/bulk/:object/:operation', async (req, res) => {
 });
 
 // List records
-app.get('/api/:object', async (req, res) => {
+app.get('/api/:object',checkAuth, async (req, res) => {
   const { object } = req.params;
+  
   if (!OBJECTS[object]) return res.status(400).json({ error: `Unknown object: ${object}` });
 
   try {
@@ -2517,7 +3035,7 @@ app.get('/api/:object', async (req, res) => {
   }
 });
 
-app.get('/api/:object/:id', async (req, res) => {
+app.get('/api/:object/:id', checkAuth, async (req, res) => {
   const { object, id } = req.params;
   if (!OBJECTS[object]) return res.status(400).json({ error: `Unknown object: ${object}` });
 
@@ -2547,7 +3065,7 @@ app.get('/api/:object/:id', async (req, res) => {
 });
 
 // Create record
-app.post('/api/:object', async (req, res) => {
+app.post('/api/:object',checkAuth, async (req, res) => {
   const { object } = req.params;
   if (!OBJECTS[object]) return res.status(400).json({ error: `Unknown object: ${object}` });
 
@@ -2620,7 +3138,7 @@ app.patch('/api/:object', async (req, res) => {
 });
 
 // Update record
-app.patch('/api/:object/:id', async (req, res) => {
+app.patch('/api/:object/:id', checkAuth, async (req, res) => {
   const { object, id } = req.params;
   if (!OBJECTS[object]) return res.status(400).json({ error: `Unknown object: ${object}` });
 
@@ -2668,7 +3186,7 @@ app.delete('/api/:object', async (req, res) => {
 });
 
 // Delete record
-app.delete('/api/:object/:id', async (req, res) => {
+app.delete('/api/:object/:id', checkAuth, async (req, res) => {
   const { object, id } = req.params;
   if (!OBJECTS[object]) return res.status(400).json({ error: `Unknown object: ${object}` });
 
@@ -2681,7 +3199,7 @@ app.delete('/api/:object/:id', async (req, res) => {
 });
 
 // Global SOSL search
-app.get('/api/search/global', async (req, res) => {
+app.get('/api/search/global',checkAuth, async (req, res) => {
   const q = (req.query.q || '').trim();
   if (!q) return res.json({ searchRecords: [] });
 
@@ -2710,7 +3228,7 @@ app.get('/api/search/global', async (req, res) => {
 });
 
 // Get picklist values for a field (helper for dropdowns)
-app.get('/api/meta/:object/picklist/:field', async (req, res) => {
+app.get('/api/meta/:object/picklist/:field', checkAuth, async (req, res) => {
   const { object, field } = req.params;
   try {
     const data = await sfGet(`/sobjects/${object}/describe`);
@@ -2722,6 +3240,13 @@ app.get('/api/meta/:object/picklist/:field', async (req, res) => {
   }
 });
 
+
+app.get('/admin', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'admin.html'));
+});
+app.get('/admin.html', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'admin.html'));
+});
 // Serve frontend for all unmatched routes
 app.use((req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));

@@ -1,0 +1,1471 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SaaSRAY — Admin Panel</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg-primary:    #0f1117;
+      --bg-secondary:  #141620;
+      --surface:       #1a1d27;
+      --surface-2:     #1f2235;
+      --surface-3:     #252840;
+      --border:        #2a2d3e;
+      --border-2:      #363950;
+      --accent:        #6366f1;
+      --accent-hover:  #5254cc;
+      --accent-soft:   rgba(99,102,241,0.12);
+      --success:       #22c55e;
+      --success-soft:  rgba(34,197,94,0.12);
+      --warning:       #f59e0b;
+      --warning-soft:  rgba(245,158,11,0.12);
+      --danger:        #ef4444;
+      --danger-soft:   rgba(239,68,68,0.12);
+      --text-primary:  #f0f1ff;
+      --text-secondary:#a0a3c0;
+      --text-muted:    #5c5f7a;
+      --radius:        10px;
+      --radius-lg:     14px;
+      --shadow:        0 4px 24px rgba(0,0,0,0.4);
+      --shadow-lg:     0 12px 48px rgba(0,0,0,0.6);
+    }
+
+    body {
+      font-family: 'Plus Jakarta Sans', sans-serif;
+      background: var(--bg-primary);
+      color: var(--text-primary);
+      min-height: 100vh;
+      display: flex;
+    }
+
+    /* ── SIDEBAR ─────────────────────────────────────── */
+    .sidebar {
+      width: 240px; min-width: 240px;
+      background: var(--bg-secondary);
+      border-right: 1px solid var(--border);
+      display: flex; flex-direction: column;
+      position: fixed; top: 0; left: 0; height: 100vh;
+      z-index: 100;
+    }
+    .sidebar-brand {
+      padding: 20px 20px 16px;
+      border-bottom: 1px solid var(--border);
+      display: flex; align-items: center; gap: 10px;
+    }
+    .sidebar-brand img { height: 32px; }
+    .brand-badge {
+      font-size: 10px; font-weight: 700; letter-spacing: .08em;
+      background: var(--accent-soft); color: var(--accent);
+      border: 1px solid rgba(99,102,241,0.3);
+      padding: 2px 7px; border-radius: 20px; margin-top: 2px;
+    }
+    .sidebar-section {
+      padding: 20px 12px 8px;
+      font-size: 10px; font-weight: 700; letter-spacing: .1em;
+      color: var(--text-muted); text-transform: uppercase;
+    }
+    .nav-item {
+      display: flex; align-items: center; gap: 10px;
+      padding: 9px 12px; margin: 1px 8px;
+      border-radius: var(--radius); cursor: pointer;
+      color: var(--text-secondary); font-size: 14px; font-weight: 500;
+      transition: all .15s; border: none; background: none;
+      width: calc(100% - 16px); text-align: left;
+    }
+    .nav-item:hover { background: var(--surface); color: var(--text-primary); }
+    .nav-item.active {
+      background: var(--accent-soft); color: var(--accent);
+    }
+    .nav-item svg { flex-shrink: 0; opacity: .8; }
+    .nav-item.active svg { opacity: 1; }
+    .nav-badge {
+      margin-left: auto; background: var(--surface-3);
+      color: var(--text-muted); font-size: 11px; font-weight: 600;
+      padding: 1px 7px; border-radius: 20px; font-family: 'JetBrains Mono', monospace;
+    }
+    .sidebar-footer {
+      margin-top: auto; padding: 16px;
+      border-top: 1px solid var(--border);
+    }
+    .back-btn {
+      display: flex; align-items: center; gap: 8px;
+      color: var(--text-muted); font-size: 13px; font-weight: 500;
+      cursor: pointer; background: none; border: none;
+      padding: 8px 4px; width: 100%; transition: color .15s;
+    }
+    .back-btn:hover { color: var(--text-primary); }
+
+    /* ── MAIN ────────────────────────────────────────── */
+    .main { margin-left: 240px; flex: 1; display: flex; flex-direction: column; min-height: 100vh; }
+
+    /* ── TOPBAR ──────────────────────────────────────── */
+    .topbar {
+      height: 60px; background: var(--bg-secondary);
+      border-bottom: 1px solid var(--border);
+      display: flex; align-items: center; padding: 0 28px;
+      gap: 16px; position: sticky; top: 0; z-index: 90;
+    }
+    .topbar-title { font-size: 16px; font-weight: 700; }
+    .topbar-right { margin-left: auto; display: flex; align-items: center; gap: 12px; }
+    .admin-avatar {
+      width: 34px; height: 34px; border-radius: 50%;
+      background: var(--accent); color: #fff;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 13px; font-weight: 700; cursor: pointer;
+    }
+
+    /* ── CONTENT ─────────────────────────────────────── */
+    .content { flex: 1; padding: 28px; }
+    .panel { display: none; }
+    .panel.active { display: block; }
+
+    /* ── PAGE HEADER ─────────────────────────────────── */
+    .page-header {
+      display: flex; align-items: flex-start; justify-content: space-between;
+      margin-bottom: 24px; gap: 16px;
+    }
+    .page-header h1 { font-size: 22px; font-weight: 800; }
+    .page-header p { color: var(--text-secondary); font-size: 14px; margin-top: 3px; }
+
+    /* ── STATS ROW ───────────────────────────────────── */
+    .stats-row { display: grid; grid-template-columns: repeat(4,1fr); gap: 16px; margin-bottom: 28px; }
+    .stat-card {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: var(--radius-lg); padding: 20px 22px;
+    }
+    .stat-label { font-size: 12px; font-weight: 600; letter-spacing: .05em; color: var(--text-muted); text-transform: uppercase; margin-bottom: 8px; }
+    .stat-value { font-size: 28px; font-weight: 800; font-family: 'JetBrains Mono', monospace; }
+    .stat-value.accent  { color: var(--accent); }
+    .stat-value.success { color: var(--success); }
+    .stat-value.warning { color: var(--warning); }
+    .stat-value.danger  { color: var(--danger); }
+    .stat-sub { font-size: 12px; color: var(--text-muted); margin-top: 4px; }
+
+    /* ── CARD ────────────────────────────────────────── */
+    .card {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: var(--radius-lg); overflow: hidden;
+    }
+    .card-head {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 16px 20px; border-bottom: 1px solid var(--border);
+      gap: 12px;
+    }
+    .card-title { font-size: 14px; font-weight: 700; }
+    .card-body { padding: 0; }
+
+    /* ── SEARCH + FILTER BAR ─────────────────────────── */
+    .toolbar { display: flex; align-items: center; gap: 10px; padding: 14px 20px; border-bottom: 1px solid var(--border); }
+    .search-box {
+      display: flex; align-items: center; gap: 8px;
+      background: var(--bg-secondary); border: 1px solid var(--border);
+      border-radius: 8px; padding: 7px 12px; flex: 1; max-width: 320px;
+    }
+    .search-box input {
+      background: none; border: none; outline: none;
+      color: var(--text-primary); font-size: 13px; width: 100%;
+      font-family: inherit;
+    }
+    .search-box input::placeholder { color: var(--text-muted); }
+    .filter-select {
+      background: var(--bg-secondary); border: 1px solid var(--border);
+      color: var(--text-primary); border-radius: 8px; padding: 7px 10px;
+      font-size: 13px; font-family: inherit; outline: none; cursor: pointer;
+    }
+    .toolbar-right { margin-left: auto; display: flex; gap: 8px; }
+
+    /* ── TABLE ───────────────────────────────────────── */
+    .table-wrap { overflow-x: auto; }
+    table { width: 100%; border-collapse: collapse; }
+    thead th {
+      padding: 10px 16px; text-align: left;
+      font-size: 11px; font-weight: 700; letter-spacing: .06em;
+      color: var(--text-muted); text-transform: uppercase;
+      background: var(--bg-secondary); border-bottom: 1px solid var(--border);
+      white-space: nowrap;
+    }
+    tbody tr {
+      border-bottom: 1px solid var(--border);
+      transition: background .1s; cursor: default;
+    }
+    tbody tr:last-child { border-bottom: none; }
+    tbody tr:hover { background: var(--surface-2); }
+    td { padding: 12px 16px; font-size: 13px; vertical-align: middle; }
+
+    /* ── BADGES ──────────────────────────────────────── */
+    .badge {
+      display: inline-flex; align-items: center; gap: 5px;
+      padding: 3px 9px; border-radius: 20px;
+      font-size: 11px; font-weight: 700; letter-spacing: .04em;
+    }
+    .badge-dot { width: 6px; height: 6px; border-radius: 50%; }
+    .badge-super_admin { background: rgba(139,92,246,.15); color: #a78bfa; }
+    .badge-admin       { background: rgba(99,102,241,.15);  color: #818cf8; }
+    .badge-manager     { background: rgba(59,130,246,.15);  color: #60a5fa; }
+    .badge-employee    { background: rgba(34,197,94,.15);   color: #4ade80; }
+    .badge-readonly    { background: rgba(107,114,128,.15); color: #9ca3af; }
+    .badge-active   { background: var(--success-soft); color: var(--success); }
+    .badge-inactive { background: var(--danger-soft);  color: var(--danger);  }
+
+    /* ── BUTTONS ─────────────────────────────────────── */
+    .btn {
+      display: inline-flex; align-items: center; gap: 6px;
+      padding: 8px 16px; border-radius: 8px; border: none;
+      font-size: 13px; font-weight: 600; cursor: pointer;
+      font-family: inherit; transition: all .15s; white-space: nowrap;
+    }
+    .btn-primary { background: var(--accent); color: #fff; }
+    .btn-primary:hover { background: var(--accent-hover); }
+    .btn-ghost {
+      background: var(--surface-2); color: var(--text-secondary);
+      border: 1px solid var(--border);
+    }
+    .btn-ghost:hover { background: var(--surface-3); color: var(--text-primary); }
+    .btn-danger { background: var(--danger-soft); color: var(--danger); border: 1px solid rgba(239,68,68,.3); }
+    .btn-danger:hover { background: var(--danger); color: #fff; }
+    .btn-success { background: var(--success-soft); color: var(--success); border: 1px solid rgba(34,197,94,.3); }
+    .btn-sm { padding: 5px 10px; font-size: 12px; }
+    .btn:disabled { opacity: .45; cursor: not-allowed; }
+    .icon-btn {
+      background: none; border: none; cursor: pointer;
+      color: var(--text-muted); padding: 5px; border-radius: 6px;
+      display: inline-flex; align-items: center; transition: all .15s;
+    }
+    .icon-btn:hover { background: var(--surface-3); color: var(--text-primary); }
+
+    /* ── OVERLAY / MODAL ─────────────────────────────── */
+    .overlay {
+      position: fixed; inset: 0; background: rgba(0,0,0,.65);
+      display: none; align-items: center; justify-content: center;
+      z-index: 999; padding: 20px;
+    }
+    .overlay.open { display: flex; }
+    .modal {
+      background: var(--surface); border: 1px solid var(--border-2);
+      border-radius: 16px; width: 100%; max-width: 560px;
+      box-shadow: var(--shadow-lg); display: flex; flex-direction: column;
+      max-height: 90vh;
+    }
+    .modal-wide { max-width: 720px; }
+    .modal-head {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 18px 22px; border-bottom: 1px solid var(--border);
+    }
+    .modal-head h2 { font-size: 16px; font-weight: 700; }
+    .modal-body { padding: 22px; overflow-y: auto; flex: 1; }
+    .modal-foot {
+      display: flex; justify-content: flex-end; gap: 10px;
+      padding: 16px 22px; border-top: 1px solid var(--border);
+    }
+    .close-btn {
+      background: none; border: none; cursor: pointer;
+      color: var(--text-muted); padding: 4px; border-radius: 6px;
+      display: flex; transition: color .15s;
+    }
+    .close-btn:hover { color: var(--text-primary); }
+
+    /* ── FORM ────────────────────────────────────────── */
+    .form-group { margin-bottom: 16px; }
+    .form-label {
+      display: block; font-size: 12px; font-weight: 600;
+      color: var(--text-secondary); margin-bottom: 6px; letter-spacing: .03em;
+    }
+    .form-label .req { color: var(--danger); margin-left: 2px; }
+    .form-ctrl {
+      width: 100%; padding: 9px 12px; border-radius: 8px;
+      border: 1px solid var(--border); background: var(--bg-secondary);
+      color: var(--text-primary); font-size: 13px; font-family: inherit;
+      outline: none; transition: border-color .15s;
+    }
+    .form-ctrl:focus { border-color: var(--accent); }
+    .form-ctrl option { background: var(--bg-secondary); }
+    .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+    .span-2 { grid-column: span 2; }
+    .form-hint { font-size: 11px; color: var(--text-muted); margin-top: 5px; }
+    .form-divider {
+      font-size: 11px; font-weight: 700; letter-spacing: .08em;
+      color: var(--text-muted); text-transform: uppercase;
+      padding: 16px 0 8px; border-bottom: 1px solid var(--border); margin-bottom: 16px;
+    }
+
+    /* ── PERMISSION MATRIX ───────────────────────────── */
+    .perm-matrix { width: 100%; border-collapse: collapse; font-size: 12px; }
+    .perm-matrix th {
+      padding: 8px 12px; text-align: center;
+      font-size: 10px; font-weight: 700; letter-spacing: .06em;
+      color: var(--text-muted); text-transform: uppercase;
+      background: var(--bg-secondary);
+    }
+    .perm-matrix th:first-child { text-align: left; }
+    .perm-matrix td { padding: 8px 12px; border-top: 1px solid var(--border); text-align: center; }
+    .perm-matrix td:first-child { text-align: left; font-weight: 600; color: var(--text-primary); }
+    .perm-check { width: 16px; height: 16px; cursor: pointer; accent-color: var(--accent); }
+
+    /* ── PERM SET TAGS ───────────────────────────────── */
+    .perm-tags { display: flex; flex-wrap: wrap; gap: 6px; }
+    .perm-tag {
+      display: inline-flex; align-items: center; gap: 5px;
+      background: var(--accent-soft); color: var(--accent);
+      border: 1px solid rgba(99,102,241,.25);
+      border-radius: 20px; padding: 3px 10px; font-size: 11px; font-weight: 600;
+    }
+    .perm-tag button {
+      background: none; border: none; cursor: pointer;
+      color: var(--accent); display: flex; align-items: center;
+      padding: 0; font-size: 14px; line-height: 1; opacity: .7;
+    }
+    .perm-tag button:hover { opacity: 1; }
+
+    /* ── EMPTY STATE ─────────────────────────────────── */
+    .empty-state {
+      text-align: center; padding: 48px 24px;
+      color: var(--text-muted);
+    }
+    .empty-state svg { opacity: .3; margin-bottom: 12px; }
+    .empty-state h3 { font-size: 15px; font-weight: 600; color: var(--text-secondary); margin-bottom: 6px; }
+    .empty-state p { font-size: 13px; }
+
+    /* ── LOADING SPINNER ─────────────────────────────── */
+    .spinner {
+      width: 28px; height: 28px;
+      border: 3px solid var(--border); border-top-color: var(--accent);
+      border-radius: 50%; animation: spin .7s linear infinite; margin: 32px auto;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* ── AUDIT LOG ───────────────────────────────────── */
+    .audit-row td:first-child { font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--text-muted); }
+    .action-badge {
+      font-size: 10px; font-weight: 700; letter-spacing: .05em;
+      padding: 2px 8px; border-radius: 20px; text-transform: uppercase;
+    }
+    .action-login    { background: var(--success-soft); color: var(--success); }
+    .action-logout   { background: var(--warning-soft); color: var(--warning); }
+    .action-create   { background: rgba(99,102,241,.15); color: #818cf8; }
+    .action-edit     { background: rgba(59,130,246,.15); color: #60a5fa; }
+    .action-delete   { background: var(--danger-soft); color: var(--danger); }
+    .action-failed_login { background: var(--danger-soft); color: var(--danger); }
+    .action-default  { background: var(--surface-3); color: var(--text-muted); }
+
+    /* ── TOAST ───────────────────────────────────────── */
+    .toast-stack { position: fixed; bottom: 24px; right: 24px; z-index: 9999; display: flex; flex-direction: column; gap: 8px; }
+    .toast {
+      display: flex; align-items: center; gap: 10px;
+      background: var(--surface-2); border: 1px solid var(--border-2);
+      border-radius: 10px; padding: 12px 16px; font-size: 13px; font-weight: 500;
+      box-shadow: var(--shadow); min-width: 240px; max-width: 360px;
+      transform: translateX(120%); transition: transform .3s cubic-bezier(.34,1.56,.64,1);
+    }
+    .toast.in { transform: translateX(0); }
+    .toast.out { transform: translateX(120%); }
+    .toast-ok   .toast-icon { color: var(--success); }
+    .toast-err  .toast-icon { color: var(--danger); }
+    .toast-info .toast-icon { color: var(--accent); }
+    .toast-icon { font-size: 16px; }
+
+    /* ── USER DETAIL DRAWER ──────────────────────────── */
+    .user-info-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-bottom: 20px; }
+    .info-field { background: var(--bg-secondary); border-radius: 8px; padding: 12px; }
+    .info-label { font-size: 11px; font-weight: 600; color: var(--text-muted); letter-spacing: .04em; text-transform: uppercase; margin-bottom: 4px; }
+    .info-value { font-size: 13px; color: var(--text-primary); font-weight: 500; }
+
+    /* ── PROFILE CARD ────────────────────────────────── */
+    .profile-card {
+      background: var(--bg-secondary); border: 1px solid var(--border);
+      border-radius: 10px; padding: 14px 16px; margin-bottom: 10px;
+      cursor: pointer; transition: border-color .15s;
+    }
+    .profile-card:hover, .profile-card.selected { border-color: var(--accent); }
+    .profile-card.selected { background: var(--accent-soft); }
+    .profile-card-name { font-size: 13px; font-weight: 700; margin-bottom: 4px; }
+    .profile-card-desc { font-size: 12px; color: var(--text-muted); }
+
+    /* ── TABS ────────────────────────────────────────── */
+    .tabs { display: flex; border-bottom: 1px solid var(--border); margin-bottom: 20px; }
+    .tab-btn {
+      padding: 10px 18px; font-size: 13px; font-weight: 600;
+      border: none; background: none; cursor: pointer; color: var(--text-muted);
+      border-bottom: 2px solid transparent; margin-bottom: -1px; font-family: inherit;
+      transition: all .15s;
+    }
+    .tab-btn.active { color: var(--accent); border-bottom-color: var(--accent); }
+    .tab-btn:hover { color: var(--text-primary); }
+    .tab-panel { display: none; }
+    .tab-panel.active { display: block; }
+
+    /* ── RESPONSIVE ──────────────────────────────────── */
+    @media (max-width: 900px) {
+      .stats-row { grid-template-columns: 1fr 1fr; }
+      .sidebar { width: 200px; min-width: 200px; }
+      .main { margin-left: 200px; }
+    }
+  </style>
+</head>
+<body>
+
+<!-- ── SIDEBAR ──────────────────────────────────────────── -->
+<aside class="sidebar">
+  <div class="sidebar-brand">
+    <img src="/images/logo.png" alt="SaaSRAY CRM">
+    <span class="brand-badge">ADMIN</span>
+  </div>
+
+  <div class="sidebar-section">Management</div>
+  <button class="nav-item active" onclick="showPanel('users')">
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+    Users
+    <span class="nav-badge" id="nav-users-count">—</span>
+  </button>
+  <button class="nav-item" onclick="showPanel('profiles')">
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 9h6M9 12h6M9 15h4"/></svg>
+    Profiles
+    <span class="nav-badge" id="nav-profiles-count">—</span>
+  </button>
+  <button class="nav-item" onclick="showPanel('permsets')">
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+    Permission Sets
+    <span class="nav-badge" id="nav-permsets-count">—</span>
+  </button>
+
+  <div class="sidebar-section">System</div>
+  <button class="nav-item" onclick="showPanel('audit')">
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14,2 14,8 20,8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10,9 9,9 8,9"/></svg>
+    Audit Log
+  </button>
+
+  <div class="sidebar-footer">
+    <button class="back-btn" onclick="goBackToCRM()">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="19" y1="12" x2="5" y2="12"/><polyline points="12,19 5,12 12,5"/></svg>
+      Back to CRM
+    </button>
+  </div>
+</aside>
+
+<!-- ── MAIN ─────────────────────────────────────────────── -->
+<div class="main">
+  <header class="topbar">
+    <span class="topbar-title" id="topbarTitle">User Management</span>
+    <div class="topbar-right">
+      <span style="font-size:12px; color:var(--text-muted)" id="adminRoleLabel"></span>
+      <div class="admin-avatar" id="adminAvatar">SA</div>
+    </div>
+  </header>
+
+  <div class="content">
+
+    <!-- ══ USERS PANEL ══════════════════════════════════ -->
+    <div class="panel active" id="panel-users">
+      <div class="page-header">
+        <div>
+          <h1>Users</h1>
+          <p>Manage portal user accounts, roles, and profile assignments</p>
+        </div>
+        <button class="btn btn-primary" onclick="openCreateUser()">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+          New User
+        </button>
+      </div>
+
+      <!-- Stats -->
+      <div class="stats-row" id="userStats">
+        <div class="stat-card"><div class="stat-label">Total Users</div><div class="stat-value accent" id="stat-total">—</div><div class="stat-sub">all accounts</div></div>
+        <div class="stat-card"><div class="stat-label">Active</div><div class="stat-value success" id="stat-active">—</div><div class="stat-sub">can log in</div></div>
+        <div class="stat-card"><div class="stat-label">Inactive</div><div class="stat-value danger" id="stat-inactive">—</div><div class="stat-sub">access revoked</div></div>
+        <div class="stat-card"><div class="stat-label">Pending PW</div><div class="stat-value warning" id="stat-pw">—</div><div class="stat-sub">must change password</div></div>
+      </div>
+
+      <div class="card">
+        <div class="toolbar">
+          <div class="search-box">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+            <input type="text" id="userSearch" placeholder="Search users..." oninput="filterUsers()">
+          </div>
+          <select class="filter-select" id="roleFilter" onchange="filterUsers()">
+            <option value="">All Roles</option>
+            <option value="super_admin">Super Admin</option>
+            <option value="admin">Admin</option>
+            <option value="manager">Manager</option>
+            <option value="employee">Employee</option>
+            <option value="readonly">Read-Only</option>
+          </select>
+          <select class="filter-select" id="statusFilter" onchange="filterUsers()">
+            <option value="">All Status</option>
+            <option value="active">Active</option>
+            <option value="inactive">Inactive</option>
+          </select>
+          <div class="toolbar-right">
+            <button class="btn btn-ghost btn-sm" onclick="loadUsers()">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="23,4 23,11 16,11"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 11"/></svg>
+              Refresh
+            </button>
+          </div>
+        </div>
+        <div class="card-body">
+          <div class="table-wrap">
+            <table id="usersTable">
+              <thead>
+                <tr>
+                  <th>User</th>
+                  <th>Role</th>
+                  <th>Profile</th>
+                  <th>Status</th>
+                  <th>Last Login</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody id="usersBody">
+                <tr><td colspan="6"><div class="spinner"></div></td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ══ PROFILES PANEL ════════════════════════════════ -->
+    <div class="panel" id="panel-profiles">
+      <div class="page-header">
+        <div>
+          <h1>Profiles</h1>
+          <p>Define baseline CRUD permissions per Salesforce object for each user type</p>
+        </div>
+        <button class="btn btn-primary" onclick="openCreateProfile()">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+          New Profile
+        </button>
+      </div>
+      <div class="card">
+        <div class="card-body">
+          <div class="table-wrap">
+            <table id="profilesTable">
+              <thead>
+                <tr>
+                  <th>Profile Name</th>
+                  <th>Description</th>
+                  <th>Users Assigned</th>
+                  <th>Objects</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody id="profilesBody">
+                <tr><td colspan="5"><div class="spinner"></div></td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ══ PERMISSION SETS PANEL ═════════════════════════ -->
+    <div class="panel" id="panel-permsets">
+      <div class="page-header">
+        <div>
+          <h1>Permission Sets</h1>
+          <p>Additive permissions stacked on top of a user's profile — grant extra access without changing the profile</p>
+        </div>
+        <button class="btn btn-primary" onclick="openCreatePermSet()">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+          New Permission Set
+        </button>
+      </div>
+      <div class="card">
+        <div class="card-body">
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Name</th>
+                  <th>Description</th>
+                  <th>Users Assigned</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody id="permSetsBody">
+                <tr><td colspan="4"><div class="spinner"></div></td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ══ AUDIT LOG PANEL ═══════════════════════════════ -->
+    <div class="panel" id="panel-audit">
+      <div class="page-header">
+        <div>
+          <h1>Audit Log</h1>
+          <p>Immutable record of every action taken through the portal</p>
+        </div>
+        <button class="btn btn-ghost" onclick="loadAuditLog()">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="23,4 23,11 16,11"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 11"/></svg>
+          Refresh
+        </button>
+      </div>
+      <div class="card">
+        <div class="toolbar">
+          <div class="search-box">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+            <input type="text" id="auditSearch" placeholder="Search by user, action..." oninput="filterAudit()">
+          </div>
+          <select class="filter-select" id="auditActionFilter" onchange="filterAudit()">
+            <option value="">All Actions</option>
+            <option value="login">Login</option>
+            <option value="failed_login">Failed Login</option>
+            <option value="create">Create</option>
+            <option value="edit">Edit</option>
+            <option value="delete">Delete</option>
+            <option value="create_user">Create User</option>
+            <option value="update_user">Update User</option>
+          </select>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Time</th>
+                <th>User</th>
+                <th>Role</th>
+                <th>Action</th>
+                <th>Object</th>
+                <th>IP</th>
+              </tr>
+            </thead>
+            <tbody id="auditBody">
+              <tr><td colspan="6"><div class="spinner"></div></td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+  </div><!-- /content -->
+</div><!-- /main -->
+
+
+<!-- ══ MODALS ════════════════════════════════════════════ -->
+
+<!-- Create / Edit User Modal -->
+<div class="overlay" id="userModal" onclick="if(event.target===this)closeUserModal()">
+  <div class="modal">
+    <div class="modal-head">
+      <h2 id="userModalTitle">New User</h2>
+      <button class="close-btn" onclick="closeUserModal()">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+      </button>
+    </div>
+    <div class="modal-body">
+      <div class="tabs">
+        <button class="tab-btn active" onclick="switchTab('info')">Account Info</button>
+        <button class="tab-btn" onclick="switchTab('access')">Access & Permissions</button>
+      </div>
+
+      <div class="tab-panel active" id="tab-info">
+        <div class="form-grid">
+          <div class="form-group">
+            <label class="form-label">Full Name <span class="req">*</span></label>
+            <input class="form-ctrl" id="u-name" placeholder="Jane Smith">
+          </div>
+          <div class="form-group">
+            <label class="form-label">Email <span class="req">*</span></label>
+            <input class="form-ctrl" id="u-email" type="email" placeholder="jane@company.com">
+          </div>
+          <div class="form-group span-2" id="u-pw-group">
+            <label class="form-label">Password <span class="req">*</span></label>
+            <input class="form-ctrl" id="u-password" type="password" placeholder="Temporary password">
+            <p class="form-hint">User will be required to change this on first login.</p>
+          </div>
+          <div class="form-group span-2" id="u-edit-note" style="display:none">
+            <div style="background:var(--warning-soft);border:1px solid rgba(245,158,11,.3);border-radius:8px;padding:12px;font-size:13px;color:var(--warning)">
+              ⚠️ Leave password blank to keep the current password unchanged.
+            </div>
+            <input class="form-ctrl" id="u-password-edit" type="password" placeholder="New password (leave blank to keep current)" style="margin-top:10px">
+          </div>
+        </div>
+      </div>
+
+      <div class="tab-panel" id="tab-access">
+        <div class="form-group">
+          <label class="form-label">System Role <span class="req">*</span></label>
+          <select class="form-ctrl" id="u-role">
+            <option value="employee">Employee</option>
+            <option value="readonly">Read-Only</option>
+            <option value="manager">Manager</option>
+            <option value="admin">Admin</option>
+            <option value="super_admin">Super Admin</option>
+          </select>
+          <p class="form-hint">Role sets the UI access ceiling. Object-level permissions come from the profile below.</p>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Account Status</label>
+          <select class="form-ctrl" id="u-active">
+            <option value="true">Active — can log in</option>
+            <option value="false">Inactive — access revoked</option>
+          </select>
+        </div>
+        <div class="form-divider">Profile Assignment</div>
+        <div class="form-group">
+          <label class="form-label">Profile <span class="req">*</span></label>
+          <select class="form-ctrl" id="u-profile">
+            <option value="">Loading profiles...</option>
+          </select>
+          <p class="form-hint">Defines which Salesforce objects this user can Read / Create / Edit / Delete.</p>
+        </div>
+        <div class="form-divider" id="perm-sets-section">Permission Sets</div>
+        <div id="u-permsets-current" class="perm-tags" style="margin-bottom:10px"></div>
+        <div class="form-group">
+          <label class="form-label">Add Permission Set</label>
+          <select class="form-ctrl" id="u-permset-add" onchange="addPermSetToUser(this.value, this.options[this.selectedIndex].text)">
+            <option value="">Select to add...</option>
+          </select>
+          <p class="form-hint">Permission sets add extra access on top of the profile. Multiple sets can be assigned.</p>
+        </div>
+      </div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn btn-ghost" onclick="closeUserModal()">Cancel</button>
+      <button class="btn btn-primary" id="userSaveBtn" onclick="saveUser()">Create User</button>
+    </div>
+  </div>
+</div>
+
+
+<!-- Profile Create / Edit Modal -->
+<div class="overlay" id="profileModal" onclick="if(event.target===this)closeProfileModal()">
+  <div class="modal modal-wide">
+    <div class="modal-head">
+      <h2 id="profileModalTitle">New Profile</h2>
+      <button class="close-btn" onclick="closeProfileModal()">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+      </button>
+    </div>
+    <div class="modal-body">
+      <div class="form-grid" style="margin-bottom:20px">
+        <div class="form-group">
+          <label class="form-label">Profile Name <span class="req">*</span></label>
+          <input class="form-ctrl" id="p-name" placeholder="Sales Rep Profile">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Description</label>
+          <input class="form-ctrl" id="p-desc" placeholder="Standard sales team access">
+        </div>
+      </div>
+      <div class="form-divider">Object Permissions</div>
+      <p style="font-size:12px;color:var(--text-muted);margin-bottom:14px">
+        Set CRUD permissions for each Salesforce object. These are the baseline permissions — permission sets can add more on top.
+      </p>
+      <table class="perm-matrix" id="profilePermMatrix">
+        <thead>
+          <tr>
+            <th>Salesforce Object</th>
+            <th>Read</th>
+            <th>Create</th>
+            <th>Edit</th>
+            <th>Delete</th>
+          </tr>
+        </thead>
+        <tbody id="profilePermBody"></tbody>
+      </table>
+    </div>
+    <div class="modal-foot">
+      <button class="btn btn-ghost" onclick="closeProfileModal()">Cancel</button>
+      <button class="btn btn-primary" id="profileSaveBtn" onclick="saveProfile()">Save Profile</button>
+    </div>
+  </div>
+</div>
+
+
+<!-- Permission Set Modal -->
+<div class="overlay" id="permSetModal" onclick="if(event.target===this)closePermSetModal()">
+  <div class="modal modal-wide">
+    <div class="modal-head">
+      <h2 id="permSetModalTitle">New Permission Set</h2>
+      <button class="close-btn" onclick="closePermSetModal()">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+      </button>
+    </div>
+    <div class="modal-body">
+      <div class="form-grid" style="margin-bottom:20px">
+        <div class="form-group">
+          <label class="form-label">Name <span class="req">*</span></label>
+          <input class="form-ctrl" id="ps-name" placeholder="Delete Accounts">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Description</label>
+          <input class="form-ctrl" id="ps-desc" placeholder="Grants delete permission on Accounts">
+        </div>
+      </div>
+      <div class="form-divider">Additive Permissions</div>
+      <p style="font-size:12px;color:var(--text-muted);margin-bottom:14px">
+        Only check permissions you want to <strong>add</strong>. These stack on top of the user's profile using OR logic.
+      </p>
+      <table class="perm-matrix" id="permSetMatrix">
+        <thead>
+          <tr>
+            <th>Salesforce Object</th>
+            <th>Read</th>
+            <th>Create</th>
+            <th>Edit</th>
+            <th>Delete</th>
+          </tr>
+        </thead>
+        <tbody id="permSetPermBody"></tbody>
+      </table>
+    </div>
+    <div class="modal-foot">
+      <button class="btn btn-ghost" onclick="closePermSetModal()">Cancel</button>
+      <button class="btn btn-primary" id="permSetSaveBtn" onclick="savePermSet()">Save Permission Set</button>
+    </div>
+  </div>
+</div>
+
+
+<!-- Confirm Deactivate / Delete Modal -->
+<div class="overlay" id="confirmModal" onclick="if(event.target===this)closeConfirmModal()">
+  <div class="modal" style="max-width:400px">
+    <div class="modal-head">
+      <h2 id="confirmTitle">Confirm Action</h2>
+      <button class="close-btn" onclick="closeConfirmModal()">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+      </button>
+    </div>
+    <div class="modal-body">
+      <p id="confirmMsg" style="color:var(--text-secondary);font-size:14px;line-height:1.6"></p>
+    </div>
+    <div class="modal-foot">
+      <button class="btn btn-ghost" onclick="closeConfirmModal()">Cancel</button>
+      <button class="btn btn-danger" id="confirmOkBtn" onclick="confirmAction()">Confirm</button>
+    </div>
+  </div>
+</div>
+
+<!-- Toast Stack -->
+<div class="toast-stack" id="toastStack"></div>
+
+<script>
+// ═══════════════════════════════════════════════════════
+// STATE
+// ═══════════════════════════════════════════════════════
+const $ = id => document.getElementById(id);
+let allUsers      = [];
+let allProfiles   = [];
+let allPermSets   = [];
+let allAuditLogs  = [];
+let editingUserId = null;
+let editingProfileId   = null;
+let editingPermSetId   = null;
+let userPermSetsSelected = []; // [{id, name}]
+let confirmCallback = null;
+
+const SF_OBJECTS = ['Account','Contact','Opportunity','Lead','Case','Campaign','Task','Event'];
+
+function getToken() { return localStorage.getItem('saasray_token'); }
+
+async function api(path, options = {}) {
+  const token = getToken();
+  const res = await fetch(path, {
+    headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+    ...options
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || `Request failed ${res.status}`);
+  return data;
+}
+
+// ═══════════════════════════════════════════════════════
+// INIT
+// ═══════════════════════════════════════════════════════
+document.addEventListener('DOMContentLoaded', async () => {
+  const token = getToken();
+  if (!token) { window.location.href = '/'; return; }
+
+  try {
+    const me = await api('/api/portal/me');
+    if (!['super_admin','admin'].includes(me.role)) {
+      alert('Access denied. Admin role required.');
+      window.location.href = '/';
+      return;
+    }
+    const initials = (me.name || 'A').split(' ').map(p => p[0]).join('').slice(0,2).toUpperCase();
+    $('adminAvatar').textContent = initials;
+    $('adminRoleLabel').textContent = me.role === 'super_admin' ? 'Super Admin' : 'Admin';
+    window._adminRole = me.role;
+    window._adminId   = me.id;
+  } catch(e) {
+    window.location.href = '/';
+    return;
+  }
+
+  await loadUsers();
+  loadProfiles();
+  loadPermSets();
+});
+
+// ═══════════════════════════════════════════════════════
+// NAVIGATION
+// ═══════════════════════════════════════════════════════
+const PANEL_TITLES = {
+  users: 'User Management', profiles: 'Profiles',
+  permsets: 'Permission Sets', audit: 'Audit Log'
+};
+
+function showPanel(name) {
+  document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+  $(`panel-${name}`).classList.add('active');
+  event.currentTarget.classList.add('active');
+  $('topbarTitle').textContent = PANEL_TITLES[name] || name;
+  if (name === 'audit') loadAuditLog();
+}
+
+function goBackToCRM() { window.location.href = '/'; }
+
+// ═══════════════════════════════════════════════════════
+// USERS
+// ═══════════════════════════════════════════════════════
+async function loadUsers() {
+  $('usersBody').innerHTML = '<tr><td colspan="6"><div class="spinner"></div></td></tr>';
+  try {
+    const data = await api('/api/portal/users');
+    allUsers = data.users || [];
+    updateUserStats();
+    renderUsers(allUsers);
+    $('nav-users-count').textContent = allUsers.length;
+  } catch(e) {
+    $('usersBody').innerHTML = `<tr><td colspan="6" style="text-align:center;color:var(--danger);padding:24px">${e.message}</td></tr>`;
+  }
+}
+
+function updateUserStats() {
+  const active   = allUsers.filter(u => u.isActive).length;
+  const inactive = allUsers.filter(u => !u.isActive).length;
+  const pw       = allUsers.filter(u => u.mustChangePw).length;
+  $('stat-total').textContent   = allUsers.length;
+  $('stat-active').textContent  = active;
+  $('stat-inactive').textContent = inactive;
+  $('stat-pw').textContent      = pw;
+}
+
+function renderUsers(users) {
+  if (!users.length) {
+    $('usersBody').innerHTML = `<tr><td colspan="6"><div class="empty-state"><h3>No users found</h3><p>Create a new user to get started.</p></div></td></tr>`;
+    return;
+  }
+  $('usersBody').innerHTML = users.map(u => {
+    const roleCls = `badge-${u.role}`;
+    const initials = (u.name||'?').split(' ').map(p=>p[0]).join('').slice(0,2).toUpperCase();
+    const lastLogin = u.lastLoginAt ? new Date(u.lastLoginAt).toLocaleDateString() : 'Never';
+    const isSelf = u.id === window._adminId;
+    return `
+    <tr>
+      <td>
+        <div style="display:flex;align-items:center;gap:10px">
+          <div style="width:32px;height:32px;border-radius:50%;background:var(--accent-soft);color:var(--accent);
+               display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;flex-shrink:0">${initials}</div>
+          <div>
+            <div style="font-weight:600;font-size:13px">${esc(u.name)}</div>
+            <div style="font-size:11px;color:var(--text-muted)">${esc(u.email)}</div>
+          </div>
+        </div>
+      </td>
+      <td><span class="badge ${roleCls}">${roleName(u.role)}</span></td>
+      <td><span style="font-size:12px;color:var(--text-secondary)">${esc(u.profile?.name || '—')}</span></td>
+      <td><span class="badge ${u.isActive ? 'badge-active' : 'badge-inactive'}">${u.isActive ? 'Active' : 'Inactive'}</span>${u.mustChangePw ? '<span style="margin-left:5px;font-size:10px;color:var(--warning)">⚠ PW</span>' : ''}</td>
+      <td style="font-size:12px;color:var(--text-muted)">${lastLogin}</td>
+      <td>
+        <div style="display:flex;gap:6px">
+          <button class="btn btn-ghost btn-sm" onclick="openEditUser('${u.id}')">Edit</button>
+          ${u.isActive && !isSelf ? `<button class="btn btn-sm" style="background:var(--warning-soft);color:var(--warning);border:1px solid rgba(245,158,11,.3)" onclick="toggleUserActive('${u.id}','${esc(u.name)}',false)">Deactivate</button>` : ''}
+          ${!u.isActive ? `<button class="btn btn-success btn-sm" onclick="toggleUserActive('${u.id}','${esc(u.name)}',true)">Activate</button>` : ''}
+        </div>
+      </td>
+    </tr>`;
+  }).join('');
+}
+
+function filterUsers() {
+  const q      = $('userSearch').value.toLowerCase();
+  const role   = $('roleFilter').value;
+  const status = $('statusFilter').value;
+  const filtered = allUsers.filter(u => {
+    const matchQ   = !q || u.name.toLowerCase().includes(q) || u.email.toLowerCase().includes(q);
+    const matchR   = !role || u.role === role;
+    const matchS   = !status || (status === 'active' ? u.isActive : !u.isActive);
+    return matchQ && matchR && matchS;
+  });
+  renderUsers(filtered);
+}
+
+// ─── Create User ──────────────────────────────────────
+function openCreateUser() {
+  editingUserId = null;
+  userPermSetsSelected = [];
+  $('userModalTitle').textContent = 'New User';
+  $('userSaveBtn').textContent    = 'Create User';
+  $('u-name').value = $('u-email').value = $('u-password').value = '';
+  $('u-role').value = 'employee';
+  $('u-active').value = 'true';
+  $('u-pw-group').style.display    = '';
+  $('u-edit-note').style.display   = 'none';
+  renderUserPermSetTags();
+  populateProfileSelect();
+  populatePermSetSelect();
+  switchTab('info');
+  $('userModal').classList.add('open');
+}
+
+// ─── Edit User ────────────────────────────────────────
+async function openEditUser(id) {
+  const u = allUsers.find(x => x.id === id);
+  if (!u) return;
+  editingUserId = id;
+  $('userModalTitle').textContent = `Edit — ${u.name}`;
+  $('userSaveBtn').textContent    = 'Save Changes';
+  $('u-name').value  = u.name;
+  $('u-email').value = u.email;
+  $('u-role').value  = u.role;
+  $('u-active').value = u.isActive ? 'true' : 'false';
+  $('u-pw-group').style.display   = 'none';
+  $('u-edit-note').style.display  = '';
+  $('u-password-edit').value      = '';
+
+  // Load user's current permission sets
+  try {
+    const data = await api(`/api/portal/users/${id}/permission-sets`);
+    userPermSetsSelected = (data.permissionSets || []).map(ps => ({ id: ps.id, name: ps.name }));
+  } catch { userPermSetsSelected = []; }
+
+  renderUserPermSetTags();
+  await populateProfileSelect(u.profile?.id);
+  await populatePermSetSelect();
+  switchTab('info');
+  $('userModal').classList.add('open');
+}
+
+function closeUserModal() { $('userModal').classList.remove('open'); editingUserId = null; }
+
+async function populateProfileSelect(selectedId = '') {
+  if (!allProfiles.length) {
+    const data = await api('/api/portal/profiles').catch(() => ({ profiles: [] }));
+    allProfiles = data.profiles || [];
+  }
+  $('u-profile').innerHTML = allProfiles.map(p =>
+    `<option value="${p.id}" ${p.id === selectedId ? 'selected' : ''}>${esc(p.name)}</option>`
+  ).join('');
+}
+
+async function populatePermSetSelect() {
+  if (!allPermSets.length) {
+    const data = await api('/api/portal/permission-sets').catch(() => ({ permissionSets: [] }));
+    allPermSets = data.permissionSets || [];
+  }
+  const selected = new Set(userPermSetsSelected.map(p => p.id));
+  $('u-permset-add').innerHTML = `<option value="">Select to add...</option>` +
+    allPermSets.filter(ps => !selected.has(ps.id)).map(ps =>
+      `<option value="${ps.id}">${esc(ps.name)}</option>`
+    ).join('');
+}
+
+function addPermSetToUser(id, name) {
+  if (!id) return;
+  if (!userPermSetsSelected.find(p => p.id === id)) {
+    userPermSetsSelected.push({ id, name: name.replace(/^[^a-zA-Z]*/, '') });
+  }
+  renderUserPermSetTags();
+  populatePermSetSelect();
+  $('u-permset-add').value = '';
+}
+
+function removePermSetFromUser(id) {
+  userPermSetsSelected = userPermSetsSelected.filter(p => p.id !== id);
+  renderUserPermSetTags();
+  populatePermSetSelect();
+}
+
+function renderUserPermSetTags() {
+  $('u-permsets-current').innerHTML = userPermSetsSelected.length
+    ? userPermSetsSelected.map(p => `<span class="perm-tag">${esc(p.name)}<button onclick="removePermSetFromUser('${p.id}')">&times;</button></span>`).join('')
+    : '<span style="font-size:12px;color:var(--text-muted)">No permission sets assigned</span>';
+}
+
+async function saveUser() {
+  const name      = $('u-name').value.trim();
+  const email     = $('u-email').value.trim();
+  const role      = $('u-role').value;
+  const isActive  = $('u-active').value === 'true';
+  const profileId = $('u-profile').value;
+  const password  = editingUserId ? $('u-password-edit').value : $('u-password').value;
+
+  if (!name || !email) return toast('Name and email are required', 'err');
+  if (!editingUserId && !password) return toast('Password is required for new users', 'err');
+
+  $('userSaveBtn').disabled = true;
+  try {
+    if (editingUserId) {
+      const body = { role, isActive, profileId, permissionSetIds: userPermSetsSelected.map(p => p.id) };
+      if (password) body.password = password;
+      await api(`/api/portal/users/${editingUserId}`, { method: 'PATCH', body: JSON.stringify(body) });
+      toast('User updated', 'ok');
+    } else {
+      await api('/api/portal/users', {
+        method: 'POST',
+        body: JSON.stringify({ name, email, password, role, profileId, permissionSetIds: userPermSetsSelected.map(p => p.id) })
+      });
+      toast('User created — they can now log in', 'ok');
+    }
+    closeUserModal();
+    await loadUsers();
+  } catch(e) {
+    toast(e.message, 'err');
+  } finally {
+    $('userSaveBtn').disabled = false;
+  }
+}
+
+function toggleUserActive(id, name, activate) {
+  const action = activate ? 'Activate' : 'Deactivate';
+  openConfirm(
+    `${action} ${name}?`,
+    activate
+      ? `${name} will be able to log in to the portal again.`
+      : `${name} will immediately lose access to the portal. Their data remains intact.`,
+    async () => {
+      await api(`/api/portal/users/${id}`, { method: 'PATCH', body: JSON.stringify({ isActive: activate }) });
+      toast(`User ${activate ? 'activated' : 'deactivated'}`, 'ok');
+      await loadUsers();
+    }
+  );
+}
+
+// ── TABS inside user modal ────────────────────────────
+function switchTab(name) {
+  document.querySelectorAll('.tab-btn').forEach((b,i) => {
+    const tabs = ['info','access'];
+    b.classList.toggle('active', tabs[i] === name);
+  });
+  document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+  $(`tab-${name}`)?.classList.add('active');
+}
+
+// ═══════════════════════════════════════════════════════
+// PROFILES
+// ═══════════════════════════════════════════════════════
+async function loadProfiles() {
+  $('profilesBody').innerHTML = '<tr><td colspan="5"><div class="spinner"></div></td></tr>';
+  try {
+    const data = await api('/api/portal/profiles');
+    allProfiles = data.profiles || [];
+    renderProfiles();
+    $('nav-profiles-count').textContent = allProfiles.length;
+  } catch(e) {
+    $('profilesBody').innerHTML = `<tr><td colspan="5" style="text-align:center;color:var(--danger);padding:24px">${e.message}</td></tr>`;
+  }
+}
+
+function renderProfiles() {
+  if (!allProfiles.length) {
+    $('profilesBody').innerHTML = `<tr><td colspan="5"><div class="empty-state"><h3>No profiles found</h3></div></td></tr>`;
+    return;
+  }
+  $('profilesBody').innerHTML = allProfiles.map(p => {
+    const perms = p.profile_object_permissions || [];
+    const activeObjs = perms.filter(r => r.can_read || r.can_create || r.can_edit || r.can_delete).length;
+    const usersWithProfile = allUsers.filter(u => u.profile?.id === p.id).length;
+    return `
+    <tr>
+      <td style="font-weight:700">${esc(p.name)}</td>
+      <td style="font-size:12px;color:var(--text-muted)">${esc(p.description||'—')}</td>
+      <td><span class="badge" style="background:var(--accent-soft);color:var(--accent)">${usersWithProfile} user${usersWithProfile!==1?'s':''}</span></td>
+      <td style="font-size:12px;color:var(--text-muted)">${activeObjs} / ${SF_OBJECTS.length} objects</td>
+      <td>
+        <div style="display:flex;gap:6px">
+          <button class="btn btn-ghost btn-sm" onclick="openEditProfile('${p.id}')">Edit</button>
+          ${usersWithProfile === 0 ? `<button class="btn btn-danger btn-sm" onclick="deleteProfile('${p.id}','${esc(p.name)}')">Delete</button>` : ''}
+        </div>
+      </td>
+    </tr>`;
+  }).join('');
+}
+
+function buildPermMatrix(bodyId, existingPerms = []) {
+  const permMap = {};
+  existingPerms.forEach(p => { permMap[p.sf_object] = p; });
+  $(bodyId).innerHTML = SF_OBJECTS.map(obj => {
+    const p = permMap[obj] || {};
+    return `<tr>
+      <td>${obj}</td>
+      ${['can_read','can_create','can_edit','can_delete'].map(col =>
+        `<td><input type="checkbox" class="perm-check" data-obj="${obj}" data-col="${col}" ${p[col] ? 'checked' : ''}></td>`
+      ).join('')}
+    </tr>`;
+  }).join('');
+}
+
+function collectPerms(bodyId) {
+  const perms = {};
+  document.querySelectorAll(`#${bodyId} .perm-check`).forEach(cb => {
+    const obj = cb.dataset.obj;
+    if (!perms[obj]) perms[obj] = { can_read: false, can_create: false, can_edit: false, can_delete: false };
+    perms[obj][cb.dataset.col] = cb.checked;
+  });
+  return Object.entries(perms).map(([sf_object, flags]) => ({ sf_object, ...flags }));
+}
+
+function openCreateProfile() {
+  editingProfileId = null;
+  $('profileModalTitle').textContent = 'New Profile';
+  $('profileSaveBtn').textContent    = 'Create Profile';
+  $('p-name').value = $('p-desc').value = '';
+  buildPermMatrix('profilePermBody');
+  $('profileModal').classList.add('open');
+}
+
+function openEditProfile(id) {
+  const p = allProfiles.find(x => x.id === id);
+  if (!p) return;
+  editingProfileId = id;
+  $('profileModalTitle').textContent = `Edit — ${p.name}`;
+  $('profileSaveBtn').textContent    = 'Save Profile';
+  $('p-name').value = p.name;
+  $('p-desc').value = p.description || '';
+  buildPermMatrix('profilePermBody', p.profile_object_permissions || []);
+  $('profileModal').classList.add('open');
+}
+
+function closeProfileModal() { $('profileModal').classList.remove('open'); editingProfileId = null; }
+
+async function saveProfile() {
+  const name = $('p-name').value.trim();
+  if (!name) return toast('Profile name is required', 'err');
+  const perms = collectPerms('profilePermBody');
+  $('profileSaveBtn').disabled = true;
+  try {
+    if (editingProfileId) {
+      await api(`/api/portal/profiles/${editingProfileId}`, {
+        method: 'PATCH', body: JSON.stringify({ name, description: $('p-desc').value.trim(), permissions: perms })
+      });
+      toast('Profile updated', 'ok');
+    } else {
+      await api('/api/portal/profiles', {
+        method: 'POST', body: JSON.stringify({ name, description: $('p-desc').value.trim(), permissions: perms })
+      });
+      toast('Profile created', 'ok');
+    }
+    closeProfileModal();
+    await loadProfiles();
+  } catch(e) {
+    toast(e.message, 'err');
+  } finally {
+    $('profileSaveBtn').disabled = false;
+  }
+}
+
+function deleteProfile(id, name) {
+  openConfirm(`Delete "${name}"?`, 'This profile will be permanently deleted. Make sure no users are assigned to it.', async () => {
+    await api(`/api/portal/profiles/${id}`, { method: 'DELETE' });
+    toast('Profile deleted', 'ok');
+    await loadProfiles();
+  });
+}
+
+// ═══════════════════════════════════════════════════════
+// PERMISSION SETS
+// ═══════════════════════════════════════════════════════
+async function loadPermSets() {
+  $('permSetsBody').innerHTML = '<tr><td colspan="4"><div class="spinner"></div></td></tr>';
+  try {
+    const data = await api('/api/portal/permission-sets');
+    allPermSets = data.permissionSets || [];
+    renderPermSets();
+    $('nav-permsets-count').textContent = allPermSets.length;
+  } catch(e) {
+    $('permSetsBody').innerHTML = `<tr><td colspan="4" style="text-align:center;color:var(--danger);padding:24px">${e.message}</td></tr>`;
+  }
+}
+
+function renderPermSets() {
+  if (!allPermSets.length) {
+    $('permSetsBody').innerHTML = `<tr><td colspan="4"><div class="empty-state"><h3>No permission sets found</h3></div></td></tr>`;
+    return;
+  }
+  $('permSetsBody').innerHTML = allPermSets.map(ps => {
+    const usersCount = allUsers.filter(u =>
+      (u.permissionSets || []).some(p => p.id === ps.id)
+    ).length;
+    return `
+    <tr>
+      <td style="font-weight:700">${esc(ps.name)}</td>
+      <td style="font-size:12px;color:var(--text-muted)">${esc(ps.description||'—')}</td>
+      <td><span class="badge" style="background:var(--accent-soft);color:var(--accent)">${usersCount} user${usersCount!==1?'s':''}</span></td>
+      <td>
+        <div style="display:flex;gap:6px">
+          <button class="btn btn-ghost btn-sm" onclick="openEditPermSet('${ps.id}')">Edit</button>
+          <button class="btn btn-danger btn-sm" onclick="deletePermSet('${ps.id}','${esc(ps.name)}')">Delete</button>
+        </div>
+      </td>
+    </tr>`;
+  }).join('');
+}
+
+function openCreatePermSet() {
+  editingPermSetId = null;
+  $('permSetModalTitle').textContent = 'New Permission Set';
+  $('permSetSaveBtn').textContent    = 'Create Permission Set';
+  $('ps-name').value = $('ps-desc').value = '';
+  buildPermMatrix('permSetPermBody');
+  $('permSetModal').classList.add('open');
+}
+
+function openEditPermSet(id) {
+  const ps = allPermSets.find(x => x.id === id);
+  if (!ps) return;
+  editingPermSetId = id;
+  $('permSetModalTitle').textContent = `Edit — ${ps.name}`;
+  $('permSetSaveBtn').textContent    = 'Save Permission Set';
+  $('ps-name').value = ps.name;
+  $('ps-desc').value = ps.description || '';
+  buildPermMatrix('permSetPermBody', ps.permission_set_object_perms || []);
+  $('permSetModal').classList.add('open');
+}
+
+function closePermSetModal() { $('permSetModal').classList.remove('open'); editingPermSetId = null; }
+
+async function savePermSet() {
+  const name = $('ps-name').value.trim();
+  if (!name) return toast('Name is required', 'err');
+  const perms = collectPerms('permSetPermBody');
+  $('permSetSaveBtn').disabled = true;
+  try {
+    if (editingPermSetId) {
+      await api(`/api/portal/permission-sets/${editingPermSetId}`, {
+        method: 'PATCH', body: JSON.stringify({ name, description: $('ps-desc').value.trim(), permissions: perms })
+      });
+      toast('Permission set updated', 'ok');
+    } else {
+      await api('/api/portal/permission-sets', {
+        method: 'POST', body: JSON.stringify({ name, description: $('ps-desc').value.trim(), permissions: perms })
+      });
+      toast('Permission set created', 'ok');
+    }
+    closePermSetModal();
+    await loadPermSets();
+  } catch(e) {
+    toast(e.message, 'err');
+  } finally {
+    $('permSetSaveBtn').disabled = false;
+  }
+}
+
+function deletePermSet(id, name) {
+  openConfirm(`Delete "${name}"?`, 'This permission set will be removed from all users assigned to it.', async () => {
+    await api(`/api/portal/permission-sets/${id}`, { method: 'DELETE' });
+    toast('Permission set deleted', 'ok');
+    await loadPermSets();
+  });
+}
+
+// ═══════════════════════════════════════════════════════
+// AUDIT LOG
+// ═══════════════════════════════════════════════════════
+async function loadAuditLog() {
+  $('auditBody').innerHTML = '<tr><td colspan="6"><div class="spinner"></div></td></tr>';
+  try {
+    const data = await api('/api/portal/audit-log?limit=200');
+    allAuditLogs = data.logs || [];
+    renderAuditLog(allAuditLogs);
+  } catch(e) {
+    $('auditBody').innerHTML = `<tr><td colspan="6" style="text-align:center;color:var(--danger);padding:24px">${e.message}</td></tr>`;
+  }
+}
+
+function renderAuditLog(logs) {
+  if (!logs.length) {
+    $('auditBody').innerHTML = `<tr><td colspan="6"><div class="empty-state"><h3>No audit logs found</h3></div></td></tr>`;
+    return;
+  }
+  $('auditBody').innerHTML = logs.map(log => {
+    const actionCls = getActionClass(log.action);
+    const time = new Date(log.created_at).toLocaleString();
+    return `<tr class="audit-row">
+      <td>${time}</td>
+      <td>
+        <div style="font-size:13px;font-weight:500">${esc(log.user_email||'—')}</div>
+      </td>
+      <td><span class="badge badge-${log.user_role||'readonly'}">${roleName(log.user_role||'')}</span></td>
+      <td><span class="action-badge ${actionCls}">${esc(log.action)}</span></td>
+      <td style="font-size:12px;color:var(--text-muted)">${esc(log.sf_object||'—')}</td>
+      <td style="font-size:11px;font-family:'JetBrains Mono',monospace;color:var(--text-muted)">${esc(log.ip_address||'—')}</td>
+    </tr>`;
+  }).join('');
+}
+
+function filterAudit() {
+  const q      = $('auditSearch').value.toLowerCase();
+  const action = $('auditActionFilter').value;
+  const filtered = allAuditLogs.filter(l => {
+    const matchQ = !q || (l.user_email||'').toLowerCase().includes(q) || (l.action||'').includes(q);
+    const matchA = !action || l.action === action;
+    return matchQ && matchA;
+  });
+  renderAuditLog(filtered);
+}
+
+function getActionClass(action) {
+  if (!action) return 'action-default';
+  if (action === 'login') return 'action-login';
+  if (action === 'logout') return 'action-logout';
+  if (action === 'failed_login') return 'action-failed_login';
+  if (action.includes('create')) return 'action-create';
+  if (action.includes('update') || action.includes('edit')) return 'action-edit';
+  if (action.includes('delete') || action.includes('deactivate')) return 'action-delete';
+  return 'action-default';
+}
+
+// ═══════════════════════════════════════════════════════
+// CONFIRM MODAL
+// ═══════════════════════════════════════════════════════
+function openConfirm(title, msg, callback) {
+  $('confirmTitle').textContent = title;
+  $('confirmMsg').textContent   = msg;
+  confirmCallback = callback;
+  $('confirmModal').classList.add('open');
+}
+function closeConfirmModal() { $('confirmModal').classList.remove('open'); confirmCallback = null; }
+async function confirmAction() {
+  if (!confirmCallback) return;
+  $('confirmOkBtn').disabled = true;
+  try {
+    await confirmCallback();
+    closeConfirmModal();
+  } catch(e) {
+    toast(e.message, 'err');
+  } finally {
+    $('confirmOkBtn').disabled = false;
+  }
+}
+
+// ═══════════════════════════════════════════════════════
+// UTILITIES
+// ═══════════════════════════════════════════════════════
+function esc(v) {
+  return String(v||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+function roleName(r) {
+  return {super_admin:'Super Admin',admin:'Admin',manager:'Manager',employee:'Employee',readonly:'Read-Only'}[r]||r||'—';
+}
+function toast(msg, type='info') {
+  const el = document.createElement('div');
+  el.className = `toast toast-${type}`;
+  const icons = { ok: '✓', err: '✕', info: 'ℹ' };
+  el.innerHTML = `<span class="toast-icon">${icons[type]||'ℹ'}</span><span>${esc(msg)}</span>`;
+  $('toastStack').appendChild(el);
+  requestAnimationFrame(() => el.classList.add('in'));
+  setTimeout(() => { el.classList.add('out'); setTimeout(() => el.remove(), 350); }, 3500);
+}
+</script>
+</body>
+</html>
