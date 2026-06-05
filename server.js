@@ -42,6 +42,19 @@ function checkAuth(req, res, next) {
 
 // Role gate — use AFTER checkAuth. Roles in order: super_admin > admin > manager > employee > readonly
 const ROLE_LEVELS = { super_admin: 5, admin: 4, manager: 3, employee: 2, readonly: 1 };
+const RESERVED_API_OBJECT_NAMES = new Set([
+  'portal',
+  'auth',
+  'email',
+  'activity-email-templates',
+  'bulk',
+  'lookup',
+  'debug',
+  'search',
+  'meta',
+  'campaigns',
+  'chatter'
+]);
 
 function checkRole(minimumRole) {
   return (req, res, next) => {
@@ -54,6 +67,15 @@ function checkRole(minimumRole) {
     });
   };
 }
+
+function rejectReservedApiObject(req, res, next, objectName) {
+  if (RESERVED_API_OBJECT_NAMES.has(String(objectName || '').toLowerCase())) {
+    return res.status(404).json({ error: `No API route found for /api/${objectName}` });
+  }
+  next();
+}
+
+app.param('object', rejectReservedApiObject);
 
 
 const PORT = process.env.PORT || 3000;
@@ -1880,8 +1902,42 @@ app.get('/api/portal/users', checkAuth, checkRole('admin'), async (req, res) => 
     const { data, error } = await supabase.rpc('get_portal_users');
     if (error) throw error;
 
+    const users = data || [];
+    const userIds = users.map((u) => u.id);
+    let permissionSetsByUserId = {};
+
+    if (userIds.length) {
+      const { data: assignments, error: assignmentsError } = await supabase
+        .from('user_permission_set_assignments')
+        .select('user_id, perm_set_id')
+        .in('user_id', userIds);
+
+      if (assignmentsError) throw assignmentsError;
+
+      const permissionSetIds = [...new Set((assignments || []).map((row) => row.perm_set_id))];
+      let permissionSetById = {};
+
+      if (permissionSetIds.length) {
+        const { data: permissionSets, error: permissionSetsError } = await supabase
+          .from('permission_sets')
+          .select('id, name, description')
+          .in('id', permissionSetIds);
+
+        if (permissionSetsError) throw permissionSetsError;
+        permissionSetById = Object.fromEntries((permissionSets || []).map((ps) => [ps.id, ps]));
+      }
+
+      permissionSetsByUserId = (assignments || []).reduce((acc, row) => {
+        const permissionSet = permissionSetById[row.perm_set_id];
+        if (!permissionSet) return acc;
+        if (!acc[row.user_id]) acc[row.user_id] = [];
+        acc[row.user_id].push(permissionSet);
+        return acc;
+      }, {});
+    }
+
     res.json({
-      users: (data || []).map(u => ({
+      users: users.map(u => ({
         id:           u.id,
         email:        u.email,
         name:         u.name,
@@ -1890,7 +1946,8 @@ app.get('/api/portal/users', checkAuth, checkRole('admin'), async (req, res) => 
         mustChangePw: u.must_change_pw,
         createdAt:    u.created_at,
         lastLoginAt:  u.last_login_at,
-        profile:      u.profile_id ? { id: u.profile_id, name: u.profile_name } : null
+        profile:      u.profile_id ? { id: u.profile_id, name: u.profile_name } : null,
+        permissionSets: permissionSetsByUserId[u.id] || []
       }))
     });
   } catch (err) {
@@ -1903,20 +1960,55 @@ app.get('/api/portal/users', checkAuth, checkRole('admin'), async (req, res) => 
 // THIS WAS MISSING — it was accidentally replaced by a duplicate users route
 app.get('/api/portal/permission-sets', checkAuth, checkRole('admin'), async (req, res) => {
   try {
-    const { data, error } = await supabase
+    const { data: permissionSets, error } = await supabase
       .from('permission_sets')
-      .select(`
-        id,
-        name,
-        description,
-        is_active,
-        created_at,
-        permission_set_object_perms ( sf_object, can_read, can_create, can_edit, can_delete )
-      `)
+      .select('id, name, description, is_active, created_at')
       .order('name');
 
     if (error) throw error;
-    res.json({ permissionSets: data || [] });
+
+    const ids = (permissionSets || []).map((ps) => ps.id);
+    let permissionsBySetId = {};
+    let assignedUserCountBySetId = {};
+
+    if (ids.length) {
+      const [
+        { data: permissions, error: permissionsError },
+        { data: assignments, error: assignmentsError }
+      ] = await Promise.all([
+        supabase
+          .from('permission_set_object_perms')
+          .select('perm_set_id, sf_object, can_read, can_create, can_edit, can_delete')
+          .in('perm_set_id', ids),
+        supabase
+          .from('user_permission_set_assignments')
+          .select('perm_set_id, user_id')
+          .in('perm_set_id', ids)
+      ]);
+
+      if (permissionsError) throw permissionsError;
+      if (assignmentsError) throw assignmentsError;
+
+      permissionsBySetId = (permissions || []).reduce((acc, permission) => {
+        const { perm_set_id, ...rest } = permission;
+        if (!acc[perm_set_id]) acc[perm_set_id] = [];
+        acc[perm_set_id].push(rest);
+        return acc;
+      }, {});
+
+      assignedUserCountBySetId = (assignments || []).reduce((acc, assignment) => {
+        acc[assignment.perm_set_id] = (acc[assignment.perm_set_id] || 0) + 1;
+        return acc;
+      }, {});
+    }
+
+    res.json({
+      permissionSets: (permissionSets || []).map((ps) => ({
+        ...ps,
+        assignedUserCount: assignedUserCountBySetId[ps.id] || 0,
+        permission_set_object_perms: permissionsBySetId[ps.id] || []
+      }))
+    });
   } catch (err) {
     console.error('GET /api/portal/permission-sets error:', err.message);
     res.status(500).json({ error: err.message });
