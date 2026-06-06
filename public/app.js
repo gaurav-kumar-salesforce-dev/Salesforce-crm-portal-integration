@@ -798,29 +798,50 @@ async function api(path, options = {}) {
   const headers = { "Content-Type": "application/json" };
   if (token) headers["Authorization"] = `Bearer ${token}`;
 
-  const response = await fetch(path, {
-    headers,
-    ...options,
-    headers: { ...headers, ...(options.headers || {}) }, // merge any extra headers
-  });
+   let response;
+  try {
+    response = await fetch(path, {
+      headers,
+      ...options,
+      headers: { ...headers, ...(options.headers || {}) }
+    });
+  } catch (networkErr) {
+    // Pure network failure — no response at all
+    toast('Network error — check your connection and try again.', 'err', 8000);
+    throw new Error('Network error');
+  }
 
-  // If server says 401 — token expired or invalid, redirect to login
+  // Handle 401
   if (response.status === 401) {
     const data = await response.json().catch(() => ({}));
-    if (
-      data.code === "TOKEN_EXPIRED" ||
-      data.code === "TOKEN_INVALID" ||
-      data.code === "NO_TOKEN"
-    ) {
+    if (['TOKEN_EXPIRED','TOKEN_INVALID','NO_TOKEN'].includes(data.code)) {
       clearAuthToken();
-      showLoginPage("Your session expired. Please log in again.");
+      showLoginPage('Your session expired. Please log in again.');
       return;
     }
   }
 
+  // Handle 403
+  if (response.status === 403) {
+    const data = await response.json().catch(() => ({}));
+    const msg  = data.error || 'You do not have permission to perform this action.';
+    toast(msg, 'err', 8000);
+    throw new Error(msg);
+  }
+
+  // Handle 429 rate limit
+  if (response.status === 429) {
+    toast('Too many requests — please wait a moment and try again.', 'err', 8000);
+    throw new Error('Rate limited');
+  }
+
   const data = await response.json().catch(() => ({}));
-  if (!response.ok)
-    throw new Error(data.error || `Request failed with ${response.status}`);
+
+  if (!response.ok) {
+    const msg = data.error || `Request failed (${response.status})`;
+    throw new Error(msg);
+  }
+
   return data;
 }
 
@@ -936,6 +957,8 @@ async function submitLogin() {
     setAuthToken(data.token);
     setStoredPerms(data.permissions || {});
     window.portalUser = data.user;
+    applyAllPermissionGuards();
+    window.portalUser = data.user;
 
     hideLoginPage();
 
@@ -971,13 +994,13 @@ async function submitLogin() {
 // ─────────────────────────────────────────────────────────────────────────────
 
 function canDo(sfObject, action) {
-  const perms = window.userPerms || getStoredPerms();
   const role = window.portalUser?.role;
+  const perms = window.userPerms || getStoredPerms();
 
-  // Super admin and admin bypass all permission checks
+  // super_admin and admin can do everything
   if (role === "super_admin" || role === "admin") return true;
 
-  // Read-only role: can never write
+  // readonly can never write regardless of profile
   if (role === "readonly" && action !== "can_read") return false;
 
   return Boolean(perms[sfObject]?.[action]);
@@ -988,36 +1011,46 @@ function applyAllPermissionGuards() {
 }
 
 function applyPermissionGuards(sfObject) {
+  const canRead = canDo(sfObject, "can_read");
   const canCreate = canDo(sfObject, "can_create");
   const canEdit = canDo(sfObject, "can_edit");
   const canDelete = canDo(sfObject, "can_delete");
 
-  // "New" button in page header
-  const newBtns = document.querySelectorAll('[onclick="openCreate()"]');
-  newBtns.forEach((btn) => {
+  // New button in page header
+  document.querySelectorAll('[onclick="openCreate()"]').forEach((btn) => {
     btn.style.display = canCreate ? "" : "none";
   });
 
   // Edit buttons in table rows
   document.querySelectorAll(".row-action.edit").forEach((btn) => {
-    btn.disabled = !canEdit;
-    btn.title = canEdit ? "Edit" : "No edit permission";
-    btn.style.opacity = canEdit ? "1" : "0.4";
+    btn.style.display = canEdit ? "" : "none";
   });
 
   // Delete buttons in table rows
   document.querySelectorAll(".row-action.del").forEach((btn) => {
-    btn.disabled = !canDelete;
-    btn.style.opacity = canDelete ? "1" : "0.4";
+    btn.style.display = canDelete ? "" : "none";
   });
 
   // Edit button on record detail page
-  const editDetailBtn = document.querySelector(
-    '[onclick="editCurrentDetailRecord()"]',
-  );
-  if (editDetailBtn) {
-    editDetailBtn.style.display = canEdit ? "" : "none";
-  }
+  document
+    .querySelectorAll('[onclick="editCurrentDetailRecord()"]')
+    .forEach((btn) => {
+      btn.style.display = canEdit ? "" : "none";
+    });
+
+  // Kanban edit buttons
+  document.querySelectorAll(".kanban-card-action").forEach((btn) => {
+    btn.style.display = canEdit ? "" : "none";
+  });
+
+  // Hide New List View button for readonly
+  const listViewBtn = document.querySelector('[onclick="openListViewModal()"]');
+  if (listViewBtn) listViewBtn.style.display = canRead ? "" : "none";
+
+  // Activity action buttons (New Task, Log Call, New Event, Email)
+  document.querySelectorAll(".activity-action").forEach((btn) => {
+    btn.style.display = canCreate ? "" : "none";
+  });
 }
 
 function formatValue(field, value, record = null) {
@@ -1082,28 +1115,263 @@ async function checkConnection() {
 
 async function loadProfile() {
   try {
-    currentUser = await api("/api/me");
-    const initials = (currentUser.name || "SF")
-      .split(/\s+/)
+  currentUser = await api("/api/me");
+
+  // Salesforce user info (fallback)
+  const sfInitials = (currentUser.name || "SF")
+    .split(/\s+/)
+    .map((p) => p[0])
+    .join("")
+    .slice(0, 2);
+
+  $("profileButton").textContent = sfInitials || "SF";
+  $("profileName").textContent = currentUser.name || "Salesforce User";
+  $("profileEmail").textContent =
+    currentUser.email || currentUser.username || "Connected";
+
+  // Update portal user info
+  try {
+    const portalMe = await api("/api/portal/me");
+    window.portalUser = portalMe;
+
+    // Overwrite name/avatar with portal user
+    const initials = (portalMe.name || "U")
+      .split(" ")
       .map((p) => p[0])
       .join("")
-      .slice(0, 2);
-    $("profileButton").textContent = initials || "SF";
-    $("profileName").textContent = currentUser.name || "Salesforce User";
-    $("profileEmail").textContent =
-      currentUser.email || currentUser.username || "Connected";
-    const portalUser = await api("/api/portal/me");
-    window.portalUser = portalUser;
+      .slice(0, 2)
+      .toUpperCase();
+
+    $("profileButton").textContent = initials;
+    $("profileName").textContent = portalMe.name || "Portal User";
+    $("profileEmail").textContent = portalMe.email || "";
+
     const adminBtn = $("adminPanelBtn");
-    if (adminBtn)
+    if (adminBtn) {
       adminBtn.style.display = ["super_admin", "admin"].includes(
-        portalUser?.role,
+        portalMe?.role
       )
         ? ""
         : "none";
-  } catch (err) {
-    $("profileButton").textContent = "SF";
+    }
+
+    // Hide org config from non-admins
+    const orgBtn = document.querySelector(
+      '[onclick="openOrgModal()"]'
+    );
+    if (orgBtn) {
+      const isAdmin = ["super_admin", "admin"].includes(
+        portalMe?.role
+      );
+      orgBtn.style.display = isAdmin ? "" : "none";
+    }
+
+    // Hide Connect Salesforce button from non-admins
+    const authBtn = $("authBtn");
+    if (
+      authBtn &&
+      !["super_admin", "admin"].includes(portalMe?.role)
+    ) {
+      authBtn.style.display = "none";
+    }
+  } catch {
+    // Keep Salesforce user info if portal user fetch fails
   }
+} catch (err) {
+  $("profileButton").textContent = "SF";
+}
+}
+
+// ── USER PROFILE PAGE ────────────────────────────────
+async function openUserProfile() {
+  closeProfileMenu();
+  try {
+    const user = await api('/api/portal/profile');
+    const initials = (user.name || 'U').split(' ').map(p => p[0]).join('').slice(0,2).toUpperCase();
+    const roleLabels = {
+      super_admin: 'Super Admin', admin: 'Admin',
+      manager: 'Manager', employee: 'Employee', readonly: 'Read-Only'
+    };
+
+    $('content').innerHTML = `
+      <div style="max-width:680px;margin:0 auto;padding:8px 0">
+
+        <!-- Header -->
+        <div style="display:flex;align-items:center;gap:16px;margin-bottom:28px">
+          <button class="btn btn-ghost btn-sm" onclick="restoreListContent()">
+            ← Back
+          </button>
+          <h1 style="font-size:20px;font-weight:800">My Profile</h1>
+        </div>
+
+        <!-- Must change password banner -->
+        ${user.mustChangePw ? `
+        <div style="background:rgba(245,158,11,.1);border:1px solid rgba(245,158,11,.3);
+             border-radius:10px;padding:14px 18px;margin-bottom:20px;
+             color:#f59e0b;font-size:13px;font-weight:600">
+          ⚠️ You are using a temporary password. Please change it below.
+        </div>` : ''}
+
+        <!-- Profile Card -->
+        <div style="background:var(--surface);border:1px solid var(--border);
+             border-radius:14px;padding:28px;margin-bottom:20px">
+          <div style="display:flex;align-items:center;gap:18px;margin-bottom:24px">
+            <div style="width:56px;height:56px;border-radius:50%;background:var(--accent);
+                 color:#fff;display:flex;align-items:center;justify-content:center;
+                 font-size:20px;font-weight:800;flex-shrink:0">${initials}</div>
+            <div>
+              <div style="font-size:18px;font-weight:800">${escapeHtml(user.name)}</div>
+              <div style="font-size:13px;color:var(--text-muted)">${escapeHtml(user.email)}</div>
+            </div>
+            <div style="margin-left:auto">
+              <span style="background:var(--accent-soft);color:var(--accent);
+                   border-radius:20px;padding:4px 12px;font-size:12px;font-weight:700">
+                ${roleLabels[user.role] || user.role}
+              </span>
+            </div>
+          </div>
+
+          <!-- Info Grid -->
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+            ${[
+              ['Email',        user.email],
+              ['Role',         roleLabels[user.role] || user.role],
+              ['Profile',      user.profile?.name || '—'],
+              ['Member Since', user.createdAt ? new Date(user.createdAt).toLocaleDateString() : '—'],
+              ['Last Login',   user.lastLoginAt ? new Date(user.lastLoginAt).toLocaleString() : 'Never']
+            ].map(([label, value]) => `
+              <div style="background:var(--bg-secondary);border-radius:8px;padding:12px">
+                <div style="font-size:11px;font-weight:600;color:var(--text-muted);
+                     text-transform:uppercase;letter-spacing:.04em;margin-bottom:4px">${label}</div>
+                <div style="font-size:13px;font-weight:600">${escapeHtml(String(value || '—'))}</div>
+              </div>
+            `).join('')}
+          </div>
+
+          <!-- Permission Sets -->
+          ${user.permissionSets?.length ? `
+          <div style="margin-top:16px">
+            <div style="font-size:11px;font-weight:600;color:var(--text-muted);
+                 text-transform:uppercase;letter-spacing:.04em;margin-bottom:8px">
+              Permission Sets
+            </div>
+            <div style="display:flex;flex-wrap:wrap;gap:6px">
+              ${user.permissionSets.map(ps => `
+                <span style="background:var(--accent-soft);color:var(--accent);
+                     border:1px solid rgba(99,102,241,.25);border-radius:20px;
+                     padding:3px 10px;font-size:11px;font-weight:600">
+                  ${escapeHtml(ps.name)}
+                </span>
+              `).join('')}
+            </div>
+          </div>` : ''}
+        </div>
+
+        <!-- Edit Name -->
+        <div style="background:var(--surface);border:1px solid var(--border);
+             border-radius:14px;padding:24px;margin-bottom:16px">
+          <h2 style="font-size:15px;font-weight:700;margin-bottom:16px">Update Display Name</h2>
+          <div style="display:flex;gap:10px;align-items:flex-end">
+            <div style="flex:1">
+              <label style="display:block;font-size:12px;font-weight:600;
+                     color:var(--text-secondary);margin-bottom:6px">Full Name</label>
+              <input class="form-ctrl" id="displayNameInput" value="${escapeHtml(user.name)}"
+                placeholder="Your full name"
+                onkeydown="if(event.key==='Enter') saveName()">
+            </div>
+            <button class="btn btn-primary" onclick="saveName()">Save Name</button>
+          </div>
+          <div id="nameMsg" style="margin-top:8px;font-size:12px;display:none"></div>
+        </div>
+
+        <!-- Change Password -->
+        <div style="background:var(--surface);border:1px solid var(--border);
+             border-radius:14px;padding:24px">
+          <h2 style="font-size:15px;font-weight:700;margin-bottom:16px">Change Password</h2>
+          <div style="display:grid;gap:12px">
+            <div>
+              <label style="display:block;font-size:12px;font-weight:600;
+                     color:var(--text-secondary);margin-bottom:6px">Current Password</label>
+              <input class="form-ctrl" id="currentPw" type="password"
+                placeholder="Your current password">
+            </div>
+            <div>
+              <label style="display:block;font-size:12px;font-weight:600;
+                     color:var(--text-secondary);margin-bottom:6px">New Password</label>
+              <input class="form-ctrl" id="newPw" type="password"
+                placeholder="Min. 8 characters">
+            </div>
+            <div>
+              <label style="display:block;font-size:12px;font-weight:600;
+                     color:var(--text-secondary);margin-bottom:6px">Confirm New Password</label>
+              <input class="form-ctrl" id="confirmPw" type="password"
+                placeholder="Repeat new password"
+                onkeydown="if(event.key==='Enter') savePassword()">
+            </div>
+          </div>
+          <div id="pwMsg" style="margin-top:12px;font-size:12px;display:none"></div>
+          <button class="btn btn-primary" style="margin-top:16px" onclick="savePassword()">
+            Update Password
+          </button>
+        </div>
+
+      </div>
+    `;
+  } catch(err) {
+    toast('Could not load your profile: ' + err.message, 'err');
+  }
+}
+
+async function saveName() {
+  const name  = $('displayNameInput')?.value.trim();
+  const msg   = $('nameMsg');
+  if (!name) { showProfileMsg('nameMsg', 'Name cannot be empty', false); return; }
+  try {
+    await api('/api/portal/profile', { method: 'PATCH', body: JSON.stringify({ name }) });
+    showProfileMsg('nameMsg', 'Name updated successfully', true);
+    // Update avatar initials in topbar
+    const initials = name.split(' ').map(p => p[0]).join('').slice(0,2).toUpperCase();
+    $('profileButton').textContent = initials;
+    $('displayNameInput').textContent   = name;
+    if (window.portalUser) window.portalUser.name = name;
+  } catch(err) {
+    showProfileMsg('nameMsg', err.message, false);
+  }
+}
+
+async function savePassword() {
+  const currentPw = $('currentPw')?.value;
+  const newPw     = $('newPw')?.value;
+  const confirmPw = $('confirmPw')?.value;
+
+  if (!currentPw || !newPw || !confirmPw) {
+    showProfileMsg('pwMsg', 'All password fields are required', false); return;
+  }
+  if (newPw.length < 8) {
+    showProfileMsg('pwMsg', 'New password must be at least 8 characters', false); return;
+  }
+  if (newPw !== confirmPw) {
+    showProfileMsg('pwMsg', 'New passwords do not match', false); return;
+  }
+  try {
+    await api('/api/portal/profile', {
+      method: 'PATCH',
+      body: JSON.stringify({ currentPassword: currentPw, newPassword: newPw })
+    });
+    showProfileMsg('pwMsg', 'Password updated successfully', true);
+    $('currentPw').value = $('newPw').value = $('confirmPw').value = '';
+  } catch(err) {
+    showProfileMsg('pwMsg', err.message, false);
+  }
+}
+
+function showProfileMsg(elementId, message, success) {
+  const el = $(elementId);
+  if (!el) return;
+  el.textContent  = message;
+  el.style.color  = success ? 'var(--success, #22c55e)' : 'var(--danger, #ef4444)';
+  el.style.display = 'block';
+  setTimeout(() => { el.style.display = 'none'; }, 4000);
 }
 
 async function loadOrgSettings() {
@@ -1254,16 +1522,16 @@ function connectSalesforce() {
 
 async function logoutSalesforce() {
   // This is now PORTAL logout only
-  await fetch('/api/auth/logout', {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${getAuthToken()}` }
+  await fetch("/api/auth/logout", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${getAuthToken()}` },
   }).catch(() => null);
 
   clearAuthToken();
   closeProfileMenu();
   currentRecords = [];
-  currentUser    = null;
-  showLoginPage('You have been logged out.');
+  currentUser = null;
+  showLoginPage("You have been logged out.");
 }
 
 function toggleProfileMenu() {
@@ -1402,18 +1670,49 @@ async function loadData() {
     updateRecordCounts();
     await verifyListCountWhenSmall();
     $("stateLoading").style.display = "none";
+    applyPermissionGuards(currentObject);
     showActiveView();
     queueLazyLoadIfNeeded();
-  } catch (err) {
-    $("stateLoading").style.display = "none";
-    $("stateError").style.display = "flex";
-    $("errMsg").textContent = "Could not load Salesforce data";
-    $("errDetail").textContent = err.message;
-    $("pageSub").textContent = "Salesforce request failed";
-    const retryBtn = $("stateError").querySelector("button");
-    const authError = /auth|oauth|token|unknown_error/i.test(err.message);
-    retryBtn.textContent = authError ? "Connect Salesforce" : "Retry";
-    retryBtn.onclick = authError ? connectSalesforce : loadData;
+ } catch (err) {
+    $('stateLoading').style.display = 'none';
+    $('stateError').style.display   = 'flex';
+
+    const isAuth  = /auth|oauth|token|unknown_error/i.test(err.message);
+    const isPerm  = /permission|403|forbidden/i.test(err.message);
+    const isNet   = /network|fetch/i.test(err.message);
+
+    let title  = 'Could not load records';
+    let detail = err.message;
+    let btnText = 'Retry';
+    let btnFn   = 'loadData()';
+
+    if (isAuth) {
+      title   = 'Salesforce authentication required';
+      detail  = 'Your Salesforce session has expired. Reconnect to continue.';
+      btnText = 'Connect Salesforce';
+      btnFn   = 'connectSalesforce()';
+    } else if (isPerm) {
+      title  = 'Access denied';
+      detail = err.message;
+      btnText = 'Go Back';
+      btnFn   = 'restoreListContent()';
+    } else if (isNet) {
+      title  = 'Connection error';
+      detail = 'Check your internet connection and try again.';
+    }
+
+    $('errMsg').textContent    = title;
+    $('errDetail').textContent = detail;
+    $('pageSub').textContent   = 'Could not load data';
+
+    const retryBtn = $('stateError').querySelector('button');
+    if (retryBtn) {
+      retryBtn.textContent = btnText;
+      retryBtn.onclick = new Function(btnFn);
+    }
+
+    // Also show toast for quick visibility
+    toast(detail, 'err', 10000);
   }
 }
 
@@ -2773,6 +3072,7 @@ function renderRecordDetailPage(
       </div>
     </div>
   `;
+  applyPermissionGuards(objectName);
 }
 
 function showSideTab(name) {
@@ -5361,7 +5661,7 @@ async function saveRecord() {
       await loadData();
     }
   } catch (err) {
-    toast(err.message, "err");
+    toast(err.message || 'Could not save record. Please try again.', 'err', 10000);
   } finally {
     $("saveBtn").disabled = false;
   }
@@ -5390,7 +5690,7 @@ async function confirmDelete() {
     closeDeleteModal();
     await loadData();
   } catch (err) {
-    toast(err.message, "err");
+    toast(err.message || 'Could not delete record. Please try again.', 'err', 10000);
   } finally {
     $("confirmDelBtn").disabled = false;
   }
@@ -5463,16 +5763,93 @@ function overlayClick(event, overlayId, closeFn) {
   if (event.target.id === overlayId) closeFn();
 }
 
-function toast(message, type = "info") {
-  const item = document.createElement("div");
+function toast(message, type = 'info', duration = 6000) {
+  const stack = $('toastStack');
+  if (!stack) return;
+
+  // Map raw error messages to human-friendly ones
+  const friendlyMessage = friendlyError(message);
+
+  const item = document.createElement('div');
   item.className = `toast toast-${type}`;
-  item.innerHTML = `<span class="toast-icon">${type === "err" ? "!" : "OK"}</span><span>${escapeHtml(message)}</span>`;
-  $("toastStack").appendChild(item);
-  requestAnimationFrame(() => item.classList.add("in"));
-  setTimeout(() => {
-    item.classList.add("out");
-    setTimeout(() => item.remove(), 350);
-  }, 3200);
+
+  const icons = { ok: '✓', err: '✕', info: 'ℹ' };
+  const labels = { ok: 'Success', err: 'Error', info: 'Info' };
+
+  item.innerHTML = `
+    <div class="toast-inner">
+      <span class="toast-icon toast-icon-${type}">${icons[type] || 'ℹ'}</span>
+      <div class="toast-content">
+        <div class="toast-label">${labels[type] || 'Info'}</div>
+        <div class="toast-msg">${escapeHtml(friendlyMessage)}</div>
+      </div>
+      <button class="toast-close" onclick="this.closest('.toast').remove()">✕</button>
+    </div>
+    <div class="toast-progress toast-progress-${type}"></div>
+  `;
+
+  stack.appendChild(item);
+  requestAnimationFrame(() => item.classList.add('in'));
+
+  // Progress bar animation
+  const progress = item.querySelector('.toast-progress');
+  if (progress) {
+    progress.style.transition = `width ${duration}ms linear`;
+    requestAnimationFrame(() => { progress.style.width = '0%'; });
+  }
+
+  const timer = setTimeout(() => {
+    item.classList.add('out');
+    setTimeout(() => item.remove(), 400);
+  }, duration);
+
+  // Pause on hover
+  item.addEventListener('mouseenter', () => clearTimeout(timer));
+  item.addEventListener('mouseleave', () => {
+    setTimeout(() => {
+      item.classList.add('out');
+      setTimeout(() => item.remove(), 400);
+    }, 2000);
+  });
+}
+
+function friendlyError(message = '') {
+  const m = String(message).toLowerCase();
+
+  if (m.includes('permission') || m.includes('403'))
+    return message; // already friendly from our server
+
+  if (m.includes('401') || m.includes('unauthorized') || m.includes('token'))
+    return 'Your session has expired. Please log in again.';
+
+  if (m.includes('network') || m.includes('failed to fetch') || m.includes('load'))
+    return 'Network error — check your connection and try again.';
+
+  if (m.includes('timeout'))
+    return 'Request timed out — Salesforce may be slow. Try again.';
+
+  if (m.includes('duplicate') || m.includes('already exists'))
+    return 'A record with this information already exists in Salesforce.';
+
+  if (m.includes('required field') || m.includes('missing required'))
+    return 'A required field is missing. Please fill in all required fields.';
+
+  if (m.includes('invalid cross reference') || m.includes('invalid id'))
+    return 'One of the related record IDs is invalid. Please check your selections.';
+
+  if (m.includes('entity is deleted'))
+    return 'This record was deleted in Salesforce. Refresh to update the list.';
+
+  if (m.includes('unable to lock row'))
+    return 'This record is being edited by someone else. Try again in a moment.';
+
+  if (m.includes('500') || m.includes('internal server'))
+    return 'Server error — something went wrong on our end. Try again.';
+
+  if (m.includes('salesforce') && m.includes('auth'))
+    return 'Salesforce authentication failed. Contact your administrator.';
+
+  return message || 'Something went wrong. Please try again.';
 }
 
 document.addEventListener("click", (event) => {

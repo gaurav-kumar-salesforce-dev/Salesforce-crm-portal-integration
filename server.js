@@ -71,6 +71,47 @@ function checkRole(minimumRole) {
   };
 }
 
+// Checks user's effective permissions for a SF object before allowing the action
+ function checkPermission(sfObject, action) {
+  return async (req, res, next) => {
+    try {
+      const role = req.user.role;
+
+      // super_admin and admin bypass all object permission checks
+      if (role === 'super_admin' || role === 'admin') return next();
+
+      // readonly role can NEVER write
+      if (role === 'readonly' && action !== 'can_read') {
+        return res.status(403).json({
+          error: `You do not have permission to ${action.replace('can_','')} ${sfObject} records.`,
+          code:  'PERMISSION_DENIED'
+        });
+      }
+
+      // Call the SQL function we created in Phase 1
+      const { data, error } = await supabase.rpc('get_effective_permissions', {
+        p_user_id:   req.user.id,
+        p_sf_object: sfObject
+      });
+
+      if (error) throw error;
+
+      const perms = data?.[0];
+      if (!perms || !perms[action]) {
+        return res.status(403).json({
+          error: `You do not have permission to ${action.replace('can_','')} ${sfObject} records. Contact your administrator.`,
+          code:  'PERMISSION_DENIED'
+        });
+      }
+
+      next();
+    } catch (err) {
+      console.error('Permission check error:', err.message);
+      res.status(500).json({ error: 'Could not verify permissions' });
+    }
+  };
+}
+
 function rejectReservedApiObject(req, res, next, objectName) {
   if (RESERVED_API_OBJECT_NAMES.has(String(objectName || '').toLowerCase())) {
     return res.status(404).json({ error: `No API route found for /api/${objectName}` });
@@ -1863,7 +1904,105 @@ app.get('/api/portal/me', checkAuth, async (req, res) => {
   }
 });
 
+// GET own profile — any logged in user
+app.get('/api/portal/profile', checkAuth, async (req, res) => {
+  try {
+    const { data: user } = await supabase
+      .from('users')
+      .select('id, email, name, role, must_change_pw, created_at, last_login_at')
+      .eq('id', req.user.id)
+      .single();
 
+    const { data: assignment } = await supabase
+      .from('user_profile_assignments')
+      .select('profile_id, profiles(id, name, description)')
+      .eq('user_id', req.user.id)
+      .single();
+
+    const { data: permSets } = await supabase
+      .from('user_permission_set_assignments')
+      .select('perm_set_id, permission_sets(id, name, description)')
+      .eq('user_id', req.user.id);
+
+    const permissions = await supabase
+      .rpc('get_portal_users')
+      .then(({ data }) => data?.find(u => u.id === req.user.id));
+
+    res.json({
+      id:           user.id,
+      email:        user.email,
+      name:         user.name,
+      role:         user.role,
+      mustChangePw: user.must_change_pw,
+      createdAt:    user.created_at,
+      lastLoginAt:  user.last_login_at,
+      profile:      assignment?.profiles || null,
+      permissionSets: (permSets || []).map(p => p.permission_sets).filter(Boolean)
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// PATCH own profile — name and password only
+app.patch('/api/portal/profile', checkAuth, async (req, res) => {
+  const { name, currentPassword, newPassword } = req.body || {};
+
+  try {
+    const updates = {};
+
+    // Name change
+    if (name?.trim()) {
+      updates.name = name.trim();
+    }
+
+    // Password change
+    if (newPassword) {
+      if (!currentPassword) {
+        return res.status(400).json({ error: 'Current password is required to set a new password' });
+      }
+      if (newPassword.length < 8) {
+        return res.status(400).json({ error: 'New password must be at least 8 characters' });
+      }
+
+      // Verify current password
+      const { data: user } = await supabase
+        .from('users')
+        .select('password_hash')
+        .eq('id', req.user.id)
+        .single();
+
+      const valid = await bcrypt.compare(currentPassword, user.password_hash);
+      if (!valid) {
+        return res.status(400).json({ error: 'Current password is incorrect' });
+      }
+
+      updates.password_hash  = await bcrypt.hash(newPassword, 12);
+      updates.must_change_pw = false;
+    }
+
+    if (!Object.keys(updates).length) {
+      return res.status(400).json({ error: 'Nothing to update' });
+    }
+
+    updates.updated_at = new Date().toISOString();
+
+    await supabase.from('users').update(updates).eq('id', req.user.id);
+
+    await writeAuditLog({
+      userId:    req.user.id,
+      userEmail: req.user.email,
+      userRole:  req.user.role,
+      action:    'update_user',
+      payload:   { self: true, changedFields: Object.keys(updates) },
+      ipAddress: req.ip
+    });
+
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
 
 
 // POST /api/portal/users — create new portal user (admin+ only)
@@ -2812,7 +2951,9 @@ app.delete('/api/campaigns/:id/members/:memberId', async (req, res) => {
   }
 });
 
-app.get('/api/:object/:id/activity', checkAuth, async (req, res) => {
+app.get('/api/:object/:id/activity', checkAuth, async (req, res, next) => {
+  return checkPermission(req.params.object, 'can_read')(req, res, next);
+}, async (req, res) => {
   const { object, id } = req.params;
   if (!OBJECTS[object]) return res.status(400).json({ error: `Unknown object: ${object}` });
 
@@ -2878,7 +3019,10 @@ app.get('/api/:object/:id/activity', checkAuth, async (req, res) => {
   }
 });
 
-app.get('/api/:object/:id/related', checkAuth, async (req, res) => {
+app.get('/api/:object/:id/related', checkAuth, async (req, res, next) => {
+  return checkPermission(req.params.object, 'can_read')(req, res, next);
+}, async (req, res) => {
+
   const { object, id } = req.params;
   if (!OBJECTS[object]) return res.status(400).json({ error: `Unknown object: ${object}` });
 
@@ -2982,7 +3126,9 @@ app.post('/api/chatter/feed-elements/:feedElementId/poll-vote', async (req, res)
   }
 });
 
-app.post('/api/:object/:id/activity', checkAuth, async (req, res) => {
+app.post('/api/:object/:id/activity', checkAuth, async (req, res, next) => {
+  return checkPermission(req.params.object, 'can_create')(req, res, next);
+}, async (req, res) => {
   const { object, id } = req.params;
   if (!OBJECTS[object]) return res.status(400).json({ error: `Unknown object: ${object}` });
 
@@ -3385,7 +3531,11 @@ app.post('/api/bulk/:object/:operation', async (req, res) => {
 });
 
 // List records
-app.get('/api/:object',checkAuth, async (req, res) => {
+app.get('/api/:object', checkAuth, async (req, res, next) => {
+  const obj = req.params.object;
+  if (OBJECTS[obj]) return checkPermission(obj, 'can_read')(req, res, next);
+  next();
+}, async (req, res) => {
   const { object } = req.params;
   
   if (!OBJECTS[object]) return res.status(400).json({ error: `Unknown object: ${object}` });
@@ -3415,7 +3565,11 @@ app.get('/api/:object',checkAuth, async (req, res) => {
   }
 });
 
-app.get('/api/:object/:id', checkAuth, async (req, res) => {
+app.get('/api/:object/:id', checkAuth, async (req, res, next) => {
+  const obj = req.params.object;
+  if (OBJECTS[obj]) return checkPermission(obj, 'can_read')(req, res, next);
+  next();
+}, async (req, res) => {
   const { object, id } = req.params;
   if (!OBJECTS[object]) return res.status(400).json({ error: `Unknown object: ${object}` });
 
@@ -3445,7 +3599,11 @@ app.get('/api/:object/:id', checkAuth, async (req, res) => {
 });
 
 // Create record
-app.post('/api/:object',checkAuth, async (req, res) => {
+app.post('/api/:object', checkAuth, async (req, res, next) => {
+  const obj = req.params.object;
+  if (OBJECTS[obj]) return checkPermission(obj, 'can_create')(req, res, next);
+  next();
+}, async (req, res) => {
   const { object } = req.params;
   if (!OBJECTS[object]) return res.status(400).json({ error: `Unknown object: ${object}` });
 
@@ -3518,7 +3676,11 @@ app.patch('/api/:object', async (req, res) => {
 });
 
 // Update record
-app.patch('/api/:object/:id', checkAuth, async (req, res) => {
+app.patch('/api/:object/:id', checkAuth, async (req, res, next) => {
+  const obj = req.params.object;
+  if (OBJECTS[obj]) return checkPermission(obj, 'can_edit')(req, res, next);
+  next();
+}, async (req, res) => {
   const { object, id } = req.params;
   if (!OBJECTS[object]) return res.status(400).json({ error: `Unknown object: ${object}` });
 
@@ -3566,7 +3728,11 @@ app.delete('/api/:object', async (req, res) => {
 });
 
 // Delete record
-app.delete('/api/:object/:id', checkAuth, async (req, res) => {
+app.delete('/api/:object/:id', checkAuth, async (req, res, next) => {
+  const obj = req.params.object;
+  if (OBJECTS[obj]) return checkPermission(obj, 'can_delete')(req, res, next);
+  next();
+}, async (req, res) => {
   const { object, id } = req.params;
   if (!OBJECTS[object]) return res.status(400).json({ error: `Unknown object: ${object}` });
 
