@@ -869,6 +869,13 @@ function showLoginPage(message = "") {
                  color: #fff; font-size: 15px; font-weight: 600; cursor: pointer;">
           Sign In
         </button>
+
+        <div style="text-align:center;margin-top:14px">
+        <a href="/reset-password.html" style="font-size:13px;color:#6366f1;text-decoration:none;font-weight:600">
+        Forgot your password?
+        </a>
+        </div>
+        
       </div>
     `;
     document.body.appendChild(overlay);
@@ -1083,12 +1090,17 @@ async function loadProfile() {
       .slice(0, 2);
     $("profileButton").textContent = initials || "SF";
     $("profileName").textContent = currentUser.name || "Salesforce User";
-    $("profileEmail").textContent = currentUser.email || currentUser.username || "Connected";
+    $("profileEmail").textContent =
+      currentUser.email || currentUser.username || "Connected";
     const portalUser = await api("/api/portal/me");
     window.portalUser = portalUser;
     const adminBtn = $("adminPanelBtn");
     if (adminBtn)
-      adminBtn.style.display = ["super_admin", "admin"].includes(portalUser?.role,)? "" : "none";
+      adminBtn.style.display = ["super_admin", "admin"].includes(
+        portalUser?.role,
+      )
+        ? ""
+        : "none";
   } catch (err) {
     $("profileButton").textContent = "SF";
   }
@@ -1241,18 +1253,17 @@ function connectSalesforce() {
 }
 
 async function logoutSalesforce() {
-  await api("/api/auth/logout", { method: "POST" }).catch(() => null);
+  // This is now PORTAL logout only
+  await fetch('/api/auth/logout', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${getAuthToken()}` }
+  }).catch(() => null);
+
+  clearAuthToken();
   closeProfileMenu();
   currentRecords = [];
-  currentUser = null;
-  showAuthRequired(
-    "Logged out locally. Connect Salesforce again to load CRM data.",
-  );
-  $("authBtn").style.display = "inline-flex";
-  $("connStatus").querySelector(".conn-dot").className = "conn-dot error";
-  $("connStatus").querySelector(".conn-text").textContent = "Logged out";
-  clearAuthToken();
-  showLoginPage();
+  currentUser    = null;
+  showLoginPage('You have been logged out.');
 }
 
 function toggleProfileMenu() {

@@ -12,6 +12,9 @@ const { supabase, getUserWithPermissions, writeAuditLog } = require('./db');
 const JWT_SECRET     = process.env.JWT_SECRET;
 const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '8h';
 
+const { Resend } = require('resend');
+const resend = new Resend(process.env.RESEND_API_KEY);
+
 const app = express();
 app.set('trust proxy', true);
 app.use(express.json({ limit: process.env.JSON_BODY_LIMIT || '25mb' }));
@@ -1566,6 +1569,268 @@ app.post('/api/auth/login', async (req, res) => {
 });
 
 
+
+// =============================================================================
+// POST /api/auth/forgot-password
+// User submits their email → we generate a reset token → send email
+// =============================================================================
+app.post('/api/auth/forgot-password', async (req, res) => {
+  const { email } = req.body || {};
+  if (!email) return res.status(400).json({ error: 'Email is required' });
+ 
+  // Always return success — never reveal whether email exists (security)
+  const genericResponse = { success: true, message: 'If that email exists, a reset link has been sent.' };
+ 
+  try {
+    // 1. Find user
+    const { data: user } = await supabase
+      .from('users')
+      .select('id, name, email, is_active')
+      .eq('email', email.toLowerCase().trim())
+      .single();
+ 
+    // If no user or inactive — return generic success anyway (don't leak info)
+    if (!user || !user.is_active) return res.json(genericResponse);
+ 
+    // 2. Generate a secure random token
+    const resetToken  = crypto.randomBytes(32).toString('hex');
+    const tokenHash   = crypto.createHash('sha256').update(resetToken).digest('hex');
+    const expiresAt   = new Date(Date.now() + 60 * 60 * 1000); // 1 hour from now
+ 
+    // 3. Store token hash in DB (we store hash, not raw token — same as JWT pattern)
+    // First delete any existing reset tokens for this user
+    await supabase
+      .from('password_reset_tokens')
+      .delete()
+      .eq('user_id', user.id);
+ 
+    await supabase
+      .from('password_reset_tokens')
+      .insert({
+        user_id:     user.id,
+        token_hash:  tokenHash,
+        expires_at:  expiresAt.toISOString(),
+        used:        false
+      });
+ 
+    // 4. Send email via Resend
+    const appUrl   = process.env.APP_URL || `http://localhost:${PORT}`;
+    const resetUrl = `${appUrl}/reset-password.html?token=${resetToken}`;
+ 
+    await resend.emails.send({
+      from:    process.env.FROM_EMAIL || 'noreply@yourdomain.com',
+      to:      user.email,
+      subject: 'SaaSRAY CRM — Reset Your Password',
+      html: `
+        <!DOCTYPE html>
+        <html>
+        <head>
+          <meta charset="UTF-8">
+          <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        </head>
+        <body style="margin:0;padding:0;background:#0f1117;font-family:'Segoe UI',Arial,sans-serif">
+          <table width="100%" cellpadding="0" cellspacing="0" style="padding:40px 20px">
+            <tr>
+              <td align="center">
+                <table width="480" cellpadding="0" cellspacing="0"
+                  style="background:#1a1d27;border:1px solid #2a2d3e;border-radius:16px;overflow:hidden">
+ 
+                  <!-- Header -->
+                  <tr>
+                    <td style="padding:32px 40px 24px;border-bottom:1px solid #2a2d3e;text-align:center">
+                      <div style="font-size:22px;font-weight:800;color:#f0f1ff;letter-spacing:-0.5px">
+                        SaaSRAY <span style="color:#6366f1">CRM</span>
+                      </div>
+                      <div style="font-size:12px;color:#5c5f7a;margin-top:4px;letter-spacing:0.05em">
+                        THINK DIGITAL. BUILD SMART.
+                      </div>
+                    </td>
+                  </tr>
+ 
+                  <!-- Body -->
+                  <tr>
+                    <td style="padding:32px 40px">
+                      <p style="font-size:15px;color:#a0a3c0;margin:0 0 8px">Hi ${user.name},</p>
+                      <h1 style="font-size:20px;font-weight:700;color:#f0f1ff;margin:0 0 16px">
+                        Password Reset Request
+                      </h1>
+                      <p style="font-size:14px;color:#a0a3c0;line-height:1.6;margin:0 0 28px">
+                        We received a request to reset your SaaSRAY CRM password.
+                        Click the button below to set a new password. This link expires in
+                        <strong style="color:#f0f1ff">1 hour</strong>.
+                      </p>
+ 
+                      <!-- CTA Button -->
+                      <table width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:28px">
+                        <tr>
+                          <td align="center">
+                            <a href="${resetUrl}"
+                              style="display:inline-block;background:#6366f1;color:#ffffff;
+                                     font-size:15px;font-weight:700;text-decoration:none;
+                                     padding:14px 36px;border-radius:10px;letter-spacing:0.02em">
+                              Reset My Password
+                            </a>
+                          </td>
+                        </tr>
+                      </table>
+ 
+                      <!-- Fallback URL -->
+                      <p style="font-size:12px;color:#5c5f7a;line-height:1.6;margin:0 0 8px">
+                        If the button doesn't work, copy and paste this link:
+                      </p>
+                      <p style="font-size:12px;color:#6366f1;word-break:break-all;margin:0 0 28px">
+                        ${resetUrl}
+                      </p>
+ 
+                      <!-- Security Note -->
+                      <div style="background:#141620;border:1px solid #2a2d3e;border-radius:8px;padding:16px">
+                        <p style="font-size:12px;color:#5c5f7a;margin:0;line-height:1.6">
+                          🔒 If you didn't request a password reset, you can safely ignore this email.
+                          Your password will not change unless you click the link above.
+                        </p>
+                      </div>
+                    </td>
+                  </tr>
+ 
+                  <!-- Footer -->
+                  <tr>
+                    <td style="padding:20px 40px;border-top:1px solid #2a2d3e;text-align:center">
+                      <p style="font-size:11px;color:#5c5f7a;margin:0">
+                        SaaSRAY CRM &bull; This email was sent to ${user.email}
+                      </p>
+                    </td>
+                  </tr>
+ 
+                </table>
+              </td>
+            </tr>
+          </table>
+        </body>
+        </html>
+      `
+    });
+ 
+    // 5. Audit log
+    await writeAuditLog({
+      userId:    user.id,
+      userEmail: user.email,
+      userRole:  'system',
+      action:    'password_reset',
+      ipAddress: req.ip
+    });
+ 
+    res.json(genericResponse);
+ 
+  } catch (err) {
+    console.error('Forgot password error:', err.message);
+    // Still return generic success — don't leak errors to attacker
+    res.json(genericResponse);
+  }
+});
+ 
+ 
+// =============================================================================
+// POST /api/auth/reset-password
+// User submits new password with the token from the email link
+// =============================================================================
+app.post('/api/auth/reset-password', async (req, res) => {
+  const { token, password } = req.body || {};
+ 
+  if (!token || !password) {
+    return res.status(400).json({ error: 'Token and new password are required' });
+  }
+ 
+  if (password.length < 8) {
+    return res.status(400).json({ error: 'Password must be at least 8 characters' });
+  }
+ 
+  try {
+    // 1. Hash the incoming token to compare with stored hash
+    const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
+ 
+    // 2. Find the token in DB
+    const { data: resetRecord } = await supabase
+      .from('password_reset_tokens')
+      .select('user_id, expires_at, used')
+      .eq('token_hash', tokenHash)
+      .single();
+ 
+    if (!resetRecord) {
+      return res.status(400).json({ error: 'Invalid or expired reset link. Please request a new one.' });
+    }
+ 
+    if (resetRecord.used) {
+      return res.status(400).json({ error: 'This reset link has already been used. Please request a new one.' });
+    }
+ 
+    if (new Date(resetRecord.expires_at) < new Date()) {
+      return res.status(400).json({ error: 'This reset link has expired. Please request a new one.' });
+    }
+ 
+    // 3. Hash new password
+    const passwordHash = await bcrypt.hash(password, 12);
+ 
+    // 4. Update user password
+    await supabase
+      .from('users')
+      .update({
+        password_hash:  passwordHash,
+        must_change_pw: false,
+        updated_at:     new Date().toISOString()
+      })
+      .eq('id', resetRecord.user_id);
+ 
+    // 5. Mark token as used (so it can't be reused)
+    await supabase
+      .from('password_reset_tokens')
+      .update({ used: true })
+      .eq('token_hash', tokenHash);
+ 
+    // 6. Audit log
+    await writeAuditLog({
+      userId:    resetRecord.user_id,
+      userRole:  'system',
+      action:    'password_reset',
+      ipAddress: req.ip
+    });
+ 
+    res.json({ success: true, message: 'Password updated successfully. You can now log in.' });
+ 
+  } catch (err) {
+    console.error('Reset password error:', err.message);
+    res.status(500).json({ error: 'Could not reset password. Please try again.' });
+  }
+});
+ 
+ 
+// =============================================================================
+// GET /api/auth/verify-reset-token
+// Called by the reset page on load to validate the token before showing the form
+// =============================================================================
+app.get('/api/auth/verify-reset-token', async (req, res) => {
+  const { token } = req.query;
+  if (!token) return res.status(400).json({ valid: false, error: 'Token is required' });
+ 
+  try {
+    const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
+    const { data }  = await supabase
+      .from('password_reset_tokens')
+      .select('user_id, expires_at, used, users(name, email)')
+      .eq('token_hash', tokenHash)
+      .single();
+ 
+    if (!data || data.used || new Date(data.expires_at) < new Date()) {
+      return res.json({ valid: false, error: 'Invalid or expired reset link' });
+    }
+ 
+    res.json({ valid: true, name: data.users?.name || '' });
+ 
+  } catch (err) {
+    res.json({ valid: false, error: 'Invalid reset link' });
+  }
+});
+
+
 // POST /api/auth/logout
 // Replaces your existing logout route — adds audit log
 // If you already have app.post('/api/auth/logout', ...) — REPLACE IT with this one.
@@ -2168,7 +2433,31 @@ app.post('/api/activity-email-preview', async (req, res) => {
   }
 });
 
+// Portal logout — only clears JWT session, does NOT touch Salesforce
 app.post('/api/auth/logout', async (req, res) => {
+  // Just clear the portal session — Salesforce stays connected
+  // The JWT is stateless so "logout" = client deletes the token
+  // Optionally log the action if user is authenticated
+  try {
+    const header = req.headers.authorization || '';
+    const token  = header.startsWith('Bearer ') ? header.slice(7) : null;
+    if (token) {
+      const decoded = jwt.verify(token, JWT_SECRET);
+      await writeAuditLog({
+        userId:    decoded.id,
+        userEmail: decoded.email,
+        userRole:  decoded.role,
+        action:    'logout',
+        ipAddress: req.ip
+      });
+    }
+  } catch { /* token already expired, that's fine */ }
+
+  res.json({ success: true, message: 'Portal session ended' });
+});
+
+// Salesforce logout — SEPARATE route, super_admin only
+app.post('/api/auth/salesforce-logout', checkAuth, checkRole('super_admin'), async (req, res) => {
   const tokenToRevoke = SF.refreshToken || _cachedToken;
   try {
     if (tokenToRevoke) {
@@ -2179,12 +2468,11 @@ app.post('/api/auth/logout', async (req, res) => {
       });
     }
   } catch (err) {
-    console.error('Logout revoke warning:', err.response?.data || err.message);
+    console.error('SF logout warning:', err.response?.data || err.message);
   }
-
   SF.refreshToken = '';
-  _cachedToken = null;
-  _tokenExpires = 0;
+  _cachedToken    = null;
+  _tokenExpires   = 0;
   activeOrg().refreshToken = '';
   persistActiveOrgTokens();
   res.json({ success: true });
