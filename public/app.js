@@ -1,3 +1,24 @@
+// ── Theme Toggle ──────────────────────────────────────────
+function initTheme() {
+  const saved = localStorage.getItem('saasray_theme');
+  if (saved === 'dark') {
+    document.documentElement.setAttribute('data-theme', 'dark');
+  } else {
+    document.documentElement.removeAttribute('data-theme');
+  }
+}
+function toggleTheme() {
+  const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+  if (isDark) {
+    document.documentElement.removeAttribute('data-theme');
+    localStorage.setItem('saasray_theme', 'light');
+  } else {
+    document.documentElement.setAttribute('data-theme', 'dark');
+    localStorage.setItem('saasray_theme', 'dark');
+  }
+}
+initTheme();
+
 const OBJECT_META = {
   Account: {
     title: "Accounts",
@@ -856,43 +877,43 @@ function showLoginPage(message = "") {
     const overlay = document.createElement("div");
     overlay.id = "loginOverlay";
     overlay.style.cssText = `
-      position: fixed; inset: 0; background: var(--bg-primary, #0f1117);
+      position: fixed; inset: 0; background: var(--bg);
       display: flex; align-items: center; justify-content: center; z-index: 9999;
     `;
     overlay.innerHTML = `
-      <div style="background: var(--surface, #1a1d27); border: 1px solid var(--border, #2a2d3a);
-                  border-radius: 16px; padding: 40px; width: 100%; max-width: 400px; box-shadow: 0 24px 64px rgba(0,0,0,0.5);">
+      <div style="background: var(--surface); border: 1px solid var(--border);
+                  border-radius: 16px; padding: 40px; width: 100%; max-width: 400px; box-shadow: var(--shadow-lg);">
         <div style="text-align:center; margin-bottom: 32px;">
           <img src="/images/logo.png" alt="SaaSRAY CRM" style="height: 40px; margin-bottom: 16px;">
-          <h1 style="font-size: 20px; font-weight: 700; margin: 0 0 4px; color: var(--text-primary, #fff);">SaaSRAY CRM</h1>
-          <p style="color: var(--text-muted, #888); margin: 0; font-size: 14px;">Sign in to your account</p>
+          <h1 style="font-size: 20px; font-weight: 700; margin: 0 0 4px; color: var(--text-1);">SaaSRAY CRM</h1>
+          <p style="color: var(--text-3); margin: 0; font-size: 14px;">Sign in to your account</p>
         </div>
-        <div id="loginError" style="display:none; background: rgba(239,68,68,0.1); border: 1px solid rgba(239,68,68,0.3);
-             color: #f87171; padding: 12px 16px; border-radius: 8px; margin-bottom: 20px; font-size: 14px;"></div>
+        <div id="loginError" style="display:none; background: var(--danger-bg); border: 1px solid rgba(207,34,46,0.2);
+             color: var(--danger); padding: 12px 16px; border-radius: 8px; margin-bottom: 20px; font-size: 14px;"></div>
         <div style="margin-bottom: 16px;">
-          <label style="display:block; font-size: 13px; font-weight: 500; color: var(--text-secondary, #aaa); margin-bottom: 6px;">Email</label>
+          <label style="display:block; font-size: 13px; font-weight: 500; color: var(--text-2); margin-bottom: 6px;">Email</label>
           <input id="loginEmail" type="email" placeholder="you@company.com" autocomplete="email"
-            style="width: 100%; padding: 10px 14px; border-radius: 8px; border: 1px solid var(--border, #2a2d3a);
-                   background: var(--bg-secondary, #141620); color: var(--text-primary, #fff); font-size: 15px;
-                   box-sizing: border-box; outline: none;"
+            style="width: 100%; padding: 10px 14px; border-radius: 8px; border: 1.5px solid var(--border);
+                   background: var(--surface-2); color: var(--text-1); font-size: 15px;
+                   box-sizing: border-box; outline: none; font-family: inherit;"
             onkeydown="if(event.key==='Enter') submitLogin()">
         </div>
         <div style="margin-bottom: 24px;">
-          <label style="display:block; font-size: 13px; font-weight: 500; color: var(--text-secondary, #aaa); margin-bottom: 6px;">Password</label>
+          <label style="display:block; font-size: 13px; font-weight: 500; color: var(--text-2); margin-bottom: 6px;">Password</label>
           <input id="loginPassword" type="password" placeholder="••••••••" autocomplete="current-password"
-            style="width: 100%; padding: 10px 14px; border-radius: 8px; border: 1px solid var(--border, #2a2d3a);
-                   background: var(--bg-secondary, #141620); color: var(--text-primary, #fff); font-size: 15px;
-                   box-sizing: border-box; outline: none;"
+            style="width: 100%; padding: 10px 14px; border-radius: 8px; border: 1.5px solid var(--border);
+                   background: var(--surface-2); color: var(--text-1); font-size: 15px;
+                   box-sizing: border-box; outline: none; font-family: inherit;"
             onkeydown="if(event.key==='Enter') submitLogin()">
         </div>
         <button onclick="submitLogin()" id="loginBtn"
-          style="width: 100%; padding: 12px; border-radius: 8px; border: none; background: var(--accent, #6366f1);
-                 color: #fff; font-size: 15px; font-weight: 600; cursor: pointer;">
+          style="width: 100%; padding: 12px; border-radius: 8px; border: none; background: var(--accent);
+                 color: #fff; font-size: 15px; font-weight: 600; cursor: pointer; font-family: inherit;">
           Sign In
         </button>
 
         <div style="text-align:center;margin-top:14px">
-        <a href="/reset-password.html" style="font-size:13px;color:#6366f1;text-decoration:none;font-weight:600">
+        <a href="/reset-password.html" style="font-size:13px;color:var(--accent);text-decoration:none;font-weight:600">
         Forgot your password?
         </a>
         </div>
