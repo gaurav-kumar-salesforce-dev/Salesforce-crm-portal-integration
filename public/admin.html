@@ -1115,8 +1115,13 @@
     <header class="topbar">
       <span class="topbar-title" id="topbarTitle">User Management</span>
       <div class="topbar-right">
-        <span style="font-size:12px; color:var(--text-muted)" id="adminRoleLabel"></span>
-        <div class="admin-avatar" id="adminAvatar">SA</div>
+        <div style="display:flex;align-items:center;gap:10px">
+          <div style="text-align:right">
+            <div style="font-size:13px;font-weight:600;color:var(--text-primary)" id="adminNameLabel"></div>
+            <div style="font-size:11px;color:var(--text-muted)" id="adminRoleLabel"></div>
+          </div>
+          <div class="admin-avatar" id="adminAvatar">SA</div>
+        </div>
       </div>
     </header>
 
@@ -1628,13 +1633,22 @@
           return;
         }
         const initials = (me.name || 'A').split(' ').map(p => p[0]).join('').slice(0, 2).toUpperCase();
-        $('adminAvatar').textContent = initials;
-        $('adminRoleLabel').textContent = me.role === 'super_admin' ? 'Super Admin' : 'Admin';
         window._adminRole = me.role;
         window._adminId = me.id;
-        // Show SF logout only to super_admin
+        window._adminUser = me;
+
+        // Topbar avatar + name
+        $('adminAvatar').textContent = initials;
+        $('adminRoleLabel').textContent = me.role === 'super_admin' ? 'Super Admin' : 'Admin';
+        $('adminNameLabel').textContent = me.name || 'Admin User';
+
+        // Render full admin info card
+        renderAdminInfoCard(me);
+
+        // Show SF disconnect only to super_admin
         if (me.role === 'super_admin') {
-          document.getElementById('sfLogoutBtn').style.display = 'flex';
+          const sfBtn = $('sfLogoutBtn');
+          if (sfBtn) sfBtn.style.display = 'flex';
         }
       } catch (e) {
         window.location.href = '/';
@@ -1646,17 +1660,107 @@
       loadPermSets();
     });
 
+    function renderAdminInfoCard(user) {
+      const roleLabels = {
+        super_admin: 'Super Admin', admin: 'Admin',
+        manager: 'Manager', employee: 'Employee', readonly: 'Read-Only'
+      };
+      const initials = (user.name || 'A').split(' ').map(p => p[0]).join('').slice(0, 2).toUpperCase();
+      const lastLogin = user.lastLoginAt
+        ? new Date(user.lastLoginAt).toLocaleString()
+        : 'First session';
+      // Insert card at top of sidebar above nav items
+      const section = document.querySelector('.sidebar-section');
+      if (!section) return;
+
+      const card = document.createElement('div');
+      card.id = 'adminInfoCard';
+      card.style.cssText = `
+    margin: 15px 12px 8px;
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 12px;
+  `;
+      card.innerHTML = `
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px">
+      <div style="width:36px;height:36px;border-radius:50%;
+           background:var(--accent);color:#fff;
+           display:flex;align-items:center;justify-content:center;
+           font-size:13px;font-weight:800;flex-shrink:0">${initials}</div>
+      <div style="min-width:0">
+        <div style="font-size:13px;font-weight:700;
+             white-space:nowrap;overflow:hidden;text-overflow:ellipsis">
+          ${esc(user.name)}
+        </div>
+        <div style="font-size:11px;color:var(--text-muted);
+             white-space:nowrap;overflow:hidden;text-overflow:ellipsis">
+          ${esc(user.email)}
+        </div>
+      </div>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px">
+      <div style="background:var(--bg-secondary);border-radius:6px;padding:7px 9px">
+        <div style="font-size:9px;font-weight:700;color:var(--text-muted);
+             text-transform:uppercase;letter-spacing:.05em;margin-bottom:2px">Role</div>
+        <div style="font-size:11px;font-weight:700;color:var(--accent)">
+          ${roleLabels[user.role] || user.role}
+        </div>
+      </div>
+      <div style="background:var(--bg-secondary);border-radius:6px;padding:7px 9px">
+        <div style="font-size:9px;font-weight:700;color:var(--text-muted);
+             text-transform:uppercase;letter-spacing:.05em;margin-bottom:2px">Profile</div>
+        <div style="font-size:11px;font-weight:600;color:var(--text-primary);
+             white-space:nowrap;overflow:hidden;text-overflow:ellipsis">
+          ${esc(user.profile?.name || '—')}
+        </div>
+      </div>
+    </div>
+    <div style="margin-top:6px;background:var(--bg-secondary);border-radius:6px;padding:7px 9px">
+      <div style="font-size:9px;font-weight:700;color:var(--text-muted);
+           text-transform:uppercase;letter-spacing:.05em;margin-bottom:2px">Last Login</div>
+      <div style="font-size:11px;color:var(--text-secondary)">${esc(lastLogin)}</div>
+    </div>
+    <button onclick="adminLogout()" style="
+      width:100%;margin-top:8px;padding:7px;border-radius:7px;
+      border:1px solid var(--border);background:none;
+      color:var(--text-muted);font-size:12px;font-weight:600;
+      cursor:pointer;font-family:inherit;transition:all .15s;
+      display:flex;align-items:center;justify-content:center;gap:6px"
+      onmouseover="this.style.background='var(--danger-soft)';this.style.color='var(--danger)';this.style.borderColor='rgba(239,68,68,.3)'"
+      onmouseout="this.style.background='none';this.style.color='var(--text-muted)';this.style.borderColor='var(--border)'">
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/>
+        <polyline points="16,17 21,12 16,7"/>
+        <line x1="21" y1="12" x2="9" y2="12"/>
+      </svg>
+      Sign Out
+    </button>
+  `;
+
+      section.parentNode.insertBefore(card, section);
+    }
+
+    async function adminLogout() {
+      try {
+        await api('/api/auth/logout', { method: 'POST' });
+      } catch { /* ignore */ }
+      localStorage.removeItem('saasray_token');
+      localStorage.removeItem('saasray_perms');
+      window.location.href = '/';
+    }
+
 
     async function disconnectSalesforce() {
-  openConfirm(
-    'Disconnect Salesforce?',
-    'This will revoke the Salesforce OAuth token. All users will lose access to CRM data until you reconnect.',
-    async () => {
-      await api('/api/auth/salesforce-logout', { method: 'POST' });
-      toast('Salesforce disconnected. Reconnect from the CRM page.', 'info');
+      openConfirm(
+        'Disconnect Salesforce?',
+        'This will revoke the Salesforce OAuth token. All users will lose access to CRM data until you reconnect.',
+        async () => {
+          await api('/api/auth/salesforce-logout', { method: 'POST' });
+          toast('Salesforce disconnected. Reconnect from the CRM page.', 'info');
+        }
+      );
     }
-  );
-}
     // ═══════════════════════════════════════════════════════
     // NAVIGATION
     // ═══════════════════════════════════════════════════════
