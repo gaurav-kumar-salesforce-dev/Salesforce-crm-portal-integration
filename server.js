@@ -2259,6 +2259,50 @@ async function uploadEmailAttachments(files = [], parentId = '') {
 // POST /api/auth/login
 // Body: { email, password }
 // Returns: { token, user: { id, email, name, role }, permissions: {...} }
+async function issuePortalSession(user, req, authMethod = 'password') {
+  const userData = await getUserWithPermissions(user.id);
+  if (!userData) {
+    const error = new Error('Could not load user permissions');
+    error.statusCode = 403;
+    throw error;
+  }
+
+  const tokenPayload = {
+    id: user.id,
+    email: user.email,
+    name: user.name,
+    role: user.role
+  };
+  const token = jwt.sign(tokenPayload, JWT_SECRET, { expiresIn: JWT_EXPIRES_IN });
+
+  await supabase
+    .from('users')
+    .update({ last_login_at: new Date().toISOString() })
+    .eq('id', user.id);
+
+  await writeAuditLog({
+    userId: user.id,
+    userEmail: user.email,
+    userRole: user.role,
+    action: 'login',
+    payload: { authMethod },
+    ipAddress: req.ip
+  });
+
+  return {
+    token,
+    mustChangePw: user.must_change_pw,
+    user: {
+      id: userData.id,
+      email: userData.email,
+      name: userData.name,
+      role: userData.role,
+      profile: userData.profile
+    },
+    permissions: userData.permissions
+  };
+}
+
 app.post('/api/auth/login', async (req, res) => {
   const { email, password } = req.body || {};
 
@@ -2343,6 +2387,71 @@ app.post('/api/auth/login', async (req, res) => {
   } catch (err) {
     console.error('Login error:', err.message);
     res.status(500).json({ error: 'Login failed. Please try again.' });
+  }
+});
+
+// GET /api/auth/supabase-config
+// Public browser config for Supabase OAuth. Never expose SUPABASE_SERVICE_ROLE_KEY here.
+app.get('/api/auth/supabase-config', (req, res) => {
+  const anonKey = process.env.SUPABASE_ANON_KEY || process.env.SUPABASE_PUBLISHABLE_KEY;
+  if (!process.env.SUPABASE_URL || !anonKey) {
+    return res.status(500).json({ error: 'Supabase OAuth is not configured on the server.' });
+  }
+
+  res.json({
+    url: process.env.SUPABASE_URL,
+    anonKey
+  });
+});
+
+// POST /api/auth/social-login
+// Verifies the Supabase OAuth user, maps their email to an existing portal user,
+// then returns the same portal JWT/permissions shape as email-password login.
+app.post('/api/auth/social-login', async (req, res) => {
+  const { provider, accessToken } = req.body || {};
+
+  if (provider !== 'google') {
+    return res.status(400).json({ error: 'Unsupported social login provider.' });
+  }
+
+  if (!accessToken) {
+    return res.status(400).json({ error: 'Missing Supabase access token.' });
+  }
+
+  try {
+    const { data: authData, error: authError } = await supabase.auth.getUser(accessToken);
+    if (authError || !authData?.user?.email) {
+      return res.status(401).json({ error: 'Google sign-in could not be verified.' });
+    }
+
+    const supabaseUser = authData.user;
+    const identities = supabaseUser.identities || [];
+    const usedGoogle = identities.some(identity => identity.provider === 'google');
+    if (!usedGoogle && supabaseUser.app_metadata?.provider !== 'google') {
+      return res.status(401).json({ error: 'Please sign in with Google.' });
+    }
+
+    const email = supabaseUser.email.toLowerCase().trim();
+    const { data: user, error } = await supabase
+      .from('users')
+      .select('id, email, name, role, is_active, must_change_pw')
+      .eq('email', email)
+      .single();
+
+    if (error || !user) {
+      return res.status(403).json({
+        error: 'Your Google account is not linked to a portal user. Ask an administrator to create a user with this email.'
+      });
+    }
+
+    if (!user.is_active) {
+      return res.status(403).json({ error: 'Account is deactivated. Contact your administrator.' });
+    }
+
+    res.json(await issuePortalSession(user, req, 'google'));
+  } catch (err) {
+    console.error('Social login error:', err.message);
+    res.status(err.statusCode || 500).json({ error: err.message || 'Social login failed. Please try again.' });
   }
 });
 

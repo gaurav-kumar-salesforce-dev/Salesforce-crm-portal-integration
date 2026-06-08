@@ -549,6 +549,8 @@ let orgSettings = { activeOrgKey: "default", orgs: [] };
 let chatterState = { activeTab: "post", loadedFor: "", mentions: [] };
 let modalObject = null;
 let modalPresetValues = {};
+let supabaseAuthClient = null;
+let supabaseAuthClientPromise = null;
 
 // Token storage helpers
 function getAuthToken() {
@@ -885,8 +887,7 @@ function showLoginPage(message = "") {
                   border-radius: 16px; padding: 40px; width: 100%; max-width: 400px; box-shadow: var(--shadow-lg);">
         <div style="text-align:center; margin-bottom: 32px;">
           <img src="/images/logo.png" alt="SaaSRAY CRM" style="height: 40px; margin-bottom: 16px;">
-          <h1 style="font-size: 20px; font-weight: 700; margin: 0 0 4px; color: var(--text-1);">SaaSRAY CRM</h1>
-          <p style="color: var(--text-3); margin: 0; font-size: 14px;">Sign in to your account</p>
+        
         </div>
         <div id="loginError" style="display:none; background: var(--danger-bg); border: 1px solid rgba(207,34,46,0.2);
              color: var(--danger); padding: 12px 16px; border-radius: 8px; margin-bottom: 20px; font-size: 14px;"></div>
@@ -910,6 +911,20 @@ function showLoginPage(message = "") {
           style="width: 100%; padding: 12px; border-radius: 8px; border: none; background: var(--accent);
                  color: #fff; font-size: 15px; font-weight: 600; cursor: pointer; font-family: inherit;">
           Sign In
+        </button>
+
+        <div style="display:flex; align-items:center; gap:12px; margin: 18px 0; color: var(--text-3); font-size: 12px;">
+          <span style="height:1px; background: var(--border); flex:1;"></span>
+          <span>or</span>
+          <span style="height:1px; background: var(--border); flex:1;"></span>
+        </div>
+
+        <button onclick="submitGoogleLogin()" id="googleLoginBtn"
+          style="width: 100%; padding: 12px; border-radius: 8px; border: 1.5px solid var(--border);
+                 background: var(--surface); color: var(--text-1); font-size: 15px; font-weight: 600;
+                 cursor: pointer; font-family: inherit; display:flex; align-items:center; justify-content:center; gap:10px;">
+          <span style="width:18px;height:18px;display:inline-flex;align-items:center;justify-content:center;font-weight:800;color:#4285F4;">G</span>
+          Continue with Google
         </button>
 
         <div style="text-align:center;margin-top:14px">
@@ -938,6 +953,132 @@ function showLoginPage(message = "") {
 function hideLoginPage() {
   const overlay = document.getElementById("loginOverlay");
   if (overlay) overlay.style.display = "none";
+}
+
+async function getSupabaseAuthClient() {
+  if (supabaseAuthClient) return supabaseAuthClient;
+  if (supabaseAuthClientPromise) return supabaseAuthClientPromise;
+
+  supabaseAuthClientPromise = (async () => {
+    if (!window.supabase?.createClient) {
+      throw new Error("Supabase auth library did not load. Check your internet connection.");
+    }
+
+    const response = await fetch("/api/auth/supabase-config");
+    const config = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(config.error || "Supabase OAuth is not configured.");
+    }
+
+    supabaseAuthClient = window.supabase.createClient(config.url, config.anonKey, {
+      auth: {
+        detectSessionInUrl: true,
+        persistSession: true,
+        autoRefreshToken: true
+      }
+    });
+    return supabaseAuthClient;
+  })();
+
+  return supabaseAuthClientPromise;
+}
+
+async function submitGoogleLogin() {
+  const btn = document.getElementById("googleLoginBtn");
+  const errorEl = document.getElementById("loginError");
+
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = "Redirecting to Google...";
+  }
+  if (errorEl) errorEl.style.display = "none";
+
+  try {
+    const client = await getSupabaseAuthClient();
+    const { error } = await client.auth.signInWithOAuth({
+      provider: "google",
+      options: {
+        redirectTo: window.location.origin + window.location.pathname
+      }
+    });
+    if (error) throw error;
+  } catch (err) {
+    if (errorEl) {
+      errorEl.textContent = err.message || "Could not start Google login.";
+      errorEl.style.display = "block";
+    } else {
+      toast(err.message || "Could not start Google login.", "err");
+    }
+    if (btn) {
+      btn.disabled = false;
+      btn.innerHTML = '<span style="width:18px;height:18px;display:inline-flex;align-items:center;justify-content:center;font-weight:800;color:#4285F4;">G</span> Continue with Google';
+    }
+  }
+}
+
+async function completePortalLogin(data) {
+  setAuthToken(data.token);
+  setStoredPerms(data.permissions || {});
+  window.portalUser = data.user;
+  applyAllPermissionGuards();
+
+  hideLoginPage();
+
+  if (data.mustChangePw) {
+    toast(
+      "Please change your password - you are using a temporary password.",
+      "info",
+    );
+  }
+
+  applyAllPermissionGuards();
+  await checkConnection();
+  await loadListViews();
+  await loadData();
+}
+
+async function finishGoogleLoginFromRedirect() {
+  const hasSupabaseCallback =
+    /[?#&](code|access_token|error|error_description)=/.test(window.location.href);
+  if (!hasSupabaseCallback) return false;
+
+  try {
+    
+    const client = await getSupabaseAuthClient();
+    const callbackUrl = new URL(window.location.href);
+    const authCode = callbackUrl.searchParams.get("code");
+    if (authCode) {
+      const { error: exchangeError } = await client.auth.exchangeCodeForSession(authCode);
+      if (exchangeError) throw exchangeError;
+    }
+
+    const { data: sessionData, error: sessionError } = await client.auth.getSession();
+    if (sessionError) throw sessionError;
+
+    const accessToken = sessionData?.session?.access_token;
+    if (!accessToken) {
+      throw new Error("Google sign-in did not return a valid session.");
+    }
+
+    const response = await fetch("/api/auth/social-login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ provider: "google", accessToken }),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(data.error || "Google login failed.");
+    }
+
+    window.history.replaceState({}, document.title, window.location.pathname);
+    await completePortalLogin(data);
+    return true;
+  } catch (err) {
+    clearAuthToken();
+    window.history.replaceState({}, document.title, window.location.pathname);
+    showLoginPage(err.message || "Google login failed.");
+    return true;
+  }
 }
 
 async function submitLogin() {
@@ -974,14 +1115,8 @@ async function submitLogin() {
       return;
     }
 
-    // Store token and permissions
-    setAuthToken(data.token);
-    setStoredPerms(data.permissions || {});
-    window.portalUser = data.user;
-    applyAllPermissionGuards();
-    window.portalUser = data.user;
-
-    hideLoginPage();
+    await completePortalLogin(data);
+    return;
 
     // If user must change password, show a toast for now
     if (data.mustChangePw) {
@@ -5892,7 +6027,7 @@ window.addEventListener("resize", () => {
 });
 window.addEventListener("scroll", handleLazyScroll, { passive: true });
 
-document.addEventListener("DOMContentLoaded", () => {
+document.addEventListener("DOMContentLoaded", async () => {
   listContentHtml = $("content").innerHTML;
 
   // Sidebar collapsed state
@@ -5908,6 +6043,9 @@ document.addEventListener("DOMContentLoaded", () => {
   refreshSidebarIcons();
 
   // ── AUTH GATE ────────────────────────────────────
+  const handledGoogleRedirect = await finishGoogleLoginFromRedirect();
+  if (handledGoogleRedirect) return;
+
   const token = getAuthToken();
 
   if (!token || isTokenExpired(token)) {
