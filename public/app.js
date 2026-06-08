@@ -1018,8 +1018,8 @@ function canDo(sfObject, action) {
   const role = window.portalUser?.role;
   const perms = window.userPerms || getStoredPerms();
 
-  // super_admin and admin can do everything
-  if (role === "super_admin" || role === "admin") return true;
+  // system_administrator and admin can do everything
+  if (role === "system_administrator" || role === "admin") return true;
 
   // readonly can never write regardless of profile
   if (role === "readonly" && action !== "can_read") return false;
@@ -1169,7 +1169,7 @@ async function loadProfile() {
 
     const adminBtn = $("adminPanelBtn");
     if (adminBtn) {
-      adminBtn.style.display = ["super_admin", "admin"].includes(
+      adminBtn.style.display = ["system_administrator", "admin"].includes(
         portalMe?.role
       )
         ? ""
@@ -1181,7 +1181,7 @@ async function loadProfile() {
       '[onclick="openOrgModal()"]'
     );
     if (orgBtn) {
-      const isAdmin = ["super_admin", "admin"].includes(
+      const isAdmin = ["system_administrator", "admin"].includes(
         portalMe?.role
       );
       orgBtn.style.display = isAdmin ? "" : "none";
@@ -1191,7 +1191,7 @@ async function loadProfile() {
     const authBtn = $("authBtn");
     if (
       authBtn &&
-      !["super_admin", "admin"].includes(portalMe?.role)
+      !["system_administrator", "admin"].includes(portalMe?.role)
     ) {
       authBtn.style.display = "none";
     }
@@ -1210,7 +1210,7 @@ async function openUserProfile() {
     const user = await api('/api/portal/profile');
     const initials = (user.name || 'U').split(' ').map(p => p[0]).join('').slice(0,2).toUpperCase();
     const roleLabels = {
-      super_admin: 'Super Admin', admin: 'Admin',
+      system_administrator: 'System Administrator', admin: 'Admin',
       manager: 'Manager', employee: 'Employee', readonly: 'Read-Only'
     };
 
