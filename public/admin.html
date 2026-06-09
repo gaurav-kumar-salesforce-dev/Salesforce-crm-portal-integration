@@ -1547,7 +1547,27 @@
       Teams & Queues
     </button>
 
+<button class="nav-item" onclick="showPanel('orgroles')">
+  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+    <circle cx="12" cy="5" r="2"/>
+    <circle cx="5" cy="19" r="2"/>
+    <circle cx="19" cy="19" r="2"/>
+    <line x1="12" y1="7" x2="12" y2="13"/>
+    <line x1="12" y1="13" x2="5" y2="17"/>
+    <line x1="12" y1="13" x2="19" y2="17"/>
+  </svg>
+  Role Hierarchy
+</button>
 
+<button class="nav-item" onclick="showPanel('publicgroups')">
+  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+    <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>
+    <circle cx="9" cy="7" r="4"/>
+    <path d="M23 21v-2a4 4 0 0 0-3-3.87"/>
+    <path d="M16 3.13a4 4 0 0 1 0 7.75"/>
+  </svg>
+  Public Groups
+</button>
 
     <div class="sidebar-section">System</div>
     <button class="nav-item" onclick="showPanel('audit')">
@@ -2154,6 +2174,226 @@
       </div>
 
 
+  <div class="panel" id="panel-orgroles">
+  <div class="page-header">
+    <div>
+      <h1>Role Hierarchy</h1>
+      <p>Define your organization's data visibility structure. Users in higher roles see records owned by roles below them.</p>
+    </div>
+    <button class="btn btn-primary" onclick="openCreateOrgRole(null, null)">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+      Add Role
+    </button>
+  </div>
+
+  <!-- Info Banner -->
+  <div style="background:rgba(99,102,241,.08);border:1px solid rgba(99,102,241,.2);
+       border-radius:12px;padding:16px 20px;margin-bottom:24px;
+       display:flex;gap:14px;align-items:flex-start">
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#6366f1" stroke-width="2" style="flex-shrink:0;margin-top:1px">
+      <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>
+    </svg>
+    <div style="font-size:13px;color:var(--text-secondary);line-height:1.6">
+      <strong style="color:var(--text-primary)">How role hierarchy works:</strong>
+      Roles control <em>record visibility</em>, not permissions.
+      A Sales Manager assigned to a role above Sales Reps will automatically see all records owned by those Sales Reps.
+      Roles at the same level cannot see each other's records unless sharing rules are applied.
+      <strong style="color:var(--accent)">Roles are fully custom — define them to match your data access needs, not your org chart.</strong>
+    </div>
+  </div>
+
+  <!-- Tree Card -->
+  <div class="card">
+    <div class="card-head">
+      <span class="card-title">Organization Role Tree</span>
+      <div style="display:flex;gap:8px;align-items:center">
+        <span style="font-size:12px;color:var(--text-muted)" id="orgRoleCount"></span>
+        <button class="btn btn-ghost btn-sm" onclick="loadOrgRoles()">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+            <polyline points="23,4 23,11 16,11"/>
+            <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 11"/>
+          </svg>
+          Refresh
+        </button>
+      </div>
+    </div>
+    <div id="orgRolesBody" style="padding:0">
+      <div class="spinner" style="margin:32px auto"></div>
+    </div>
+  </div>
+</div>
+
+<!-- Organization Role Modal -->
+<div class="overlay" id="orgRoleModal" onclick="if(event.target===this)closeOrgRoleModal()">
+  <div class="modal modal-wide">
+    <div class="modal-head">
+      <div>
+        <h2 id="orgRoleModalTitle">New Role</h2>
+        <p id="orgRoleModalSub" style="font-size:12px;color:var(--text-muted);margin-top:4px">Top-level role</p>
+      </div>
+      <button class="close-btn" onclick="closeOrgRoleModal()">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+        </svg>
+      </button>
+    </div>
+    <div class="modal-body">
+      <div class="form-grid">
+        <div class="form-group">
+          <label class="form-label">Label <span class="req">*</span></label>
+          <input class="form-ctrl" id="or-name" placeholder="e.g. VP of Sales"
+            oninput="autoFillRoleApiName(this.value); updateHierarchyPreview()">
+          <p class="form-hint">The display name for this role.</p>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">Role Name</label>
+          <div style="display:flex;gap:8px;align-items:center">
+            <input class="form-ctrl" id="or-api-name" placeholder="Auto-generated from label"
+              style="font-family:'JetBrains Mono',monospace;font-size:12px">
+            <span style="font-size:11px;color:var(--text-muted);white-space:nowrap">API name</span>
+          </div>
+          <p class="form-hint">Used internally. Auto-populated from Label.</p>
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label class="form-label">This role reports to</label>
+        <select class="form-ctrl" id="or-parent" onchange="updateHierarchyPreview()">
+          <option value="">- Top of hierarchy</option>
+        </select>
+        <p class="form-hint">Select the role this one reports to. Leave blank for top-level.</p>
+      </div>
+
+      <div id="or-hierarchy-preview" style="display:none;
+           background:var(--bg-secondary);border:1px solid var(--border);
+           border-radius:8px;padding:14px;margin-bottom:16px">
+        <div style="font-size:11px;font-weight:700;color:var(--text-muted);
+             text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px">
+          Hierarchy Preview
+        </div>
+        <div id="or-preview-tree"
+          style="font-size:13px;line-height:1.9;font-family:'JetBrains Mono',monospace"></div>
+      </div>
+
+      <div class="form-grid">
+        <div class="form-group">
+          <label class="form-label">Role Name as displayed on reports</label>
+          <input class="form-ctrl" id="or-report-name" placeholder="e.g. VP Sales">
+          <p class="form-hint">Short abbreviation used in reports. Defaults to Label if left blank.</p>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">Description</label>
+          <input class="form-ctrl" id="or-desc" placeholder="Optional description of this role">
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label class="form-label">Opportunity Access</label>
+        <div style="background:var(--bg-secondary);border:1px solid var(--border);
+             border-radius:8px;padding:14px;display:flex;flex-direction:column;gap:10px">
+          <label style="display:flex;align-items:flex-start;gap:10px;cursor:pointer">
+            <input type="radio" name="or-opp-access" value="view" id="or-opp-view"
+              style="margin-top:3px;accent-color:var(--accent)">
+            <span style="font-size:13px;line-height:1.5;color:var(--text-secondary)">
+              Users in this role can <strong style="color:var(--text-primary)">view</strong>
+              all opportunities associated with accounts that they own, regardless of who owns the opportunities.
+            </span>
+          </label>
+          <label style="display:flex;align-items:flex-start;gap:10px;cursor:pointer">
+            <input type="radio" name="or-opp-access" value="edit" id="or-opp-edit" checked
+              style="margin-top:3px;accent-color:var(--accent)">
+            <span style="font-size:13px;line-height:1.5;color:var(--text-secondary)">
+              Users in this role can <strong style="color:var(--text-primary)">edit</strong>
+              all opportunities associated with accounts that they own, regardless of who owns the opportunities.
+            </span>
+          </label>
+        </div>
+      </div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn btn-ghost" onclick="closeOrgRoleModal()">Cancel</button>
+      <button class="btn btn-primary" id="orgRoleSaveBtn" onclick="saveOrgRole()">Save</button>
+    </div>
+  </div>
+</div>
+
+
+<div class="panel" id="panel-publicgroups">
+  <div class="page-header">
+    <div>
+      <h1>Public Groups</h1>
+      <p>Create named groups of users and roles for easy record sharing</p>
+    </div>
+    <button class="btn btn-primary" onclick="openCreatePublicGroup()">+ New Group</button>
+  </div>
+  <div class="card">
+    <div class="card-body">
+      <div id="publicGroupsBody" style="padding:4px">
+        <div class="spinner"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Public Group Modal -->
+<div class="overlay" id="publicGroupModal" onclick="if(event.target===this)closePGModal()">
+  <div class="modal modal-wide">
+    <div class="modal-head">
+      <h2 id="pgModalTitle">New Public Group</h2>
+      <button class="close-btn" onclick="closePGModal()">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+        </svg>
+      </button>
+    </div>
+    <div class="modal-body">
+      <div class="form-grid" style="margin-bottom:20px">
+        <div class="form-group">
+          <label class="form-label">Group Name <span class="req">*</span></label>
+          <input class="form-ctrl" id="pg-name" placeholder="e.g. East Sales Team">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Description</label>
+          <input class="form-ctrl" id="pg-desc" placeholder="e.g. All East region sales users">
+        </div>
+      </div>
+
+      <div class="form-divider">Group Members</div>
+      <p style="font-size:12px;color:var(--text-muted);margin-bottom:14px">
+        Add individual users or entire roles. Adding a role includes all users currently assigned to that role.
+      </p>
+
+      <!-- Add member controls -->
+      <div style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap">
+        <select class="filter-select" id="pg-add-type" onchange="updatePGAddControl()" style="min-width:130px">
+          <option value="user">Add User</option>
+          <option value="role">Add Role</option>
+        </select>
+        <select class="filter-select" id="pg-add-value" style="flex:1;min-width:200px">
+          <option value="">Select...</option>
+        </select>
+        <button class="btn btn-ghost" onclick="addPublicGroupMember()">+ Add</button>
+      </div>
+
+      <!-- Current members list -->
+      <div id="pg-members-list" style="
+        min-height:80px;background:var(--bg-secondary);
+        border:1px solid var(--border);border-radius:8px;padding:12px;
+      ">
+        <p style="font-size:12px;color:var(--text-muted);text-align:center;padding:16px 0">
+          No members yet — add users or roles above
+        </p>
+      </div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn btn-ghost" onclick="closePGModal()">Cancel</button>
+      <button class="btn btn-primary" id="pgSaveBtn" onclick="savePublicGroup()">Create Group</button>
+    </div>
+  </div>
+</div>
+
       <!-- ══ AUDIT LOG PANEL ═══════════════════════════════ -->
       <div class="panel" id="panel-audit">
         <div class="page-header">
@@ -2647,7 +2887,8 @@
       permsets: 'Permission Sets', audit: 'Audit Log',
       fieldsecurity: 'Field Security', owd: 'Org-Wide Defaults',
       sharing: 'Sharing Rules', psggroups: 'Permission Set Groups',
-      teamsqueues: 'Teams & Queues'
+      teamsqueues: 'Teams & Queues',orgroles: 'Role Hierarchy',
+      publicgroups: 'Public Groups'
     };
 
     function showPanel(name) {
@@ -2662,6 +2903,8 @@
       if (name === 'sharing') loadSharingRules();
       if (name === 'psggroups') loadPSGroups();
       if (name === 'teamsqueues') loadTeamsAndQueues();
+      if (name === 'orgroles') loadOrgRoles();
+      if (name === 'publicgroups') loadPublicGroups();
 
       // Close sidebar on mobile
       document.querySelector('.sidebar').classList.remove('open');
@@ -2771,6 +3014,8 @@
       populateProfileSelect();
       populatePermSetSelect();
       populatePSGroupSelect();
+      populateOrgRoleSelect();
+
       switchTab('info');
       $('userModal').classList.add('open');
     }
@@ -2806,6 +3051,7 @@
       renderUserPSGroupTags();
       await populateProfileSelect(u.profile?.id);
       await populatePermSetSelect();
+      await populateOrgRoleSelect(u.org_role_id || '');
       await populatePSGroupSelect();
       switchTab('info');
       $('userModal').classList.add('open');
@@ -3149,6 +3395,666 @@
       });
     }
 
+
+    let allOrgRoles      = [];
+let editingOrgRoleId = null;
+
+// Add to PANEL_TITLES:
+// orgroles: 'Role Hierarchy',
+
+// Add to showPanel():
+// if (name === 'orgroles') loadOrgRoles();
+
+async function loadOrgRoles() {
+  $('orgRolesBody').innerHTML = '<div class="spinner" style="margin:32px auto"></div>';
+  try {
+    const data = await api('/api/portal/org-roles');
+    allOrgRoles = data.roles || [];
+    $('orgRoleCount').textContent = `${allOrgRoles.length} role${allOrgRoles.length !== 1 ? 's' : ''}`;
+    renderOrgRoleTree();
+  } catch(e) {
+    $('orgRolesBody').innerHTML =
+      `<div style="color:var(--danger);padding:24px;text-align:center">${esc(e.message)}</div>`;
+  }
+}
+
+// ── TREE RENDERER ─────────────────────────────────────────────
+function buildTreeFromFlat(roles) {
+  const map = {};
+  const roots = [];
+  roles.forEach(r => { map[r.id] = { ...r, children: [] }; });
+  roles.forEach(r => {
+    if (r.parent_id && map[r.parent_id]) {
+      map[r.parent_id].children.push(map[r.id]);
+    } else {
+      roots.push(map[r.id]);
+    }
+  });
+  // Sort siblings by sort_order then name
+  function sortChildren(node) {
+    node.children.sort((a, b) => (a.sort_order - b.sort_order) || a.name.localeCompare(b.name));
+    node.children.forEach(sortChildren);
+  }
+  roots.sort((a, b) => (a.sort_order - b.sort_order) || a.name.localeCompare(b.name));
+  roots.forEach(sortChildren);
+  return roots;
+}
+
+function renderOrgRoleTree() {
+  if (!allOrgRoles.length) {
+    $('orgRolesBody').innerHTML = `
+      <div style="text-align:center;padding:56px 24px">
+        <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="var(--border-2)" stroke-width="1.5" style="margin-bottom:16px">
+          <circle cx="12" cy="5" r="2"/><circle cx="5" cy="19" r="2"/><circle cx="19" cy="19" r="2"/>
+          <line x1="12" y1="7" x2="12" y2="13"/><line x1="12" y1="13" x2="5" y2="17"/><line x1="12" y1="13" x2="19" y2="17"/>
+        </svg>
+        <h3 style="font-size:15px;font-weight:700;color:var(--text-secondary);margin-bottom:6px">No roles defined yet</h3>
+        <p style="font-size:13px;color:var(--text-muted);margin-bottom:20px">
+          Create your first role to start building the hierarchy
+        </p>
+        <button class="btn btn-primary" onclick="openCreateOrgRole(null, null)">+ Create First Role</button>
+      </div>`;
+    return;
+  }
+
+  const tree  = buildTreeFromFlat(allOrgRoles);
+  const lines = [];
+
+  function renderNode(node, depth, isLast, prefix) {
+    const hasChildren = node.children.length > 0;
+    const connector   = depth === 0 ? '' : (isLast ? '└─ ' : '├─ ');
+    const childPrefix = depth === 0 ? '' : (isLast ? '   ' : '│  ');
+    const totalBelow  = node.total_subordinate_users || 0;
+
+    // Color by level
+    const levelColors = [
+      '#6366f1', '#8b5cf6', '#06b6d4', '#10b981',
+      '#f59e0b', '#ef4444', '#ec4899', '#84cc16'
+    ];
+    const color = levelColors[(depth) % levelColors.length];
+
+    lines.push(`
+      <div class="org-role-row" data-id="${node.id}" style="
+        display:flex; align-items:stretch;
+        border-bottom:1px solid var(--border);
+        transition:background .12s;
+      "
+      onmouseover="this.style.background='var(--surface-2)'"
+      onmouseout="this.style.background=''">
+
+        <!-- Tree prefix column -->
+        <div style="
+          font-family:'JetBrains Mono',monospace;
+          font-size:13px; color:var(--border-2);
+          padding:14px 0 14px 20px;
+          white-space:pre;
+          user-select:none;
+          flex-shrink:0;
+          letter-spacing:-1px;
+        ">${esc(prefix)}${esc(connector)}</div>
+
+        <!-- Role color bar -->
+        <div style="width:3px;background:${color};flex-shrink:0;margin:8px 0"></div>
+
+        <!-- Role icon -->
+        <div style="
+          width:34px;height:34px;border-radius:8px;
+          background:${color}20;
+          border:1px solid ${color}40;
+          color:${color};
+          display:flex;align-items:center;justify-content:center;
+          font-size:12px;font-weight:800;
+          flex-shrink:0;margin:10px 12px 10px 10px;
+          font-family:'JetBrains Mono',monospace;
+        ">L${depth + 1}</div>
+
+        <!-- Role info -->
+        <div style="flex:1;padding:12px 0;min-width:0">
+          <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+            <span style="font-size:14px;font-weight:700;color:var(--text-primary)">
+              ${esc(node.name)}
+            </span>
+            ${node.description ? `
+              <span style="font-size:12px;color:var(--text-muted)">
+                — ${esc(node.description)}
+              </span>` : ''}
+          </div>
+          <div style="display:flex;align-items:center;gap:8px;margin-top:4px;flex-wrap:wrap">
+            <!-- Direct users badge -->
+            <span style="
+              font-size:11px;font-weight:600;
+              background:${color}15;color:${color};
+              border:1px solid ${color}30;
+              border-radius:20px;padding:2px 8px;
+            ">
+              ${node.user_count} direct user${node.user_count !== 1 ? 's' : ''}
+            </span>
+            <!-- Total below badge -->
+            ${totalBelow > 0 ? `
+            <span style="
+              font-size:11px;font-weight:600;
+              background:var(--surface-3);color:var(--text-muted);
+              border-radius:20px;padding:2px 8px;
+            ">
+              ${totalBelow} below
+            </span>` : ''}
+            <!-- Depth indicator -->
+            <span style="font-size:11px;color:var(--text-muted)">
+              Level ${depth + 1}
+              ${node.parent_id ? ` · Reports to: ${esc(allOrgRoles.find(r => r.id === node.parent_id)?.name || '?')}` : ' · Top of hierarchy'}
+            </span>
+          </div>
+        </div>
+
+        <!-- Actions -->
+        <div style="
+          display:flex;align-items:center;
+          gap:6px;padding:0 16px;flex-shrink:0;
+        ">
+          <button class="btn btn-ghost btn-sm"
+            onclick="openCreateOrgRole('${node.id}', '${esc(node.name)}')"
+            title="Add a child role under ${esc(node.name)}">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+              <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
+            </svg>
+            Child
+          </button>
+          <button class="btn btn-ghost btn-sm"
+            onclick="openEditOrgRole('${node.id}')">Edit</button>
+          <button class="btn btn-danger btn-sm"
+            onclick="deleteOrgRole('${node.id}', '${esc(node.name)}', ${node.user_count}, ${node.children.length})">
+            Delete
+          </button>
+        </div>
+      </div>
+    `);
+
+    // Render children
+    node.children.forEach((child, i) => {
+      const childIsLast = i === node.children.length - 1;
+      renderNode(child, depth + 1, childIsLast, prefix + childPrefix);
+    });
+  }
+
+  tree.forEach((root, i) => renderNode(root, 0, i === tree.length - 1, ''));
+
+  $('orgRolesBody').innerHTML = `
+    <div style="font-size:12px;color:var(--text-muted);
+         padding:10px 20px;background:var(--bg-secondary);
+         border-bottom:1px solid var(--border);
+         display:flex;gap:24px">
+      <span>
+        <strong style="color:var(--text-primary)">${allOrgRoles.length}</strong> total roles
+      </span>
+      <span>
+        <strong style="color:var(--text-primary)">
+          ${allOrgRoles.reduce((s, r) => s + (r.user_count || 0), 0)}
+        </strong> users assigned
+      </span>
+      <span style="margin-left:auto;color:var(--accent)">
+        L1 = top · higher level number = lower in tree
+      </span>
+    </div>
+    ${lines.join('')}
+  `;
+}
+
+// ── CREATE / EDIT MODAL ───────────────────────────────────────
+function openCreateOrgRole(parentId = null, parentName = null) {
+  editingOrgRoleId = null;
+
+  $('orgRoleModalTitle').textContent = 'New Role';
+  $('orgRoleModalSub').textContent = parentId
+    ? `Reports to: ${parentName}`
+    : 'Top-level role';
+
+  $('orgRoleSaveBtn').textContent = 'Save';
+
+  $('or-name').value = '';
+  $('or-api-name').value = '';
+  $('or-desc').value = '';
+  $('or-report-name').value = '';
+
+  if ($('or-api-name')) {
+    $('or-api-name').dataset.manuallyEdited = '';
+
+    $('or-api-name').addEventListener('input', () => {
+      $('or-api-name').dataset.manuallyEdited = 'yes';
+    }, { once: true });
+  }
+
+  document.querySelector('input[name="or-opp-access"][value="edit"]').checked = true;
+
+  populateOrgRoleParentSelect(parentId);
+  updateHierarchyPreview();
+
+  $('orgRoleModal').classList.add('open');
+  setTimeout(() => $('or-name').focus(), 150);
+}
+
+function openEditOrgRole(id) {
+  const role = allOrgRoles.find(r => r.id === id);
+  if (!role) return;
+  editingOrgRoleId = id;
+  $('orgRoleModalTitle').textContent = 'Edit Role';
+  $('orgRoleModalSub').textContent   = `"${role.name}"`;
+  $('orgRoleSaveBtn').textContent    = 'Save';
+  $('or-name').value        = role.name;
+  $('or-api-name').value    = role.api_name || '';
+  $('or-desc').value        = role.description || '';
+  $('or-report-name').value = role.report_name || '';
+  if ($('or-api-name')) $('or-api-name').dataset.manuallyEdited = 'yes';
+  const oppAccess = role.opportunity_access || 'edit';
+  document.querySelector(`input[name="or-opp-access"][value="${oppAccess}"]`).checked = true;
+  populateOrgRoleParentSelect(role.parent_id);
+  updateHierarchyPreview();
+  $('orgRoleModal').classList.add('open');
+}
+
+function closeOrgRoleModal() {
+  $('orgRoleModal').classList.remove('open');
+  editingOrgRoleId = null;
+}
+
+function populateOrgRoleParentSelect(selectedId = null) {
+  const select = $('or-parent');
+
+  // Build indented list from tree
+  const tree = buildTreeFromFlat(allOrgRoles.filter(r => r.id !== editingOrgRoleId));
+
+  function collectOptions(node, depth) {
+    const indent = '  '.repeat(depth);
+    const prefix = depth === 0 ? '' : (depth === 1 ? '└ ' : '  └ ');
+    const opts = [`<option value="${node.id}" ${node.id === selectedId ? 'selected' : ''}>
+      ${indent}${prefix}${esc(node.name)}
+    </option>`];
+    node.children.forEach(child => opts.push(...collectOptions(child, depth + 1)));
+    return opts;
+  }
+
+  select.innerHTML =
+    `<option value="">— Top of hierarchy (no parent)</option>` +
+    tree.flatMap(root => collectOptions(root, 0)).join('');
+}
+
+function updateHierarchyPreview() {
+  const parentId = $('or-parent')?.value;
+  const name     = $('or-name')?.value.trim() || '(new role)';
+  const preview  = $('or-hierarchy-preview');
+  const tree     = $('or-preview-tree');
+  if (!preview || !tree) return;
+
+  if (!parentId) {
+    preview.style.display = 'none';
+    return;
+  }
+
+  preview.style.display = 'block';
+
+  // Build ancestor chain
+  const ancestors = [];
+  let current = allOrgRoles.find(r => r.id === parentId);
+  while (current) {
+    ancestors.unshift(current);
+    current = allOrgRoles.find(r => r.id === current.parent_id);
+  }
+
+  tree.innerHTML = ancestors.map((a, i) => `
+    <div style="color:var(--text-secondary)">
+      ${'  '.repeat(i)}${i === 0 ? '◆' : '└─'} ${esc(a.name)}
+    </div>
+  `).join('') + `
+    <div style="color:var(--accent);font-weight:700">
+      ${'  '.repeat(ancestors.length)}└─ <span style="background:rgba(99,102,241,.15);padding:1px 6px;border-radius:4px">${esc(name)} ← new</span>
+    </div>
+  `;
+}
+
+async function saveOrgRole() {
+  const name              = $('or-name').value.trim();
+  const parentId          = $('or-parent').value || null;
+  const desc              = $('or-desc').value.trim();
+  const reportName        = $('or-report-name').value.trim();
+  const opportunityAccess = document.querySelector('input[name="or-opp-access"]:checked')?.value || 'edit';
+
+  if (!name) return toast('Label is required', 'err');
+
+  $('orgRoleSaveBtn').disabled = true;
+  try {
+    if (editingOrgRoleId) {
+      await api(`/api/portal/org-roles/${editingOrgRoleId}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ name, description: desc, reportName, opportunityAccess })
+      });
+      toast(`Role "${name}" updated`, 'ok');
+    } else {
+      await api('/api/portal/org-roles', {
+        method: 'POST',
+        body: JSON.stringify({ name, description: desc, parentId, reportName, opportunityAccess })
+      });
+      toast(`Role "${name}" created`, 'ok');
+    }
+    closeOrgRoleModal();
+    await loadOrgRoles();
+  } catch(e) {
+    toast(e.message, 'err');
+  } finally {
+    $('orgRoleSaveBtn').disabled = false;
+  }
+}
+
+function deleteOrgRole(id, name, userCount, childCount) {
+  if (userCount > 0) {
+    toast(`Cannot delete — ${userCount} user(s) assigned to "${name}". Reassign them first.`, 'err', 8000);
+    return;
+  }
+  if (childCount > 0) {
+    toast(`Cannot delete — "${name}" has ${childCount} child role(s). Delete or move them first.`, 'err', 8000);
+    return;
+  }
+  openConfirm(
+    `Delete "${name}"?`,
+    'This role will be permanently deleted. Any users assigned to it will lose their org role assignment.',
+    async () => {
+      await api(`/api/portal/org-roles/${id}`, { method: 'DELETE' });
+      toast(`"${name}" deleted`, 'ok');
+      await loadOrgRoles();
+    }
+  );
+}
+
+// ── ORG ROLE ASSIGNMENT IN USER MODAL ────────────────────────
+async function populateOrgRoleSelect(selectedId = '') {
+  if (!allOrgRoles.length) {
+    const d = await api('/api/portal/org-roles').catch(() => ({ roles: [] }));
+    allOrgRoles = d.roles || [];
+  }
+
+  const tree = buildTreeFromFlat(allOrgRoles);
+
+  function collectOptions(node, depth) {
+    const indent  = '\u00a0\u00a0'.repeat(depth);
+    const prefix  = depth === 0 ? '' : '└ ';
+    const opts = [`<option value="${node.id}" ${node.id === selectedId ? 'selected' : ''}>
+      ${indent}${prefix}${esc(node.name)}
+    </option>`];
+    node.children.forEach(child => opts.push(...collectOptions(child, depth + 1)));
+    return opts;
+  }
+
+  const selectEl = $('u-org-role');
+  if (!selectEl) return;
+
+  selectEl.innerHTML =
+    `<option value="">No org role assigned</option>` +
+    tree.flatMap(root => collectOptions(root, 0)).join('');
+}
+
+
+function autoFillRoleApiName(label) {
+  const apiName = label.trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '');
+  const apiField = $('or-api-name');
+  if (apiField && !apiField.dataset.manuallyEdited) {
+    apiField.value = apiName;
+  }
+}
+
+
+// ── PUBLIC GROUPS ─────────────────────────────────────────────
+let editingPGId      = null;
+let pendingPGMembers = [];  // [{memberType, userId/orgRoleId, label, sublabel}]
+
+async function loadPublicGroups() {
+  $('publicGroupsBody').innerHTML = '<div class="spinner"></div>';
+  try {
+    const data   = await api('/api/portal/public-groups');
+    const groups = data.groups || [];
+
+    if (!groups.length) {
+      $('publicGroupsBody').innerHTML = `
+        <div class="empty-state" style="padding:40px">
+          <h3>No public groups yet</h3>
+          <p>Create a group to make record sharing easier.</p>
+        </div>`;
+      return;
+    }
+
+    $('publicGroupsBody').innerHTML = `
+      <table style="width:100%;border-collapse:collapse">
+        <thead>
+          <tr>
+            ${['Group Name','Description','Users','Roles','Status','Actions']
+              .map(h => `<th style="text-align:left;padding:10px 16px;font-size:11px;
+                font-weight:700;color:var(--text-muted);text-transform:uppercase;
+                background:var(--bg-secondary);border-bottom:1px solid var(--border)">${h}</th>`)
+              .join('')}
+          </tr>
+        </thead>
+        <tbody>
+          ${groups.map(g => `
+            <tr style="border-bottom:1px solid var(--border)">
+              <td style="padding:12px 16px;font-weight:700">${esc(g.name)}</td>
+              <td style="padding:12px 16px;font-size:12px;color:var(--text-muted)">${esc(g.description||'—')}</td>
+              <td style="padding:12px 16px">
+                <span class="badge badge-employee">${g.user_count} user${g.user_count!==1?'s':''}</span>
+              </td>
+              <td style="padding:12px 16px">
+                <span class="badge badge-manager">${g.role_count} role${g.role_count!==1?'s':''}</span>
+              </td>
+              <td style="padding:12px 16px">
+                <span class="badge ${g.is_active ? 'badge-active' : 'badge-inactive'}">
+                  ${g.is_active ? 'Active' : 'Inactive'}
+                </span>
+              </td>
+              <td style="padding:12px 16px">
+                <div style="display:flex;gap:6px">
+                  <button class="btn btn-ghost btn-sm" onclick="openEditPublicGroup('${g.id}','${esc(g.name)}')">Edit</button>
+                  <button class="btn btn-danger btn-sm" onclick="deletePublicGroup('${g.id}','${esc(g.name)}')">Delete</button>
+                </div>
+              </td>
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>
+    `;
+  } catch(e) {
+    $('publicGroupsBody').innerHTML = `<div style="color:var(--danger);padding:20px">${e.message}</div>`;
+  }
+}
+
+async function openCreatePublicGroup() {
+  editingPGId      = null;
+  pendingPGMembers = [];
+  $('pgModalTitle').textContent  = 'New Public Group';
+  $('pgSaveBtn').textContent     = 'Create Group';
+  $('pg-name').value = $('pg-desc').value = '';
+  await updatePGAddControl();
+  renderPGMembersList();
+  $('publicGroupModal').classList.add('open');
+}
+
+async function openEditPublicGroup(id, name) {
+  editingPGId = id;
+  $('pgModalTitle').textContent = `Edit — ${name}`;
+  $('pgSaveBtn').textContent    = 'Save Changes';
+
+  // Load current members
+  try {
+    const data = await api(`/api/portal/public-groups/${id}/members`);
+    pendingPGMembers = (data.members || []).map(m => ({
+      id:         m.id,
+      memberType: m.member_type,
+      userId:     m.user_id     || null,
+      orgRoleId:  m.org_role_id || null,
+      label:      m.label       || '',
+      sublabel:   m.sublabel    || ''
+    }));
+  } catch { pendingPGMembers = []; }
+
+  // Load group info
+  const gData = await api('/api/portal/public-groups').catch(() => ({ groups: [] }));
+  const g     = (gData.groups || []).find(x => x.id === id);
+  if (g) { $('pg-name').value = g.name; $('pg-desc').value = g.description || ''; }
+
+  await updatePGAddControl();
+  renderPGMembersList();
+  $('publicGroupModal').classList.add('open');
+}
+
+function closePGModal() { $('publicGroupModal').classList.remove('open'); editingPGId = null; pendingPGMembers = []; }
+
+async function updatePGAddControl() {
+  const type   = $('pg-add-type')?.value;
+  const select = $('pg-add-value');
+  if (!select) return;
+  select.innerHTML = '<option value="">Select...</option>';
+
+  if (type === 'user') {
+    if (!allUsers.length) {
+      const d = await api('/api/portal/users').catch(() => ({ users: [] }));
+      allUsers = d.users || [];
+    }
+    allUsers.filter(u => u.isActive).forEach(u => {
+      const opt = document.createElement('option');
+      opt.value = u.id;
+      opt.textContent = `${u.name} (${u.email})`;
+      select.appendChild(opt);
+    });
+  } else {
+    if (!allOrgRoles.length) {
+      const d = await api('/api/portal/org-roles').catch(() => ({ roles: [] }));
+      allOrgRoles = d.roles || [];
+    }
+    allOrgRoles.forEach(r => {
+      const opt = document.createElement('option');
+      opt.value = r.id;
+      opt.textContent = `${r.name} (${r.user_count || 0} users)`;
+      select.appendChild(opt);
+    });
+  }
+}
+
+function addPublicGroupMember() {
+  const type  = $('pg-add-type').value;
+  const value = $('pg-add-value').value;
+  const text  = $('pg-add-value').options[$('pg-add-value').selectedIndex]?.text;
+  if (!value) return toast('Select a user or role to add', 'info');
+
+  // Check duplicate
+  const alreadyAdded = pendingPGMembers.find(m =>
+    (type === 'user' && m.userId === value) ||
+    (type === 'role' && m.orgRoleId === value)
+  );
+  if (alreadyAdded) return toast('Already added to this group', 'info');
+
+  pendingPGMembers.push({
+    memberType: type,
+    userId:     type === 'user' ? value : null,
+    orgRoleId:  type === 'role' ? value : null,
+    label:      text || value,
+    sublabel:   type === 'role' ? 'Role — all users in this role' : ''
+  });
+  renderPGMembersList();
+  $('pg-add-value').value = '';
+}
+
+function removePGMember(index) {
+  pendingPGMembers.splice(index, 1);
+  renderPGMembersList();
+}
+
+function renderPGMembersList() {
+  const list = $('pg-members-list');
+  if (!list) return;
+  if (!pendingPGMembers.length) {
+    list.innerHTML = `<p style="font-size:12px;color:var(--text-muted);text-align:center;padding:16px 0">No members yet — add users or roles above</p>`;
+    return;
+  }
+  list.innerHTML = pendingPGMembers.map((m, i) => `
+    <div style="display:flex;align-items:center;gap:10px;
+         padding:8px 10px;border-radius:8px;margin-bottom:4px;
+         background:var(--surface)">
+      <div style="width:28px;height:28px;border-radius:6px;
+           background:${m.memberType === 'role' ? 'rgba(139,92,246,.15)' : 'var(--accent-soft)'};
+           color:${m.memberType === 'role' ? '#a78bfa' : 'var(--accent)'};
+           display:flex;align-items:center;justify-content:center;
+           font-size:10px;font-weight:700;flex-shrink:0">
+        ${m.memberType === 'role' ? 'ROLE' : 'USR'}
+      </div>
+      <div style="flex:1;min-width:0">
+        <div style="font-size:13px;font-weight:600;
+             white-space:nowrap;overflow:hidden;text-overflow:ellipsis">
+          ${esc(m.label)}
+        </div>
+        ${m.sublabel ? `<div style="font-size:11px;color:var(--text-muted)">${esc(m.sublabel)}</div>` : ''}
+      </div>
+      <button class="icon-btn" onclick="removePGMember(${i})" title="Remove">✕</button>
+    </div>
+  `).join('');
+}
+
+async function savePublicGroup() {
+  const name = $('pg-name').value.trim();
+  if (!name) return toast('Group name is required', 'err');
+
+  $('pgSaveBtn').disabled = true;
+  try {
+    let groupId = editingPGId;
+
+    if (editingPGId) {
+      await api(`/api/portal/public-groups/${editingPGId}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ name, description: $('pg-desc').value.trim() })
+      });
+      // Remove all existing members then re-add
+      const existing = await api(`/api/portal/public-groups/${editingPGId}/members`).catch(() => ({ members: [] }));
+      for (const m of existing.members || []) {
+        await api(`/api/portal/public-groups/${editingPGId}/members/${m.id}`, { method: 'DELETE' });
+      }
+    } else {
+      const data = await api('/api/portal/public-groups', {
+        method: 'POST',
+        body: JSON.stringify({ name, description: $('pg-desc').value.trim() })
+      });
+      groupId = data.id;
+    }
+
+    // Add all pending members
+    for (const m of pendingPGMembers) {
+      await api(`/api/portal/public-groups/${groupId}/members`, {
+        method: 'POST',
+        body: JSON.stringify({
+          memberType: m.memberType,
+          userId:     m.userId     || undefined,
+          orgRoleId:  m.orgRoleId  || undefined
+        })
+      });
+    }
+
+    toast(editingPGId ? 'Group updated' : 'Group created', 'ok');
+    closePGModal();
+    loadPublicGroups();
+  } catch(e) {
+    toast(e.message, 'err');
+  } finally {
+    $('pgSaveBtn').disabled = false;
+  }
+}
+
+function deletePublicGroup(id, name) {
+  openConfirm(
+    `Delete "${name}"?`,
+    'This group and all its members will be permanently deleted.',
+    async () => {
+      await api(`/api/portal/public-groups/${id}`, { method: 'DELETE' });
+      toast('Group deleted', 'ok');
+      loadPublicGroups();
+    }
+  );
+}
     // ═══════════════════════════════════════════════════════
     // AUDIT LOG
     // ═══════════════════════════════════════════════════════
@@ -4197,6 +5103,97 @@
       setTimeout(() => { el.classList.add('out'); setTimeout(() => el.remove(), 350); }, 3500);
     }
   </script>
+
+ <div class="modal-body" hidden>
+
+  <!-- Label (required) -->
+  <div class="form-group">
+    <label class="form-label">Label <span class="req">*</span></label>
+    <input class="form-ctrl" id="or-name"
+      placeholder="e.g. VP of Sales"
+      oninput="autoFillRoleApiName(this.value)">
+    <p class="form-hint">The display name for this role.</p>
+  </div>
+
+  <!-- Role Name (API name - auto generated) -->
+  <div class="form-group">
+    <label class="form-label">Role Name</label>
+    <div style="display:flex;gap:8px;align-items:center">
+      <input class="form-ctrl" id="or-api-name"
+        placeholder="Auto-generated from label"
+        style="font-family:'JetBrains Mono',monospace;font-size:12px">
+      <span style="font-size:11px;color:var(--text-muted);white-space:nowrap">API name</span>
+    </div>
+    <p class="form-hint">Used internally. Auto-populated from Label.</p>
+  </div>
+
+  <!-- This role reports to -->
+  <div class="form-group">
+    <label class="form-label">This role reports to</label>
+    <select class="form-ctrl" id="or-parent"
+      onchange="updateHierarchyPreview()">
+      <option value="">— Top of hierarchy</option>
+    </select>
+    <p class="form-hint">Select the role this one reports to. Leave blank for top-level.</p>
+  </div>
+
+  <!-- Hierarchy Preview -->
+  <div id="or-hierarchy-preview" style="display:none;
+       background:var(--bg-secondary);border:1px solid var(--border);
+       border-radius:8px;padding:14px;margin-bottom:16px">
+    <div style="font-size:11px;font-weight:700;color:var(--text-muted);
+         text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px">
+      Hierarchy Preview
+    </div>
+    <div id="or-preview-tree"
+         style="font-size:13px;line-height:1.9;font-family:'JetBrains Mono',monospace"></div>
+  </div>
+
+  <!-- Role Name as displayed on reports -->
+  <div class="form-group">
+    <label class="form-label">Role Name as displayed on reports</label>
+    <input class="form-ctrl" id="or-report-name"
+      placeholder="e.g. VP Sales (short version for reports)">
+    <p class="form-hint">Short abbreviation used in reports. Defaults to Label if left blank.</p>
+  </div>
+
+  <!-- Description -->
+  <div class="form-group">
+    <label class="form-label">Description</label>
+    <input class="form-ctrl" id="or-desc"
+      placeholder="Optional description of this role">
+  </div>
+
+  <!-- Opportunity Access (matching Salesforce exactly) -->
+  <div class="form-group">
+    <label class="form-label">Opportunity Access</label>
+    <div style="background:var(--bg-secondary);border:1px solid var(--border);
+         border-radius:8px;padding:14px;display:flex;flex-direction:column;gap:10px">
+      <label style="display:flex;align-items:flex-start;gap:10px;cursor:pointer">
+        <input type="radio" name="or-opp-access" value="view" id="or-opp-view"
+          style="margin-top:3px;accent-color:var(--accent)">
+        <span style="font-size:13px;line-height:1.5;color:var(--text-secondary)">
+          Users in this role can <strong style="color:var(--text-primary)">view</strong>
+          all opportunities associated with accounts that they own,
+          regardless of who owns the opportunities
+        </span>
+      </label>
+      <label style="display:flex;align-items:flex-start;gap:10px;cursor:pointer">
+        <input type="radio" name="or-opp-access" value="edit" id="or-opp-edit"
+          checked style="margin-top:3px;accent-color:var(--accent)">
+        <span style="font-size:13px;line-height:1.5;color:var(--text-secondary)">
+          Users in this role can <strong style="color:var(--text-primary)">edit</strong>
+          all opportunities associated with accounts that they own,
+          regardless of who owns the opportunities
+        </span>
+      </label>
+    </div>
+  </div>
+
+</div>
+
+
+
 </body>
 
 </html>

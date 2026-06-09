@@ -591,6 +591,379 @@ app.delete('/api/portal/users/:id/permission-set-groups/:groupId', checkAuth, ch
 });
 
 
+// ================================================================
+// ORG ROLE HIERARCHY ROUTES — Add to server.js
+// Place after your permission-set-groups routes
+// ================================================================
+
+// GET full role tree
+app.get('/api/portal/org-roles', checkAuth, checkRole('admin'), async (req, res) => {
+  try {
+    const { data, error } = await supabase.rpc('get_org_role_tree');
+    if (error) throw error;
+    res.json({ roles: data || [] });
+  } catch(e) {
+    console.error('GET org-roles error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+// POST create role
+app.post('/api/portal/org-roles', checkAuth, checkRole('system_administrator'), async (req, res) => {
+  const {
+    name,
+    description,
+    parentId,
+    reportName,
+    opportunityAccess = 'edit'
+  } = req.body || {};
+
+  if (!name?.trim()) {
+    return res.status(400).json({ error: 'Label is required' });
+  }
+
+  // Auto-generate API name (Salesforce style)
+  const apiName = name.trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '');
+
+  try {
+    const newId = crypto.randomUUID();
+
+    let level = 1;
+    let path = newId;
+
+    if (parentId) {
+      const { data: parent } = await supabase
+        .from('org_roles')
+        .select('level, path')
+        .eq('id', parentId)
+        .single();
+
+      if (parent) {
+        level = parent.level + 1;
+        path = `${parent.path}/${newId}`;
+      }
+    }
+
+    const { data: role, error } = await supabase
+      .from('org_roles')
+      .insert({
+        id: newId,
+        name: name.trim(),
+        api_name: apiName,
+        description: description?.trim() || null,
+        report_name: reportName?.trim() || name.trim(),
+        opportunity_access: opportunityAccess,
+        parent_id: parentId || null,
+        level,
+        path,
+        created_by: req.user.id
+      })
+      .select('id, name, api_name, level, path')
+      .single();
+
+    if (error) {
+      if (error.code === '23505') {
+        return res.status(409).json({
+          error: 'A role with this name already exists'
+        });
+      }
+      throw error;
+    }
+
+    await writeAuditLog({
+      userId: req.user.id,
+      userEmail: req.user.email,
+      userRole: req.user.role,
+      action: 'create',
+      payload: {
+        type: 'org_role',
+        name,
+        apiName,
+        parentId
+      },
+      ipAddress: req.ip
+    });
+
+    res.status(201).json({
+      success: true,
+      role
+    });
+
+  } catch (e) {
+    console.error('POST org-roles error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// PATCH update role name/description only
+// Note: we don't allow moving a role to a different parent
+// (would require recomputing paths for all descendants — complex)
+// Instead: delete and recreate if you need to move a role
+// PATCH update role
+app.patch('/api/portal/org-roles/:id', checkAuth, checkRole('system_administrator'), async (req, res) => {
+  const {
+    name,
+    description,
+    reportName,
+    opportunityAccess,
+    isActive
+  } = req.body || {};
+
+  if (!name?.trim()) {
+    return res.status(400).json({ error: 'Label is required' });
+  }
+
+  try {
+    const updates = {
+      name: name.trim(),
+      description: description?.trim() || null,
+      report_name: reportName?.trim() || name.trim(),
+      updated_at: new Date().toISOString()
+    };
+
+    // NEW: Opportunity access
+    if (opportunityAccess !== undefined) {
+      updates.opportunity_access = opportunityAccess;
+    }
+
+    // Existing active/inactive support
+    if (isActive !== undefined) {
+      updates.is_active = isActive;
+    }
+
+    const { error } = await supabase
+      .from('org_roles')
+      .update(updates)
+      .eq('id', req.params.id);
+
+    if (error) throw error;
+
+    await writeAuditLog({
+      userId: req.user.id,
+      userEmail: req.user.email,
+      userRole: req.user.role,
+      action: 'edit',
+      payload: {
+        type: 'org_role',
+        id: req.params.id,
+        name,
+        reportName,
+        opportunityAccess,
+        isActive
+      },
+      ipAddress: req.ip
+    });
+
+    res.json({ success: true });
+
+  } catch (e) {
+    console.error('PATCH org-roles error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// DELETE role — only if no users assigned and no children
+app.delete('/api/portal/org-roles/:id', checkAuth, checkRole('system_administrator'), async (req, res) => {
+  try {
+    // Check users assigned
+    const { count: userCount } = await supabase
+      .from('users')
+      .select('*', { count: 'exact', head: true })
+      .eq('org_role_id', req.params.id);
+
+    if (userCount > 0) {
+      return res.status(409).json({
+        error: `Cannot delete — ${userCount} user(s) assigned to this role. Reassign them first.`
+      });
+    }
+
+    // Check for child roles
+    const { count: childCount } = await supabase
+      .from('org_roles')
+      .select('*', { count: 'exact', head: true })
+      .eq('parent_id', req.params.id);
+
+    if (childCount > 0) {
+      return res.status(409).json({
+        error: `Cannot delete — this role has ${childCount} child role(s). Delete or move them first.`
+      });
+    }
+
+    const { error } = await supabase
+      .from('org_roles')
+      .delete()
+      .eq('id', req.params.id);
+
+    if (error) throw error;
+
+    res.json({ success: true });
+  } catch(e) {
+    console.error('DELETE org-roles error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// PATCH assign org role to a user
+app.patch('/api/portal/users/:id/org-role', checkAuth, checkRole('admin'), async (req, res) => {
+  const { orgRoleId } = req.body || {};
+  try {
+    const { error } = await supabase
+      .from('users')
+      .update({ org_role_id: orgRoleId || null })
+      .eq('id', req.params.id);
+
+    if (error) throw error;
+
+    await writeAuditLog({
+      userId:    req.user.id,
+      userEmail: req.user.email,
+      userRole:  req.user.role,
+      action:    'update_user',
+      payload:   { type: 'org_role_assignment', targetUserId: req.params.id, orgRoleId },
+      ipAddress: req.ip
+    });
+
+    res.json({ success: true });
+  } catch(e) {
+    console.error('PATCH user org-role error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ══ PUBLIC GROUPS ═════════════════════════════════════════════
+
+// GET all groups
+app.get('/api/portal/public-groups', checkAuth, checkRole('admin'), async (req, res) => {
+  try {
+    const { data: groups, error } = await supabase
+      .from('public_groups')
+      .select('id, name, description, is_active, created_at')
+      .order('name');
+    if (error) throw error;
+
+    // Get member counts separately (avoids FK ambiguity)
+    const enriched = await Promise.all((groups || []).map(async g => {
+      const { count: userCount } = await supabase
+        .from('public_group_members')
+        .select('*', { count: 'exact', head: true })
+        .eq('group_id', g.id)
+        .eq('member_type', 'user');
+
+      const { count: roleCount } = await supabase
+        .from('public_group_members')
+        .select('*', { count: 'exact', head: true })
+        .eq('group_id', g.id)
+        .eq('member_type', 'role');
+
+      return { ...g, user_count: userCount || 0, role_count: roleCount || 0 };
+    }));
+
+    res.json({ groups: enriched });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// GET group members
+app.get('/api/portal/public-groups/:id/members', checkAuth, checkRole('admin'), async (req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from('public_group_members')
+      .select('id, member_type, user_id, org_role_id')
+      .eq('group_id', req.params.id);
+    if (error) throw error;
+
+    // Enrich with names
+    const enriched = await Promise.all((data || []).map(async m => {
+      if (m.member_type === 'user' && m.user_id) {
+        const { data: u } = await supabase
+          .from('users').select('id, name, email').eq('id', m.user_id).single();
+        return { ...m, label: u?.name || m.user_id, sublabel: u?.email || '' };
+      }
+      if (m.member_type === 'role' && m.org_role_id) {
+        const { data: r } = await supabase
+          .from('org_roles').select('id, name').eq('id', m.org_role_id).single();
+        return { ...m, label: r?.name || m.org_role_id, sublabel: 'Role (all users in this role)' };
+      }
+      return m;
+    }));
+
+    res.json({ members: enriched });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// POST create group
+app.post('/api/portal/public-groups', checkAuth, checkRole('admin'), async (req, res) => {
+  const { name, description } = req.body || {};
+  if (!name?.trim()) return res.status(400).json({ error: 'Group name is required' });
+  try {
+    const { data, error } = await supabase
+      .from('public_groups')
+      .insert({ name: name.trim(), description: description?.trim() || null, created_by: req.user.id })
+      .select('id').single();
+    if (error) {
+      if (error.code === '23505') return res.status(409).json({ error: 'A group with this name already exists' });
+      throw error;
+    }
+    res.status(201).json({ success: true, id: data.id });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// PATCH update group
+app.patch('/api/portal/public-groups/:id', checkAuth, checkRole('admin'), async (req, res) => {
+  const { name, description, isActive } = req.body || {};
+  try {
+    const updates = { updated_at: new Date().toISOString() };
+    if (name        !== undefined) updates.name        = name;
+    if (description !== undefined) updates.description = description;
+    if (isActive    !== undefined) updates.is_active   = isActive;
+    await supabase.from('public_groups').update(updates).eq('id', req.params.id);
+    res.json({ success: true });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// POST add member to group
+app.post('/api/portal/public-groups/:id/members', checkAuth, checkRole('admin'), async (req, res) => {
+  const { memberType, userId, orgRoleId } = req.body || {};
+  if (!memberType || (memberType === 'user' && !userId) || (memberType === 'role' && !orgRoleId)) {
+    return res.status(400).json({ error: 'memberType and userId or orgRoleId required' });
+  }
+  try {
+    const insert = {
+      group_id:     req.params.id,
+      member_type:  memberType,
+      user_id:      memberType === 'user'  ? userId     : null,
+      org_role_id:  memberType === 'role'  ? orgRoleId  : null,
+      added_by:     req.user.id
+    };
+    const { error } = await supabase.from('public_group_members').insert(insert);
+    if (error) {
+      if (error.code === '23505') return res.status(409).json({ error: 'Already a member of this group' });
+      throw error;
+    }
+    res.json({ success: true });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// DELETE remove member from group
+app.delete('/api/portal/public-groups/:id/members/:memberId', checkAuth, checkRole('admin'), async (req, res) => {
+  try {
+    await supabase.from('public_group_members')
+      .delete().eq('id', req.params.memberId).eq('group_id', req.params.id);
+    res.json({ success: true });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// DELETE group
+app.delete('/api/portal/public-groups/:id', checkAuth, checkRole('admin'), async (req, res) => {
+  try {
+    await supabase.from('public_group_members').delete().eq('group_id', req.params.id);
+    await supabase.from('public_groups').delete().eq('id', req.params.id);
+    res.json({ success: true });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+
 // ══ TEAMS ════════════════════════════════════════════════════
 
 // GET all teams
