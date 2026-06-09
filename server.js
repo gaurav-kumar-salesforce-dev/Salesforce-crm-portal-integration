@@ -206,6 +206,27 @@ function clearFieldPermCache(userId) {
     if (key.startsWith(`${userId}:`)) fieldPermCache.delete(key);
   }
 }
+
+function normalizeProfileImage(value) {
+  if (value === null || value === '') return null;
+  if (value === undefined) return undefined;
+  if (typeof value !== 'string') {
+    const error = new Error('Profile image must be an image data URL');
+    error.statusCode = 400;
+    throw error;
+  }
+  if (!/^data:image\/(png|jpe?g|webp|gif);base64,/i.test(value)) {
+    const error = new Error('Profile image must be PNG, JPG, WEBP, or GIF');
+    error.statusCode = 400;
+    throw error;
+  }
+  if (Buffer.byteLength(value, 'utf8') > 750 * 1024) {
+    const error = new Error('Profile image must be smaller than 750 KB');
+    error.statusCode = 400;
+    throw error;
+  }
+  return value;
+}
 // ── SHARING-AWARE RECORD VISIBILITY ──────────────────────────
 
 async function canSeeRecord(record, userId, userRole, sfObject) {
@@ -2670,6 +2691,7 @@ async function issuePortalSession(user, req, authMethod = 'password') {
       email: userData.email,
       name: userData.name,
       role: userData.role,
+      profileImage: userData.profile_image || null,
       profile: userData.profile
     },
     permissions: userData.permissions
@@ -2687,7 +2709,7 @@ app.post('/api/auth/login', async (req, res) => {
     // 1. Look up the user by email
     const { data: user, error } = await supabase
       .from('users')
-      .select('id, email, name, role, password_hash, is_active, must_change_pw')
+      .select('id, email, name, role, profile_image, password_hash, is_active, must_change_pw')
       .eq('email', email.toLowerCase().trim())
       .single();
 
@@ -2750,10 +2772,11 @@ app.post('/api/auth/login', async (req, res) => {
       user: {
         id: userData.id,
         email: userData.email,
-        name: userData.name,
-        role: userData.role,
-        profile: userData.profile
-      },
+      name: userData.name,
+      role: userData.role,
+      profileImage: user.profile_image || null,
+      profile: userData.profile
+    },
       permissions: userData.permissions   // { Account: {can_read, can_create, can_edit, can_delete}, ... }
     });
 
@@ -3108,11 +3131,17 @@ app.get('/api/portal/me', checkAuth, async (req, res) => {
     if (!userData) {
       return res.status(404).json({ error: 'User not found or deactivated' });
     }
+    const { data: imageRow } = await supabase
+      .from('users')
+      .select('profile_image')
+      .eq('id', req.user.id)
+      .single();
     res.json({
       id: userData.id,
       email: userData.email,
       name: userData.name,
       role: userData.role,
+      profileImage: imageRow?.profile_image || null,
       profile: userData.profile,
       permissions: userData.permissions,
       lastLoginAt: userData.last_login_at
@@ -3128,7 +3157,7 @@ app.get('/api/portal/profile', checkAuth, async (req, res) => {
   try {
     const { data: user } = await supabase
       .from('users')
-      .select('id, email, name, role, must_change_pw, created_at, last_login_at')
+      .select('id, email, name, role, profile_image, must_change_pw, created_at, last_login_at')
       .eq('id', req.user.id)
       .single();
 
@@ -3152,6 +3181,7 @@ app.get('/api/portal/profile', checkAuth, async (req, res) => {
       email: user.email,
       name: user.name,
       role: user.role,
+      profileImage: user.profile_image || null,
       mustChangePw: user.must_change_pw,
       createdAt: user.created_at,
       lastLoginAt: user.last_login_at,
@@ -3159,13 +3189,13 @@ app.get('/api/portal/profile', checkAuth, async (req, res) => {
       permissionSets: (permSets || []).map(p => p.permission_sets).filter(Boolean)
     });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.status(err.statusCode || 500).json({ error: err.message });
   }
 });
 
 // PATCH own profile — name and password only
 app.patch('/api/portal/profile', checkAuth, async (req, res) => {
-  const { name, currentPassword, newPassword } = req.body || {};
+  const { name, profileImage, currentPassword, newPassword } = req.body || {};
 
   try {
     const updates = {};
@@ -3173,6 +3203,10 @@ app.patch('/api/portal/profile', checkAuth, async (req, res) => {
     // Name change
     if (name?.trim()) {
       updates.name = name.trim();
+    }
+
+    if (Object.prototype.hasOwnProperty.call(req.body || {}, 'profileImage')) {
+      updates.profile_image = normalizeProfileImage(profileImage);
     }
 
     // Password change
@@ -3226,7 +3260,7 @@ app.patch('/api/portal/profile', checkAuth, async (req, res) => {
 
 // POST /api/portal/users — create new portal user (admin+ only)
 app.post('/api/portal/users', checkAuth, checkRole('admin'), async (req, res) => {
-  const { email, name, password, role, profileId } = req.body || {};
+  const { email, name, password, role, profileId, profileImage } = req.body || {};
 
   if (!email || !name || !password) {
     return res.status(400).json({ error: 'Email, name, and password are required' });
@@ -3252,6 +3286,7 @@ app.post('/api/portal/users', checkAuth, checkRole('admin'), async (req, res) =>
         name: name.trim(),
         password_hash: passwordHash,
         role: role || 'employee',
+        profile_image: normalizeProfileImage(profileImage),
         is_active: true,
         must_change_pw: true,
         created_by: req.user.id
@@ -3285,7 +3320,7 @@ app.post('/api/portal/users', checkAuth, checkRole('admin'), async (req, res) =>
     res.status(201).json({ success: true, user: newUser });
   } catch (err) {
     console.error('POST /api/portal/users error:', err.message);
-    res.status(500).json({ error: 'Could not create user' });
+    res.status(err.statusCode || 500).json({ error: err.statusCode ? err.message : 'Could not create user' });
   }
 });
 
@@ -3293,7 +3328,7 @@ app.post('/api/portal/users', checkAuth, checkRole('admin'), async (req, res) =>
 // PATCH /api/portal/users/:id — update user (admin+ only)
 app.patch('/api/portal/users/:id', checkAuth, checkRole('admin'), async (req, res) => {
   const { id } = req.params;
-  const { role, isActive, profileId, mustChangePw } = req.body || {};
+  const { role, isActive, profileId, mustChangePw, profileImage } = req.body || {};
 
   // Admins cannot modify system_administrator users (only system_administrator can)
   if (req.user.role !== 'system_administrator') {
@@ -3312,6 +3347,9 @@ app.patch('/api/portal/users/:id', checkAuth, checkRole('admin'), async (req, re
     if (role !== undefined) updates.role = role;
     if (isActive !== undefined) updates.is_active = isActive;
     if (mustChangePw !== undefined) updates.must_change_pw = mustChangePw;
+    if (Object.prototype.hasOwnProperty.call(req.body || {}, 'profileImage')) {
+      updates.profile_image = normalizeProfileImage(profileImage);
+    }
     updates.updated_at = new Date().toISOString();
 
     // Handle optional password change on edit
@@ -3376,12 +3414,98 @@ app.patch('/api/portal/users/:id', checkAuth, checkRole('admin'), async (req, re
     res.json({ success: true });
   } catch (err) {
     console.error('PATCH /api/portal/users error:', err.message);
-    res.status(500).json({ error: 'Could not update user' });
+    res.status(err.statusCode || 500).json({ error: err.statusCode ? err.message : 'Could not update user' });
   }
 });
 
 
 // ── GET user's permission sets
+// DELETE /api/portal/users/:id - permanently delete a portal user (admin+ only)
+app.delete('/api/portal/users/:id', checkAuth, checkRole('admin'), async (req, res) => {
+  const { id } = req.params;
+
+  if (id === req.user.id) {
+    return res.status(400).json({ error: 'You cannot delete your own account while logged in' });
+  }
+
+  try {
+    const { data: target, error: targetError } = await supabase
+      .from('users')
+      .select('id, email, name, role')
+      .eq('id', id)
+      .single();
+
+    if (targetError || !target) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    if (target.role === 'system_administrator' && req.user.role !== 'system_administrator') {
+      return res.status(403).json({ error: 'Only System Administrators can delete System Administrator accounts' });
+    }
+
+    if (target.role === 'system_administrator') {
+      const { count } = await supabase
+        .from('users')
+        .select('*', { count: 'exact', head: true })
+        .eq('role', 'system_administrator')
+        .neq('id', id);
+      if (!count) {
+        return res.status(409).json({ error: 'Cannot delete the last System Administrator account' });
+      }
+    }
+
+    await supabase.from('user_permission_set_assignments').delete().eq('user_id', id);
+    await supabase.from('user_permission_set_group_assignments').delete().eq('user_id', id);
+    await supabase.from('user_profile_assignments').delete().eq('user_id', id);
+    await supabase.from('password_reset_tokens').delete().eq('user_id', id);
+    await supabase.from('public_group_members').delete().eq('user_id', id);
+    await supabase.from('team_members').delete().eq('user_id', id);
+    await supabase.from('queue_members').delete().eq('user_id', id);
+
+    await supabase.from('profiles').update({ created_by: req.user.id }).eq('created_by', id);
+    await supabase.from('permission_sets').update({ created_by: req.user.id }).eq('created_by', id);
+    await supabase.from('permission_set_groups').update({ created_by: req.user.id }).eq('created_by', id);
+    await supabase.from('org_roles').update({ created_by: req.user.id }).eq('created_by', id);
+    await supabase.from('public_groups').update({ created_by: req.user.id }).eq('created_by', id);
+    await supabase.from('teams').update({ created_by: req.user.id }).eq('created_by', id);
+    await supabase.from('queues').update({ created_by: req.user.id }).eq('created_by', id);
+    await supabase.from('sharing_rules').update({ created_by: req.user.id }).eq('created_by', id);
+    await supabase.from('user_permission_set_assignments').update({ assigned_by: req.user.id }).eq('assigned_by', id);
+    await supabase.from('user_permission_set_group_assignments').update({ assigned_by: req.user.id }).eq('assigned_by', id);
+    await supabase.from('user_profile_assignments').update({ assigned_by: req.user.id }).eq('assigned_by', id);
+    await supabase.from('queue_members').update({ added_by: req.user.id }).eq('added_by', id);
+
+    const { error: auditUpdateError } = await supabase
+      .from('audit_log')
+      .update({ user_id: null })
+      .eq('user_id', id);
+    if (auditUpdateError) {
+      await supabase.from('audit_log').delete().eq('user_id', id);
+    }
+
+    const { error: deleteError } = await supabase
+      .from('users')
+      .delete()
+      .eq('id', id);
+    if (deleteError) throw deleteError;
+
+    await writeAuditLog({
+      userId: req.user.id,
+      userEmail: req.user.email,
+      userRole: req.user.role,
+      action: 'delete_user',
+      payload: { deletedUserId: id, email: target.email, role: target.role },
+      ipAddress: req.ip
+    });
+
+    clearFieldPermCache(id);
+    res.json({ success: true });
+  } catch (err) {
+    console.error('DELETE /api/portal/users error:', err.message);
+    res.status(500).json({ error: 'Could not delete user' });
+  }
+});
+
 app.get('/api/portal/users/:id/permission-sets', checkAuth, checkRole('admin'), async (req, res) => {
   try {
     const { data, error } = await supabase
@@ -3597,8 +3721,16 @@ app.get('/api/portal/users', checkAuth, checkRole('admin'), async (req, res) => 
     const users = data || [];
     const userIds = users.map((u) => u.id);
     let permissionSetsByUserId = {};
+    let profileImagesByUserId = {};
 
     if (userIds.length) {
+      const { data: imageRows, error: imageError } = await supabase
+        .from('users')
+        .select('id, profile_image')
+        .in('id', userIds);
+      if (imageError) throw imageError;
+      profileImagesByUserId = Object.fromEntries((imageRows || []).map((row) => [row.id, row.profile_image || null]));
+
       const { data: assignments, error: assignmentsError } = await supabase
         .from('user_permission_set_assignments')
         .select('user_id, perm_set_id')
@@ -3634,6 +3766,7 @@ app.get('/api/portal/users', checkAuth, checkRole('admin'), async (req, res) => 
         email: u.email,
         name: u.name,
         role: u.role,
+        profileImage: profileImagesByUserId[u.id] || null,
         isActive: u.is_active,
         mustChangePw: u.must_change_pw,
         createdAt: u.created_at,

@@ -764,6 +764,99 @@
       color: var(--text-primary);
     }
 
+    .row-actions {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .action-icon-btn {
+      width: 34px;
+      height: 34px;
+      border-radius: 9px;
+      border: 1px solid var(--border-2);
+      background: var(--surface);
+      color: var(--text-secondary);
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      transition: background .15s, color .15s, border-color .15s, transform .12s, opacity .15s;
+    }
+
+    .action-icon-btn:hover {
+      background: var(--surface-2);
+      color: var(--text-primary);
+      transform: translateY(-1px);
+    }
+
+    .action-icon-btn:disabled {
+      cursor: wait;
+      opacity: .6;
+      transform: none;
+    }
+
+    .action-icon-btn svg {
+      width: 16px;
+      height: 16px;
+      stroke-width: 2.2;
+    }
+
+    .action-icon-btn.edit:hover {
+      color: var(--accent);
+      border-color: rgba(1,118,211,.35);
+      background: var(--accent-soft);
+    }
+
+    .action-icon-btn.status.activate:hover {
+      color: var(--success);
+      border-color: rgba(26,127,55,.3);
+      background: var(--success-soft);
+    }
+
+    .action-icon-btn.status.deactivate:hover {
+      color: var(--warning);
+      border-color: rgba(154,103,0,.3);
+      background: var(--warning-soft);
+    }
+
+    .action-icon-btn.delete:hover {
+      color: var(--danger);
+      border-color: rgba(207,34,46,.3);
+      background: var(--danger-soft);
+    }
+
+    .user-row.busy {
+      opacity: .58;
+      pointer-events: none;
+    }
+
+    .delete-progress {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      color: var(--danger);
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    .btn .btn-spinner {
+      width: 14px;
+      height: 14px;
+      border-radius: 50%;
+      border: 2px solid currentColor;
+      border-right-color: transparent;
+      display: inline-block;
+      animation: spin .75s linear infinite;
+      margin-right: 8px;
+      vertical-align: -2px;
+    }
+
+    .btn.is-loading {
+      cursor: wait;
+      opacity: .82;
+    }
+
     /* ── OVERLAY / MODAL ─────────────────────────────── */
     .overlay {
       position: fixed;
@@ -2478,10 +2571,23 @@
         </div>
 
         <div class="tab-panel active" id="tab-info">
+          <div class="form-group">
+            <label class="form-label">Profile Image</label>
+            <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+              <div id="u-image-preview" style="width:54px;height:54px;border-radius:50%;
+                   background:var(--accent-soft);color:var(--accent);display:flex;align-items:center;
+                   justify-content:center;font-size:18px;font-weight:800;overflow:hidden;flex-shrink:0">U</div>
+              <input id="u-image-input" type="file" accept="image/png,image/jpeg,image/webp,image/gif" style="display:none"
+                onchange="setUserImageDraft(this)">
+              <button class="btn btn-ghost btn-sm" onclick="$('u-image-input').click()">Upload / Change</button>
+              <button class="btn btn-danger btn-sm" id="u-image-remove" onclick="removeUserImageDraft()" style="display:none">Remove</button>
+            </div>
+            <p class="form-hint">PNG, JPG, WEBP, or GIF. Max 750 KB.</p>
+          </div>
           <div class="form-grid">
             <div class="form-group">
               <label class="form-label">Full Name <span class="req">*</span></label>
-              <input class="form-ctrl" id="u-name" placeholder="Jane Smith">
+              <input class="form-ctrl" id="u-name" placeholder="Jane Smith" oninput="renderUserImagePreview(allUsers.find(u => u.id === editingUserId) || {})">
             </div>
             <div class="form-group">
               <label class="form-label">Email <span class="req">*</span></label>
@@ -2661,11 +2767,11 @@
 
 
   <!-- Confirm Deactivate / Delete Modal -->
-  <div class="overlay" id="confirmModal" onclick="if(event.target===this)closeConfirmModal()">
+  <div class="overlay" id="confirmModal" onclick="if(event.target===this && !window._confirmBusy)closeConfirmModal()">
     <div class="modal" style="max-width:400px">
       <div class="modal-head">
         <h2 id="confirmTitle">Confirm Action</h2>
-        <button class="close-btn" onclick="closeConfirmModal()">
+        <button class="close-btn" id="confirmCloseBtn" onclick="closeConfirmModal()">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <line x1="18" y1="6" x2="6" y2="18" />
             <line x1="6" y1="6" x2="18" y2="18" />
@@ -2676,7 +2782,7 @@
         <p id="confirmMsg" style="color:var(--text-secondary);font-size:14px;line-height:1.6"></p>
       </div>
       <div class="modal-foot">
-        <button class="btn btn-ghost" onclick="closeConfirmModal()">Cancel</button>
+        <button class="btn btn-ghost" id="confirmCancelBtn" onclick="closeConfirmModal()">Cancel</button>
         <button class="btn btn-danger" id="confirmOkBtn" onclick="confirmAction()">Confirm</button>
       </div>
     </div>
@@ -2719,7 +2825,11 @@
     let editingProfileId = null;
     let editingPermSetId = null;
     let userPermSetsSelected = []; // [{id, name}]
+    let userProfileImageDraft = undefined;
+    let pendingUserActions = new Set();
+    let pendingUserActionLabels = {};
     let confirmCallback = null;
+    let confirmLoadingLabel = 'Working...';
 
     const SF_OBJECTS = ['Account', 'Contact', 'Opportunity', 'Lead', 'Case', 'Campaign', 'Task', 'Event'];
 
@@ -2734,6 +2844,47 @@
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error || `Request failed ${res.status}`);
       return data;
+    }
+
+    function userInitials(name, fallback = 'U') {
+      return (name || fallback).split(/\s+/).filter(Boolean).map(p => p[0]).join('').slice(0, 2).toUpperCase() || fallback;
+    }
+
+    function avatarHtml(user, size = 32, fallback = 'U') {
+      const initials = userInitials(user?.name, fallback);
+      const base = `width:${size}px;height:${size}px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:800;flex-shrink:0;overflow:hidden`;
+      if (user?.profileImage) {
+        return `<div style="${base};background:var(--accent-soft)"><img src="${esc(user.profileImage)}" alt="" style="width:100%;height:100%;object-fit:cover"></div>`;
+      }
+      return `<div style="${base};background:var(--accent-soft);color:var(--accent);font-size:${Math.max(11, Math.round(size * .34))}px">${initials}</div>`;
+    }
+
+    function setAdminAvatar(user) {
+      const el = $('adminAvatar');
+      if (!el) return;
+      if (user?.profileImage) {
+        el.innerHTML = `<img src="${esc(user.profileImage)}" alt="" style="width:100%;height:100%;object-fit:cover;border-radius:50%">`;
+      } else {
+        el.textContent = userInitials(user?.name, 'A');
+      }
+    }
+
+    function readProfileImageFile(file) {
+      return new Promise((resolve, reject) => {
+        if (!file) return resolve(null);
+        if (!/^image\/(png|jpe?g|webp|gif)$/i.test(file.type)) {
+          reject(new Error('Use a PNG, JPG, WEBP, or GIF image'));
+          return;
+        }
+        if (file.size > 750 * 1024) {
+          reject(new Error('Image must be smaller than 750 KB'));
+          return;
+        }
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result);
+        reader.onerror = () => reject(new Error('Could not read image'));
+        reader.readAsDataURL(file);
+      });
     }
 
     // ═══════════════════════════════════════════════════════
@@ -2756,7 +2907,7 @@
         window._adminUser = me;
 
         // Topbar avatar + name
-        $('adminAvatar').textContent = initials;
+        setAdminAvatar(me);
         $('adminRoleLabel').textContent = me.role === 'system_administrator' ? 'System Administrator' : 'Admin';
         $('adminNameLabel').textContent = me.name || 'Admin User';
 
@@ -2783,7 +2934,6 @@
         system_administrator: 'System Administrator', admin: 'Admin',
         manager: 'Manager', employee: 'Employee', readonly: 'Read-Only'
       };
-      const initials = (user.name || 'A').split(' ').map(p => p[0]).join('').slice(0, 2).toUpperCase();
       const lastLogin = user.lastLoginAt
         ? new Date(user.lastLoginAt).toLocaleString()
         : 'First session';
@@ -2802,10 +2952,7 @@
   `;
       card.innerHTML = `
     <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px">
-      <div style="width:36px;height:36px;border-radius:50%;
-           background:linear-gradient(135deg, #0176D3, #014486);color:#fff;
-           display:flex;align-items:center;justify-content:center;
-           font-size:13px;font-weight:800;flex-shrink:0">${initials}</div>
+      ${avatarHtml(user, 36, 'A')}
       <div style="min-width:0">
         <div style="font-size:13px;font-weight:700;color:rgba(255,255,255,0.9);
              white-space:nowrap;overflow:hidden;text-overflow:ellipsis">
@@ -2953,15 +3100,15 @@
       }
       $('usersBody').innerHTML = users.map(u => {
         const roleCls = `badge-${u.role}`;
-        const initials = (u.name || '?').split(' ').map(p => p[0]).join('').slice(0, 2).toUpperCase();
         const lastLogin = u.lastLoginAt ? new Date(u.lastLoginAt).toLocaleDateString() : 'Never';
         const isSelf = u.id === window._adminId;
+        const isBusy = pendingUserActions.has(u.id);
+        const busyLabel = pendingUserActionLabels[u.id] || 'Working';
         return `
-    <tr>
+    <tr id="user-row-${u.id}" class="user-row ${isBusy ? 'busy' : ''}">
       <td>
         <div style="display:flex;align-items:center;gap:10px">
-          <div style="width:32px;height:32px;border-radius:50%;background:var(--accent-soft);color:var(--accent);
-               display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;flex-shrink:0">${initials}</div>
+          ${avatarHtml(u, 32, '?')}
           <div>
             <div style="font-weight:600;font-size:13px">${esc(u.name)}</div>
             <div style="font-size:11px;color:var(--text-muted)">${esc(u.email)}</div>
@@ -2973,10 +3120,23 @@
       <td><span class="badge ${u.isActive ? 'badge-active' : 'badge-inactive'}">${u.isActive ? 'Active' : 'Inactive'}</span>${u.mustChangePw ? '<span style="margin-left:5px;font-size:10px;color:var(--warning)">⚠ PW</span>' : ''}</td>
       <td style="font-size:12px;color:var(--text-muted)">${lastLogin}</td>
       <td>
-        <div style="display:flex;gap:6px">
-          <button class="btn btn-ghost btn-sm" onclick="openEditUser('${u.id}')">Edit</button>
-          ${u.isActive && !isSelf ? `<button class="btn btn-sm" style="background:var(--warning-soft);color:var(--warning);border:1px solid rgba(154,103,0,.2)" onclick="toggleUserActive('${u.id}','${esc(u.name)}',false)">Deactivate</button>` : ''}
-          ${!u.isActive ? `<button class="btn btn-success btn-sm" onclick="toggleUserActive('${u.id}','${esc(u.name)}',true)">Activate</button>` : ''}
+        <div class="row-actions" id="user-actions-${u.id}">
+          ${isBusy ? `
+            <span class="delete-progress"><span class="spinner" style="width:16px;height:16px;border-width:2px"></span>${busyLabel}</span>
+          ` : `
+            <button class="action-icon-btn edit" onclick="openEditUser('${u.id}')" title="Edit user" aria-label="Edit ${esc(u.name)}">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
+            </button>
+            ${u.isActive && !isSelf ? `<button class="action-icon-btn status deactivate" onclick="toggleUserActive('${u.id}','${esc(u.name)}',false)" title="Deactivate user" aria-label="Deactivate ${esc(u.name)}">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="12" cy="12" r="9"/><path d="M8 12h8"/></svg>
+            </button>` : ''}
+            ${!u.isActive ? `<button class="action-icon-btn status activate" onclick="toggleUserActive('${u.id}','${esc(u.name)}',true)" title="Activate user" aria-label="Activate ${esc(u.name)}">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M20 6 9 17l-5-5"/><circle cx="12" cy="12" r="9"/></svg>
+            </button>` : ''}
+            ${!isSelf ? `<button class="action-icon-btn delete" onclick="deleteUser('${u.id}')" title="Delete user" aria-label="Delete ${esc(u.name)}">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v5"/><path d="M14 11v5"/></svg>
+            </button>` : ''}
+          `}
         </div>
       </td>
     </tr>`;
@@ -2997,8 +3157,39 @@
     }
 
     // ─── Create User ──────────────────────────────────────
+    function renderUserImagePreview(user = {}) {
+      const preview = $('u-image-preview');
+      const removeBtn = $('u-image-remove');
+      if (!preview) return;
+      const current = userProfileImageDraft !== undefined ? userProfileImageDraft : user.profileImage;
+      if (current) {
+        preview.innerHTML = `<img src="${esc(current)}" alt="" style="width:100%;height:100%;object-fit:cover">`;
+        if (removeBtn) removeBtn.style.display = '';
+      } else {
+        preview.textContent = userInitials(user.name || $('u-name')?.value, 'U');
+        if (removeBtn) removeBtn.style.display = 'none';
+      }
+    }
+
+    async function setUserImageDraft(input) {
+      try {
+        userProfileImageDraft = await readProfileImageFile(input?.files?.[0]);
+        renderUserImagePreview(allUsers.find(u => u.id === editingUserId) || {});
+      } catch (e) {
+        toast(e.message, 'err');
+      } finally {
+        if (input) input.value = '';
+      }
+    }
+
+    function removeUserImageDraft() {
+      userProfileImageDraft = null;
+      renderUserImagePreview(allUsers.find(u => u.id === editingUserId) || {});
+    }
+
     function openCreateUser() {
       editingUserId = null;
+      userProfileImageDraft = undefined;
       userPermSetsSelected = [];
       userPSGroupsSelected = [];
       $('userModalTitle').textContent = 'New User';
@@ -3008,6 +3199,7 @@
       $('u-active').value = 'true';
       $('u-pw-group').style.display = '';
       $('u-edit-note').style.display = 'none';
+      renderUserImagePreview({});
 
       renderUserPermSetTags();
       renderUserPSGroupTags();
@@ -3025,6 +3217,7 @@
       const u = allUsers.find(x => x.id === id);
       if (!u) return;
       editingUserId = id;
+      userProfileImageDraft = undefined;
       $('userModalTitle').textContent = `Edit — ${u.name}`;
       $('userSaveBtn').textContent = 'Save Changes';
       $('u-name').value = u.name;
@@ -3034,6 +3227,7 @@
       $('u-pw-group').style.display = 'none';
       $('u-edit-note').style.display = '';
       $('u-password-edit').value = '';
+      renderUserImagePreview(u);
 
       // Load user's current permission sets
       try {
@@ -3057,7 +3251,11 @@
       $('userModal').classList.add('open');
     }
 
-    function closeUserModal() { $('userModal').classList.remove('open'); editingUserId = null; }
+    function closeUserModal() {
+      $('userModal').classList.remove('open');
+      editingUserId = null;
+      userProfileImageDraft = undefined;
+    }
 
     async function populateProfileSelect(selectedId = '') {
       if (!allProfiles.length) {
@@ -3119,6 +3317,7 @@
         if (editingUserId) {
           const body = { role, isActive, profileId, permissionSetIds: userPermSetsSelected.map(p => p.id) };
           if (password) body.password = password;
+          if (userProfileImageDraft !== undefined) body.profileImage = userProfileImageDraft;
           await api(`/api/portal/users/${editingUserId}`, { method: 'PATCH', body: JSON.stringify(body) });
           // Sync PS Groups
           const currentGroups = await api(`/api/portal/users/${editingUserId}/permission-set-groups`)
@@ -3140,7 +3339,7 @@
         } else {
           await api('/api/portal/users', {
             method: 'POST',
-            body: JSON.stringify({ name, email, password, role, profileId, permissionSetIds: userPermSetsSelected.map(p => p.id) })
+            body: JSON.stringify({ name, email, password, role, profileId, profileImage: userProfileImageDraft, permissionSetIds: userPermSetsSelected.map(p => p.id) })
           });
           toast('User created — they can now log in', 'ok');
         }
@@ -3161,14 +3360,62 @@
           ? `${name} will be able to log in to the portal again.`
           : `${name} will immediately lose access to the portal. Their data remains intact.`,
         async () => {
-          await api(`/api/portal/users/${id}`, { method: 'PATCH', body: JSON.stringify({ isActive: activate }) });
-          toast(`User ${activate ? 'activated' : 'deactivated'}`, 'ok');
-          await loadUsers();
-        }
+          pendingUserActions.add(id);
+          pendingUserActionLabels[id] = activate ? 'Activating' : 'Deactivating';
+          renderUsers(allUsers);
+          try {
+            await api(`/api/portal/users/${id}`, { method: 'PATCH', body: JSON.stringify({ isActive: activate }) });
+            const user = allUsers.find(u => u.id === id);
+            if (user) user.isActive = activate;
+            pendingUserActions.delete(id);
+            delete pendingUserActionLabels[id];
+            updateUserStats();
+            renderUsers(allUsers);
+            toast(`User ${activate ? 'activated' : 'deactivated'}`, 'ok');
+            loadUsers();
+          } catch (e) {
+            pendingUserActions.delete(id);
+            delete pendingUserActionLabels[id];
+            renderUsers(allUsers);
+            toast(e.message, 'err');
+          }
+        },
+        activate ? 'Activating...' : 'Deactivating...'
       );
     }
 
     // ── TABS inside user modal ────────────────────────────
+    function deleteUser(id) {
+      const user = allUsers.find(u => u.id === id);
+      if (!user) return;
+      openConfirm(
+        `Delete ${user.name}?`,
+        `This permanently deletes ${user.email} from the portal and removes their profile, permission set, group, team, queue, and public group assignments. This cannot be undone.`,
+        async () => {
+          pendingUserActions.add(id);
+          pendingUserActionLabels[id] = 'Deleting';
+          renderUsers(allUsers);
+          try {
+            await api(`/api/portal/users/${id}`, { method: 'DELETE' });
+            allUsers = allUsers.filter(u => u.id !== id);
+            pendingUserActions.delete(id);
+            delete pendingUserActionLabels[id];
+            updateUserStats();
+            renderUsers(allUsers);
+            $('nav-users-count').textContent = allUsers.length;
+            toast('User deleted', 'ok');
+            loadUsers();
+          } catch (e) {
+            pendingUserActions.delete(id);
+            delete pendingUserActionLabels[id];
+            renderUsers(allUsers);
+            toast(e.message, 'err');
+          }
+        },
+        'Deleting...'
+      );
+    }
+
     function switchTab(name) {
       document.querySelectorAll('.tab-btn').forEach((b, i) => {
         const tabs = ['info', 'access'];
@@ -4115,23 +4362,46 @@ function deletePublicGroup(id, name) {
     // ═══════════════════════════════════════════════════════
     // CONFIRM MODAL
     // ═══════════════════════════════════════════════════════
-    function openConfirm(title, msg, callback) {
+    function openConfirm(title, msg, callback, loadingLabel = 'Working...') {
       $('confirmTitle').textContent = title;
       $('confirmMsg').textContent = msg;
       confirmCallback = callback;
+      confirmLoadingLabel = loadingLabel;
+      window._confirmBusy = false;
+      $('confirmOkBtn').disabled = false;
+      $('confirmOkBtn').classList.remove('is-loading');
+      $('confirmOkBtn').innerHTML = 'Confirm';
+      $('confirmCancelBtn').disabled = false;
+      $('confirmCloseBtn').disabled = false;
       $('confirmModal').classList.add('open');
     }
-    function closeConfirmModal() { $('confirmModal').classList.remove('open'); confirmCallback = null; }
+    function closeConfirmModal() {
+      if (window._confirmBusy) return;
+      $('confirmModal').classList.remove('open');
+      confirmCallback = null;
+    }
     async function confirmAction() {
       if (!confirmCallback) return;
-      $('confirmOkBtn').disabled = true;
+      const okBtn = $('confirmOkBtn');
+      window._confirmBusy = true;
+      okBtn.disabled = true;
+      okBtn.classList.add('is-loading');
+      okBtn.innerHTML = `<span class="btn-spinner"></span>${esc(confirmLoadingLabel)}`;
+      $('confirmCancelBtn').disabled = true;
+      $('confirmCloseBtn').disabled = true;
       try {
         await confirmCallback();
+        window._confirmBusy = false;
         closeConfirmModal();
       } catch (e) {
         toast(e.message, 'err');
       } finally {
-        $('confirmOkBtn').disabled = false;
+        window._confirmBusy = false;
+        okBtn.disabled = false;
+        okBtn.classList.remove('is-loading');
+        okBtn.innerHTML = 'Confirm';
+        $('confirmCancelBtn').disabled = false;
+        $('confirmCloseBtn').disabled = false;
       }
     }
 

@@ -19,6 +19,46 @@ function toggleTheme() {
 }
 initTheme();
 
+function userInitials(name, fallback = "U") {
+  return (name || fallback)
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((p) => p[0])
+    .join("")
+    .slice(0, 2)
+    .toUpperCase() || fallback;
+}
+
+function avatarButtonContent(user, fallback = "U") {
+  return user?.profileImage
+    ? `<img src="${escapeHtml(user.profileImage)}" alt="" style="width:100%;height:100%;object-fit:cover;border-radius:50%">`
+    : escapeHtml(userInitials(user?.name, fallback));
+}
+
+function setTopbarAvatar(user, fallback = "U") {
+  const button = $("profileButton");
+  if (!button) return;
+  button.innerHTML = avatarButtonContent(user, fallback);
+}
+
+function readProfileImageFile(file) {
+  return new Promise((resolve, reject) => {
+    if (!file) return resolve(null);
+    if (!/^image\/(png|jpe?g|webp|gif)$/i.test(file.type)) {
+      reject(new Error("Use a PNG, JPG, WEBP, or GIF image"));
+      return;
+    }
+    if (file.size > 750 * 1024) {
+      reject(new Error("Image must be smaller than 750 KB"));
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = () => reject(new Error("Could not read image"));
+    reader.readAsDataURL(file);
+  });
+}
+
 const OBJECT_META = {
   Account: {
     title: "Accounts",
@@ -1274,13 +1314,7 @@ async function loadProfile() {
   currentUser = await api("/api/me");
 
   // Salesforce user info (fallback)
-  const sfInitials = (currentUser.name || "SF")
-    .split(/\s+/)
-    .map((p) => p[0])
-    .join("")
-    .slice(0, 2);
-
-  $("profileButton").textContent = sfInitials || "SF";
+  setTopbarAvatar(currentUser, "SF");
   $("profileName").textContent = currentUser.name || "Salesforce User";
   $("profileEmail").textContent =
     currentUser.email || currentUser.username || "Connected";
@@ -1291,14 +1325,7 @@ async function loadProfile() {
     window.portalUser = portalMe;
 
     // Overwrite name/avatar with portal user
-    const initials = (portalMe.name || "U")
-      .split(" ")
-      .map((p) => p[0])
-      .join("")
-      .slice(0, 2)
-      .toUpperCase();
-
-    $("profileButton").textContent = initials;
+    setTopbarAvatar(portalMe, "U");
     $("profileName").textContent = portalMe.name || "Portal User";
     $("profileEmail").textContent = portalMe.email || "";
 
@@ -1334,7 +1361,7 @@ async function loadProfile() {
     // Keep Salesforce user info if portal user fetch fails
   }
 } catch (err) {
-  $("profileButton").textContent = "SF";
+  setTopbarAvatar({ name: "SF" }, "SF");
 }
 }
 
@@ -1343,7 +1370,12 @@ async function openUserProfile() {
   closeProfileMenu();
   try {
     const user = await api('/api/portal/profile');
-    const initials = (user.name || 'U').split(' ').map(p => p[0]).join('').slice(0,2).toUpperCase();
+    const initials = userInitials(user.name, 'U');
+    const profileAvatar = user.profileImage
+      ? `<img id="profileImagePreview" src="${escapeHtml(user.profileImage)}" alt="" style="width:56px;height:56px;border-radius:50%;object-fit:cover">`
+      : `<div id="profileImagePreview" style="width:56px;height:56px;border-radius:50%;background:var(--accent);
+                 color:#fff;display:flex;align-items:center;justify-content:center;
+                 font-size:20px;font-weight:800;flex-shrink:0">${initials}</div>`;
     const roleLabels = {
       system_administrator: 'System Administrator', admin: 'Admin',
       manager: 'Manager', employee: 'Employee', readonly: 'Read-Only'
@@ -1372,9 +1404,7 @@ async function openUserProfile() {
         <div style="background:var(--surface);border:1px solid var(--border);
              border-radius:14px;padding:28px;margin-bottom:20px">
           <div style="display:flex;align-items:center;gap:18px;margin-bottom:24px">
-            <div style="width:56px;height:56px;border-radius:50%;background:var(--accent);
-                 color:#fff;display:flex;align-items:center;justify-content:center;
-                 font-size:20px;font-weight:800;flex-shrink:0">${initials}</div>
+            ${profileAvatar}
             <div>
               <div style="font-size:18px;font-weight:800">${escapeHtml(user.name)}</div>
               <div style="font-size:13px;color:var(--text-muted)">${escapeHtml(user.email)}</div>
@@ -1421,6 +1451,30 @@ async function openUserProfile() {
               `).join('')}
             </div>
           </div>` : ''}
+        </div>
+
+        <!-- Profile Image -->
+        <div style="background:var(--surface);border:1px solid var(--border);
+             border-radius:14px;padding:24px;margin-bottom:16px">
+          <h2 style="font-size:15px;font-weight:700;margin-bottom:16px">Profile Image</h2>
+          <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap">
+            <div id="profileImageEditorPreview" style="width:64px;height:64px;border-radius:50%;
+                 background:var(--accent-soft);color:var(--accent);display:flex;align-items:center;
+                 justify-content:center;font-size:20px;font-weight:800;overflow:hidden;flex-shrink:0">
+              ${user.profileImage
+                ? `<img src="${escapeHtml(user.profileImage)}" alt="" style="width:100%;height:100%;object-fit:cover">`
+                : initials}
+            </div>
+            <div style="display:flex;gap:8px;flex-wrap:wrap">
+              <input id="profileImageInput" type="file" accept="image/png,image/jpeg,image/webp,image/gif" style="display:none"
+                onchange="saveProfileImageFromInput(this)">
+              <button class="btn btn-ghost" onclick="$('profileImageInput').click()">
+                ${user.profileImage ? 'Change Image' : 'Upload Image'}
+              </button>
+              ${user.profileImage ? `<button class="btn btn-danger" onclick="removeProfileImage()">Remove Image</button>` : ''}
+            </div>
+          </div>
+          <div id="imageMsg" style="margin-top:8px;font-size:12px;display:none"></div>
         </div>
 
         <!-- Edit Name -->
@@ -1486,12 +1540,48 @@ async function saveName() {
     await api('/api/portal/profile', { method: 'PATCH', body: JSON.stringify({ name }) });
     showProfileMsg('nameMsg', 'Name updated successfully', true);
     // Update avatar initials in topbar
-    const initials = name.split(' ').map(p => p[0]).join('').slice(0,2).toUpperCase();
-    $('profileButton').textContent = initials;
+    setTopbarAvatar({ name, profileImage: window.portalUser?.profileImage }, "U");
     $('displayNameInput').textContent   = name;
     if (window.portalUser) window.portalUser.name = name;
   } catch(err) {
     showProfileMsg('nameMsg', err.message, false);
+  }
+}
+
+async function saveProfileImageFromInput(input) {
+  const file = input?.files?.[0];
+  if (!file) return;
+  try {
+    const profileImage = await readProfileImageFile(file);
+    await api('/api/portal/profile', {
+      method: 'PATCH',
+      body: JSON.stringify({ profileImage })
+    });
+    if (!window.portalUser) window.portalUser = {};
+    window.portalUser.profileImage = profileImage;
+    setTopbarAvatar({ name: window.portalUser.name || $('displayNameInput')?.value, profileImage }, "U");
+    showProfileMsg('imageMsg', 'Profile image updated', true);
+    openUserProfile();
+  } catch(err) {
+    showProfileMsg('imageMsg', err.message, false);
+  } finally {
+    if (input) input.value = '';
+  }
+}
+
+async function removeProfileImage() {
+  try {
+    await api('/api/portal/profile', {
+      method: 'PATCH',
+      body: JSON.stringify({ profileImage: null })
+    });
+    if (!window.portalUser) window.portalUser = {};
+    window.portalUser.profileImage = null;
+    setTopbarAvatar({ name: window.portalUser.name || $('displayNameInput')?.value, profileImage: null }, "U");
+    showProfileMsg('imageMsg', 'Profile image removed', true);
+    openUserProfile();
+  } catch(err) {
+    showProfileMsg('imageMsg', err.message, false);
   }
 }
 
