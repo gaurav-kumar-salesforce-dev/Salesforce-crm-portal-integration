@@ -3247,7 +3247,7 @@ app.get('/api/portal/profile', checkAuth, async (req, res) => {
 
     const { data: assignment } = await supabase
       .from('user_profile_assignments')
-      .select('profile_id, profiles(id, name, description)')
+      .select('profile_id, profiles(id, name, description, is_system_admin)')
       .eq('user_id', req.user.id)
       .single();
 
@@ -3270,6 +3270,7 @@ app.get('/api/portal/profile', checkAuth, async (req, res) => {
       createdAt: user.created_at,
       lastLoginAt: user.last_login_at,
       profile: assignment?.profiles || null,
+      isSystemAdmin: Boolean(assignment?.profiles?.is_system_admin),
       permissionSets: (permSets || []).map(p => p.permission_sets).filter(Boolean)
     });
   } catch (err) {
@@ -3344,7 +3345,7 @@ app.patch('/api/portal/profile', checkAuth, async (req, res) => {
 
 // POST /api/portal/users — create new portal user (admin+ only)
 app.post('/api/portal/users', checkAuth, checkRole('admin'), async (req, res) => {
-  const { email, name, password, role, profileId, profileImage } = req.body || {};
+  const { email, name, password, role, profileId, orgRoleId, profileImage, permissionSetIds } = req.body || {};
 
   if (!email || !name || !password) {
     return res.status(400).json({ error: 'Email, name, and password are required' });
@@ -3370,12 +3371,13 @@ app.post('/api/portal/users', checkAuth, checkRole('admin'), async (req, res) =>
         name: name.trim(),
         password_hash: passwordHash,
         role: role || 'employee',
+        org_role_id: orgRoleId || null,
         profile_image: normalizeProfileImage(profileImage),
         is_active: true,
         must_change_pw: true,
         created_by: req.user.id
       })
-      .select('id, email, name, role')
+      .select('id, email, name, role, org_role_id, profile_image')
       .single();
 
     if (error) {
@@ -3390,6 +3392,16 @@ app.post('/api/portal/users', checkAuth, checkRole('admin'), async (req, res) =>
       await supabase
         .from('user_profile_assignments')
         .insert({ user_id: newUser.id, profile_id: profileId, assigned_by: req.user.id });
+    }
+
+    if (Array.isArray(permissionSetIds) && permissionSetIds.length) {
+      await supabase.from('user_permission_set_assignments').insert(
+        permissionSetIds.map(psId => ({
+          user_id: newUser.id,
+          perm_set_id: psId,
+          assigned_by: req.user.id
+        }))
+      );
     }
 
     await writeAuditLog({
@@ -3868,11 +3880,16 @@ app.get('/api/portal/users', checkAuth, checkRole('admin'), async (req, res) => 
         name: u.name,
         role: u.role,
         isSystemAdmin: u.is_system_admin || false,
-        profileImage: profileImagesByUserId[u.id] || null,
+        profileImage: profileImagesByUserId[u.id] || u.profile_image || null,
         isActive: u.is_active,
         mustChangePw: u.must_change_pw,
         createdAt: u.created_at,
         lastLoginAt: u.last_login_at,
+        org_role_id: u.org_role_id || null,
+        orgRoleId: u.org_role_id || null,
+        org_role_name: u.org_role_name || null,
+        orgRoleName: u.org_role_name || null,
+        orgRoleLevel: u.org_role_level || null,
         profile: u.profile_id ? {
           id: u.profile_id,
           name: u.profile_name,

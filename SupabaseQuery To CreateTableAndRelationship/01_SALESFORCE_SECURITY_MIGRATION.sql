@@ -1549,3 +1549,68 @@ LEFT JOIN user_profile_assignments upa ON upa.user_id = u.id
 LEFT JOIN profiles p  ON p.id  = upa.profile_id
 LEFT JOIN org_roles r ON r.id  = u.org_role_id
 ORDER BY r.level NULLS LAST, u.name;
+
+
+-- ============================================================================
+-- Latest admin users + role hierarchy compatibility patch
+-- Run this if User Management is not showing/saving org roles or profile images.
+-- ============================================================================
+
+ALTER TABLE public.users
+  ADD COLUMN IF NOT EXISTS org_role_id UUID REFERENCES public.org_roles(id) ON DELETE SET NULL,
+  ADD COLUMN IF NOT EXISTS profile_image TEXT;
+
+CREATE INDEX IF NOT EXISTS idx_users_org_role_id ON public.users(org_role_id);
+
+ALTER TABLE public.profiles
+  ADD COLUMN IF NOT EXISTS is_system_admin BOOLEAN NOT NULL DEFAULT FALSE;
+
+UPDATE public.profiles
+SET is_system_admin = TRUE
+WHERE lower(name) = 'system administrator';
+
+DROP FUNCTION IF EXISTS public.get_portal_users();
+
+CREATE OR REPLACE FUNCTION public.get_portal_users()
+RETURNS TABLE (
+  id              UUID,
+  email           TEXT,
+  name            TEXT,
+  role            TEXT,
+  profile_image   TEXT,
+  is_active       BOOLEAN,
+  must_change_pw  BOOLEAN,
+  created_at      TIMESTAMPTZ,
+  last_login_at   TIMESTAMPTZ,
+  profile_id      UUID,
+  profile_name    TEXT,
+  is_system_admin BOOLEAN,
+  org_role_id     UUID,
+  org_role_name   TEXT,
+  org_role_level  INT
+)
+LANGUAGE sql
+SECURITY DEFINER
+AS $$
+  SELECT
+    u.id,
+    u.email,
+    u.name,
+    u.role,
+    u.profile_image,
+    u.is_active,
+    u.must_change_pw,
+    u.created_at,
+    u.last_login_at,
+    p.id AS profile_id,
+    p.name AS profile_name,
+    COALESCE(p.is_system_admin, FALSE) AS is_system_admin,
+    r.id AS org_role_id,
+    r.name AS org_role_name,
+    r.level AS org_role_level
+  FROM public.users u
+  LEFT JOIN public.user_profile_assignments upa ON upa.user_id = u.id
+  LEFT JOIN public.profiles p ON p.id = upa.profile_id
+  LEFT JOIN public.org_roles r ON r.id = u.org_role_id
+  ORDER BY u.created_at DESC;
+$$;

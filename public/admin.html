@@ -1822,6 +1822,7 @@
               <table id="usersTable">
                 <thead>
                   <tr>
+                    <th>User</th>
                     <th>Profile</th>
                     <th>Org Role</th>
                     <th>Status</th>
@@ -3185,6 +3186,63 @@
       }).join('');
     }
 
+    renderUsers = function(users) {
+      if (!users.length) {
+        $('usersBody').innerHTML = `<tr><td colspan="6"><div class="empty-state"><h3>No users found</h3><p>Create a new user to get started.</p></div></td></tr>`;
+        return;
+      }
+
+      $('usersBody').innerHTML = users.map(u => {
+        const lastLogin = u.lastLoginAt ? new Date(u.lastLoginAt).toLocaleDateString() : 'Never';
+        const isSelf = u.id === window._adminId;
+        const isBusy = pendingUserActions.has(u.id);
+        const busyLabel = pendingUserActionLabels[u.id] || 'Working';
+        const profileLabel = u.isSystemAdmin ? 'System Administrator' : (u.profile?.name || '-');
+        const orgRoleLabel = u.orgRoleName || u.org_role_name || '-';
+
+        return `
+    <tr id="user-row-${u.id}" class="user-row ${isBusy ? 'busy' : ''}">
+      <td>
+        <div style="display:flex;align-items:center;gap:10px">
+          ${avatarHtml(u, 32, '?')}
+          <div>
+            <div style="font-weight:600;font-size:13px">${esc(u.name)}</div>
+            <div style="font-size:11px;color:var(--text-muted)">${esc(u.email)}</div>
+          </div>
+        </div>
+      </td>
+      <td>
+        ${u.isSystemAdmin
+          ? `<span class="badge" style="background:rgba(139,92,246,.15);color:#7c3aed;font-size:11px">System Administrator</span>`
+          : `<span style="font-size:13px;color:var(--text-primary);font-weight:500">${esc(profileLabel)}</span>`}
+      </td>
+      <td><span style="font-size:12px;color:var(--text-secondary)">${esc(orgRoleLabel)}</span></td>
+      <td><span class="badge ${u.isActive ? 'badge-active' : 'badge-inactive'}">${u.isActive ? 'Active' : 'Inactive'}</span>${u.mustChangePw ? '<span style="margin-left:5px;font-size:10px;color:var(--warning)">PW</span>' : ''}</td>
+      <td style="font-size:12px;color:var(--text-muted)">${lastLogin}</td>
+      <td>
+        <div class="row-actions" id="user-actions-${u.id}">
+          ${isBusy ? `
+            <span class="delete-progress"><span class="spinner" style="width:16px;height:16px;border-width:2px"></span>${busyLabel}</span>
+          ` : `
+            <button class="action-icon-btn edit" onclick="openEditUser('${u.id}')" title="Edit user" aria-label="Edit ${esc(u.name)}">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
+            </button>
+            ${u.isActive && !isSelf ? `<button class="action-icon-btn status deactivate" onclick="toggleUserActive('${u.id}','${esc(u.name)}',false)" title="Deactivate user" aria-label="Deactivate ${esc(u.name)}">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="12" cy="12" r="9"/><path d="M8 12h8"/></svg>
+            </button>` : ''}
+            ${!u.isActive ? `<button class="action-icon-btn status activate" onclick="toggleUserActive('${u.id}','${esc(u.name)}',true)" title="Activate user" aria-label="Activate ${esc(u.name)}">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M20 6 9 17l-5-5"/><circle cx="12" cy="12" r="9"/></svg>
+            </button>` : ''}
+            ${!isSelf ? `<button class="action-icon-btn delete" onclick="deleteUser('${u.id}')" title="Delete user" aria-label="Delete ${esc(u.name)}">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v5"/><path d="M14 11v5"/></svg>
+            </button>` : ''}
+          `}
+        </div>
+      </td>
+    </tr>`;
+      }).join('');
+    };
+
   function filterUsers() {
   const q         = $('userSearch').value.toLowerCase();
   const profileId = $('profileFilter')?.value || '';
@@ -3398,9 +3456,18 @@
           }
           toast('User updated', 'ok');
         } else {
+          const orgRoleId = $('u-org-role')?.value || null;
           await api('/api/portal/users', {
             method: 'POST',
-            body: JSON.stringify({ name, email, password, profileId, profileImage: userProfileImageDraft, permissionSetIds: userPermSetsSelected.map(p => p.id) })
+            body: JSON.stringify({
+              name,
+              email,
+              password,
+              profileId,
+              orgRoleId,
+              profileImage: userProfileImageDraft,
+              permissionSetIds: userPermSetsSelected.map(p => p.id)
+            })
           });
           toast('User created — they can now log in', 'ok');
         }

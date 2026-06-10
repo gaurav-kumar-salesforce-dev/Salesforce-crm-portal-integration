@@ -1370,10 +1370,9 @@ async function openUserProfile() {
       : `<div id="profileImagePreview" style="width:56px;height:56px;border-radius:50%;background:var(--accent);
                  color:#fff;display:flex;align-items:center;justify-content:center;
                  font-size:20px;font-weight:800;flex-shrink:0">${initials}</div>`;
-    const roleLabels = {
-      system_administrator: 'System Administrator', admin: 'Admin',
-      manager: 'Manager', employee: 'Employee', readonly: 'Read-Only'
-    };
+    const profileBadgeLabel = user.isSystemAdmin
+      ? 'System Administrator'
+      : (user.profile?.name || 'No Profile');
 
     $('content').innerHTML = `
       <div style="max-width:680px;margin:0 auto;padding:8px 0">
@@ -1406,7 +1405,7 @@ async function openUserProfile() {
             <div style="margin-left:auto">
               <span style="background:var(--accent-soft);color:var(--accent);
                    border-radius:20px;padding:4px 12px;font-size:12px;font-weight:700">
-                ${roleLabels[user.role] || user.role}
+                ${escapeHtml(profileBadgeLabel)}
               </span>
             </div>
           </div>
@@ -1415,7 +1414,6 @@ async function openUserProfile() {
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
             ${[
               ['Email',        user.email],
-              ['Role',         roleLabels[user.role] || user.role],
               ['Profile',      user.profile?.name || '—'],
               ['Member Since', user.createdAt ? new Date(user.createdAt).toLocaleDateString() : '—'],
               ['Last Login',   user.lastLoginAt ? new Date(user.lastLoginAt).toLocaleString() : 'Never']
