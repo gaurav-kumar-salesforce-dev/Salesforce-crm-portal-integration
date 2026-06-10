@@ -43,19 +43,53 @@ async function getEffectivePermissions(userId, sfObject) {
     return { can_read: true, can_create: true, can_edit: true, can_delete: true };
   }
 
-  const { data: permission, error: permissionError } = await supabase
+  const { data: profilePermission, error: profilePermissionError } = await supabase
     .from('profile_object_permissions')
     .select('can_read, can_create, can_edit, can_delete')
     .eq('profile_id', profile.id)
     .eq('sf_object', sfObject)
     .maybeSingle();
 
-  if (permissionError) {
-    console.error('[getEffectivePermissions] Permission lookup error:', permissionError);
+  if (profilePermissionError) {
+    console.error('[getEffectivePermissions] Profile permission lookup error:', profilePermissionError);
     return deny;
   }
 
-  return permission || deny;
+  const { data: assignments, error: assignmentPermSetError } = await supabase
+    .from('user_permission_set_assignments')
+    .select('perm_set_id')
+    .eq('user_id', userId);
+
+  if (assignmentPermSetError) {
+    console.error('[getEffectivePermissions] Permission set assignment lookup error:', assignmentPermSetError);
+    return profilePermission || deny;
+  }
+
+  const permissionSetIds = [...new Set((assignments || []).map((row) => row.perm_set_id).filter(Boolean))];
+  let permissionSetPermissions = [];
+  if (permissionSetIds.length) {
+    const { data, error } = await supabase
+      .from('permission_set_object_perms')
+      .select('can_read, can_create, can_edit, can_delete')
+      .in('perm_set_id', permissionSetIds)
+      .eq('sf_object', sfObject);
+
+    if (error) {
+      console.error('[getEffectivePermissions] Permission set object lookup error:', error);
+      return profilePermission || deny;
+    }
+    permissionSetPermissions = data || [];
+  }
+
+  const result = { ...(profilePermission || deny) };
+  permissionSetPermissions.forEach((perm) => {
+    result.can_read = Boolean(result.can_read || perm.can_read);
+    result.can_create = Boolean(result.can_create || perm.can_create);
+    result.can_edit = Boolean(result.can_edit || perm.can_edit);
+    result.can_delete = Boolean(result.can_delete || perm.can_delete);
+  });
+
+  return result;
 }
 
 module.exports.getEffectivePermissions = getEffectivePermissions;

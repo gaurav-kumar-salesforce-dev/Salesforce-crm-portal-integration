@@ -3681,11 +3681,13 @@ app.patch('/api/portal/permission-sets/:id', checkAuth, checkRole('admin'), asyn
   const { name, description, permissions = [] } = req.body || {};
   try {
     if (name) await supabase.from('permission_sets').update({ name, description: description || null }).eq('id', req.params.id);
-    if (permissions.length) {
+    if (Array.isArray(permissions)) {
       await supabase.from('permission_set_object_perms').delete().eq('perm_set_id', req.params.id);
-      await supabase.from('permission_set_object_perms').insert(
-        permissions.map(p => ({ perm_set_id: req.params.id, ...p }))
-      );
+      if (permissions.length) {
+        await supabase.from('permission_set_object_perms').insert(
+          permissions.map(p => ({ perm_set_id: req.params.id, ...p }))
+        );
+      }
     }
     await writeAuditLog({ userId: req.user.id, userEmail: req.user.email, userRole: req.user.role, action: 'update_perm_set', payload: { id: req.params.id }, ipAddress: req.ip });
     res.json({ success: true });

@@ -405,18 +405,39 @@ BEGIN
   END IF;
 
   RETURN QUERY
+  WITH profile_perms AS (
+    SELECT
+      COALESCE(pop.can_read, FALSE) AS can_read,
+      COALESCE(pop.can_create, FALSE) AS can_create,
+      COALESCE(pop.can_edit, FALSE) AS can_edit,
+      COALESCE(pop.can_delete, FALSE) AS can_delete
+    FROM public.profile_object_permissions pop
+    WHERE pop.profile_id = v_profile_id
+      AND pop.sf_object = p_sf_object
+  ),
+  permission_set_perms AS (
+    SELECT
+      COALESCE(psop.can_read, FALSE) AS can_read,
+      COALESCE(psop.can_create, FALSE) AS can_create,
+      COALESCE(psop.can_edit, FALSE) AS can_edit,
+      COALESCE(psop.can_delete, FALSE) AS can_delete
+    FROM public.user_permission_set_assignments upsa
+    JOIN public.permission_set_object_perms psop
+      ON psop.perm_set_id = upsa.perm_set_id
+     AND psop.sf_object = p_sf_object
+    WHERE upsa.user_id = p_user_id
+  ),
+  all_perms AS (
+    SELECT * FROM profile_perms
+    UNION ALL
+    SELECT * FROM permission_set_perms
+  )
   SELECT
-    COALESCE(pop.can_read, FALSE),
-    COALESCE(pop.can_create, FALSE),
-    COALESCE(pop.can_edit, FALSE),
-    COALESCE(pop.can_delete, FALSE)
-  FROM public.profile_object_permissions pop
-  WHERE pop.profile_id = v_profile_id
-    AND pop.sf_object = p_sf_object;
-
-  IF NOT FOUND THEN
-    RETURN QUERY SELECT FALSE, FALSE, FALSE, FALSE;
-  END IF;
+    COALESCE(BOOL_OR(all_perms.can_read), FALSE),
+    COALESCE(BOOL_OR(all_perms.can_create), FALSE),
+    COALESCE(BOOL_OR(all_perms.can_edit), FALSE),
+    COALESCE(BOOL_OR(all_perms.can_delete), FALSE)
+  FROM all_perms;
 END;
 $$;
 
@@ -2414,7 +2435,6 @@ ALTER DEFAULT PRIVILEGES FOR ROLE "postgres" IN SCHEMA "public" GRANT ALL ON TAB
 ALTER DEFAULT PRIVILEGES FOR ROLE "postgres" IN SCHEMA "public" GRANT ALL ON TABLES TO "anon";
 ALTER DEFAULT PRIVILEGES FOR ROLE "postgres" IN SCHEMA "public" GRANT ALL ON TABLES TO "authenticated";
 ALTER DEFAULT PRIVILEGES FOR ROLE "postgres" IN SCHEMA "public" GRANT ALL ON TABLES TO "service_role";
-
 
 
 
