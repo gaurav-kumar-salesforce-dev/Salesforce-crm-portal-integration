@@ -7,7 +7,7 @@ const crypto = require('crypto');
 
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
-const { supabase, getUserWithPermissions, writeAuditLog } = require('./db');
+const { supabase, getEffectivePermissions, getUserWithPermissions, writeAuditLog } = require('./db');
 
 const JWT_SECRET = process.env.JWT_SECRET;
 const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '8h';
@@ -21,12 +21,38 @@ app.use(express.json({ limit: process.env.JSON_BODY_LIMIT || '25mb' }));
 app.use(express.static(path.join(__dirname, 'public')));
 
 // Verifies JWT on every request. Attaches req.user = { id, email, role, name }
-function checkAuth(req, res, next) {
+async function checkAuth(req, res, next) {
   const header = req.headers.authorization || '';
   const token  = header.startsWith('Bearer ') ? header.slice(7) : null;
   if (!token) return res.status(401).json({ error: 'Login required', code: 'NO_TOKEN' });
   try {
-    req.user = jwt.verify(token, JWT_SECRET);
+    const decoded = jwt.verify(token, JWT_SECRET);
+
+    const { data: activeUser, error: activeUserError } = await supabase
+      .from('users')
+      .select('id, email, name, role, is_active')
+      .eq('id', decoded.id)
+      .eq('is_active', true)
+      .single();
+
+    if (activeUserError || !activeUser) {
+      return res.status(401).json({ error: 'Session expired. Please log in again.', code: 'USER_INACTIVE' });
+    }
+
+    const { data: profileAssignment } = await supabase
+      .from('user_profile_assignments')
+      .select('profiles(is_system_admin)')
+      .eq('user_id', activeUser.id)
+      .maybeSingle();
+
+    req.user = {
+      ...decoded,
+      id: activeUser.id,
+      email: activeUser.email,
+      name: activeUser.name,
+      role: activeUser.role,
+      isSystemAdmin: Boolean(profileAssignment?.profiles?.is_system_admin)
+    };
     next();
   } catch (err) {
     const code = err.name === 'TokenExpiredError' ? 'TOKEN_EXPIRED' : 'TOKEN_INVALID';
@@ -57,9 +83,6 @@ function requireAdminPanel(req, res, next) {
   // System Administrator profile always gets in
   if (req.user?.isSystemAdmin) return next();
 
-  // Also allow users with role = system_administrator (backward compat)
-  if (req.user?.role === 'system_administrator') return next();
-
   return res.status(403).json({
     error: 'Admin panel access requires System Administrator profile.',
     code:  'ADMIN_PANEL_REQUIRED'
@@ -67,10 +90,7 @@ function requireAdminPanel(req, res, next) {
 }
 
 function requireAdmin(req, res, next) {
-  if (req.user?.isSystemAdmin || req.user?.role === 'system_administrator') return next();
-  // Also allow admin role
-  const level = { system_administrator: 5, admin: 4, manager: 3, employee: 2, readonly: 1 };
-  if ((level[req.user?.role] || 0) >= 4) return next();
+  if (req.user?.isSystemAdmin) return next();
   return res.status(403).json({
     error: 'This action requires admin access.',
     code:  'INSUFFICIENT_ACCESS'
@@ -80,20 +100,29 @@ function requireAdmin(req, res, next) {
 // Keep checkRole for backward compat but map to new functions
 function checkRole(minimumRole) {
   return (req, res, next) => {
-    if (req.user?.isSystemAdmin || req.user?.role === 'system_administrator') return next();
-    const ROLE_LEVELS = { system_administrator: 5, admin: 4, manager: 3, employee: 2, readonly: 1 };
-    const userLevel = ROLE_LEVELS[req.user?.role] || 0;
-    const minLevel  = ROLE_LEVELS[minimumRole]    || 0;
-    if (userLevel >= minLevel) return next();
+    if (req.user?.isSystemAdmin) return next();
     return res.status(403).json({
-      error: `This action requires ${minimumRole} access or higher.`,
+      error: 'This action requires System Administrator profile access.',
       code:  'INSUFFICIENT_ROLE'
     });
   };
 }
 
 function isFullAccessUser(user = {}) {
-  return Boolean(user.isSystemAdmin || user.role === 'system_administrator' || user.role === 'admin');
+  return Boolean(user.isSystemAdmin);
+}
+
+function permissionDeniedMessage() {
+  return 'You do not have the level of access necessary to perform the operation you requested.';
+}
+
+function bulkOperationAction(operation) {
+  return {
+    insert: 'can_create',
+    update: 'can_edit',
+    upsert: 'can_edit',
+    delete: 'can_delete'
+  }[operation];
 }
 
 // Checks user's effective permissions for a SF object before allowing the action
@@ -114,23 +143,15 @@ function checkPermission(sfObject, action) {
       // readonly role can NEVER write
       if (role === 'readonly' && action !== 'can_read') {
         return res.status(403).json({
-          error: `You do not have permission to ${action.replace('can_', '')} ${sfObject} records.`,
+          error: permissionDeniedMessage(),
           code: 'PERMISSION_DENIED'
         });
       }
 
-      // Call the SQL function we created in Phase 1
-      const { data, error } = await supabase.rpc('get_effective_permissions', {
-        p_user_id: req.user.id,
-        p_sf_object: sfObject
-      });
-
-      if (error) throw error;
-
-      const perms = data?.[0];
+      const perms = await getEffectivePermissions(req.user.id, sfObject);
       if (!perms || !perms[action]) {
         return res.status(403).json({
-          error: `You do not have permission to ${action.replace('can_', '')} ${sfObject} records. Contact your administrator.`,
+          error: permissionDeniedMessage(),
           code: 'PERMISSION_DENIED'
         });
       }
@@ -156,7 +177,7 @@ function fieldPermCacheKey(userId, sfObject) {
 
 async function getEffectiveFieldPerms(userId, sfObject, userRole, isSystemAdmin = false) {
   // System administrator and admin see everything
-  if (isSystemAdmin || userRole === 'system_administrator' || userRole === 'admin') return null;
+  if (isSystemAdmin) return null;
 
   const cacheKey = fieldPermCacheKey(userId, sfObject);
   if (fieldPermCache.has(cacheKey)) return fieldPermCache.get(cacheKey);
@@ -265,69 +286,16 @@ function normalizeProfileImage(value) {
 // ── SHARING-AWARE RECORD VISIBILITY ──────────────────────────
 
 async function canSeeRecord(record, userId, userRole, sfObject, isSystemAdmin = false) {
-  if (isSystemAdmin || userRole === 'system_administrator' || userRole === 'admin') return true;
-
-  const ownerId = record.Portal_Owner__c || null;
-
-  try {
-    const { data } = await supabase.rpc('check_sharing_access', {
-      p_user_id: userId,
-      p_user_role: userRole,
-      p_sf_object: sfObject,
-      p_owner_id: ownerId || ''
-    });
-    return Boolean(data?.[0]?.has_access);
-  } catch (err) {
-    console.error('Sharing check error:', err.message);
-    return true; // Fail open on DB error — object perms already enforced
-  }
+  return true;
 }
 
 async function applyRecordVisibility(records, userId, userRole, sfObject, isSystemAdmin = false) {
-  if (isSystemAdmin || userRole === 'system_administrator' || userRole === 'admin') return records;
-
-  // Check OWD first for performance — if public skip per-record check
-  const { data: owd } = await supabase
-    .from('org_wide_defaults')
-    .select('access_level')
-    .eq('sf_object', sfObject)
-    .single();
-
-  const accessLevel = owd?.access_level || 'private';
-  if (accessLevel === 'public_read' || accessLevel === 'public_read_write') {
-    return records;
-  }
-
-  // Private — check each record
-  const results = await Promise.all(
-    records.map(r => canSeeRecord(r, userId, userRole, sfObject, isSystemAdmin))
-  );
-  return records.filter((_, i) => results[i]);
+  return records;
 }
 
-// Check if user can EDIT a specific record (beyond object-level edit perm)
 async function canEditRecord(record, userId, userRole, sfObject, isSystemAdmin = false) {
-  if (isSystemAdmin || userRole === 'system_administrator' || userRole === 'admin') return true;
-
-  const ownerId = record.Portal_Owner__c || null;
-  if (!ownerId) return true; // Legacy record — allow edit
-
-  try {
-    const { data } = await supabase.rpc('check_sharing_access', {
-      p_user_id: userId,
-      p_user_role: userRole,
-      p_sf_object: sfObject,
-      p_owner_id: ownerId
-    });
-    const access = data?.[0];
-    return Boolean(access?.has_access && access?.access_level === 'edit');
-  } catch {
-    return true;
-  }
+  return true;
 }
-
-
-
 // GET org wide defaults
 app.get('/api/portal/owd', checkAuth, checkRole('admin'), async (req, res) => {
   try {
@@ -376,8 +344,8 @@ app.post('/api/:object/:id/share', checkAuth, async (req, res) => {
   }
 
   try {
-    // Verify sharer owns this record or is admin
-    if (!['system_administrator', 'admin'].includes(req.user.role)) {
+    // Verify sharer owns this record unless they have System Administrator profile
+    if (!req.user.isSystemAdmin) {
       const record = await sfGet(`/sobjects/${object}/${id}?fields=Portal_Owner__c`);
       if (record.Portal_Owner__c !== req.user.id) {
         return res.status(403).json({ error: 'Only the record owner can share this record' });
@@ -522,6 +490,15 @@ app.get('/api/portal/users/:id/permission-set-groups', checkAuth, checkRole('adm
     if (error) throw error;
     res.json({ groups: (data || []).map(r => r.permission_set_groups).filter(Boolean) });
   } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.get('/api/portal/users/:id/effective-permissions/:object', checkAuth, checkRole('admin'), async (req, res) => {
+  try {
+    const permissions = await getEffectivePermissions(req.params.id, req.params.object);
+    res.json({ userId: req.params.id, object: req.params.object, permissions });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // POST create group
@@ -1245,7 +1222,7 @@ app.post('/api/portal/queues/:id/items/:itemId/pickup', checkAuth, async (req, r
       .eq('user_id', req.user.id)
       .single();
 
-    if (!member && !['system_administrator', 'admin'].includes(req.user.role)) {
+    if (!member && !req.user.isSystemAdmin) {
       return res.status(403).json({ error: 'You are not a member of this queue' });
     }
 
@@ -4974,7 +4951,7 @@ app.post('/api/campaigns/:id/send-email', async (req, res) => {
 });
 
 // Bulk API 2.0 query for export-scale reads
-app.post('/api/bulk/query', async (req, res) => {
+app.post('/api/bulk/query', checkAuth, requireAdminPanel, async (req, res) => {
   const { soql, wait = true, includeRecords = true, maxRecords, maxWaitMs } = req.body || {};
 
   try {
@@ -4996,7 +4973,7 @@ app.post('/api/bulk/query', async (req, res) => {
   }
 });
 
-app.get('/api/bulk/query/:jobId', async (req, res) => {
+app.get('/api/bulk/query/:jobId', checkAuth, requireAdminPanel, async (req, res) => {
   try {
     res.json({ job: await getBulkQueryJob(req.params.jobId) });
   } catch (err) {
@@ -5004,7 +4981,7 @@ app.get('/api/bulk/query/:jobId', async (req, res) => {
   }
 });
 
-app.get('/api/bulk/query/:jobId/results', async (req, res) => {
+app.get('/api/bulk/query/:jobId/results', checkAuth, requireAdminPanel, async (req, res) => {
   try {
     const page = await getBulkQueryResults(req.params.jobId, {
       locator: req.query.locator,
@@ -5028,7 +5005,11 @@ app.get('/api/bulk/query/:jobId/results', async (req, res) => {
   }
 });
 
-app.post('/api/bulk/:object/query', async (req, res) => {
+app.post('/api/bulk/:object/query', checkAuth, async (req, res, next) => {
+  const { object } = req.params;
+  if (OBJECTS[object]) return checkPermission(object, 'can_read')(req, res, next);
+  next();
+}, async (req, res) => {
   const { object } = req.params;
   if (!OBJECTS[object]) return res.status(400).json({ error: `Unknown object: ${object}` });
 
@@ -5053,7 +5034,13 @@ app.post('/api/bulk/:object/query', async (req, res) => {
 });
 
 // Bulk API 2.0 ingest for large create/update/upsert/delete jobs
-app.post('/api/bulk/:object/:operation', async (req, res) => {
+app.post('/api/bulk/:object/:operation', checkAuth, async (req, res, next) => {
+  const { object, operation } = req.params;
+  if (!OBJECTS[object]) return next();
+  const action = bulkOperationAction(operation);
+  if (action) return checkPermission(object, action)(req, res, next);
+  next();
+}, async (req, res) => {
   const { object, operation } = req.params;
   if (!OBJECTS[object]) return res.status(400).json({ error: `Unknown object: ${object}` });
   if (!['insert', 'update', 'upsert', 'delete'].includes(operation)) {
@@ -5299,7 +5286,11 @@ app.post('/api/:object', checkAuth, async (req, res, next) => {
 });
 
 // Bulk-aware update route for array payloads: { records: [{ Id, ...fields }] }
-app.patch('/api/:object', async (req, res) => {
+app.patch('/api/:object', checkAuth, async (req, res, next) => {
+  const { object } = req.params;
+  if (OBJECTS[object]) return checkPermission(object, 'can_edit')(req, res, next);
+  next();
+}, async (req, res) => {
   const { object } = req.params;
   if (!OBJECTS[object]) return res.status(400).json({ error: `Unknown object: ${object}` });
 
@@ -5373,7 +5364,7 @@ app.patch('/api/:object/:id', checkAuth,
 
       if (!allowed) {
         return res.status(403).json({
-          error: 'You do not have edit access to this record.',
+          error: permissionDeniedMessage(),
           code: 'RECORD_EDIT_DENIED'
         });
       }
@@ -5428,7 +5419,11 @@ app.patch('/api/:object/:id', checkAuth,
 );
 
 // Bulk-aware delete route for array payloads: { ids: [] } or { records: [{ Id }] }
-app.delete('/api/:object', async (req, res) => {
+app.delete('/api/:object', checkAuth, async (req, res, next) => {
+  const { object } = req.params;
+  if (OBJECTS[object]) return checkPermission(object, 'can_delete')(req, res, next);
+  next();
+}, async (req, res) => {
   const { object } = req.params;
   if (!OBJECTS[object]) return res.status(400).json({ error: `Unknown object: ${object}` });
 

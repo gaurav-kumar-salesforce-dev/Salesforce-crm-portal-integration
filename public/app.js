@@ -2003,6 +2003,8 @@ function renderTable() {
   const table = $("dataTable");
   const tableCard = $("tableCard");
   const objectClass = `object-table-${currentObject.toLowerCase()}`;
+  const showActions = canDo(currentObject, "can_edit") || canDo(currentObject, "can_delete");
+  const columnCount = currentColumns.length + (showActions ? 1 : 0);
   table.className = `data-table object-table ${objectClass}`;
   tableCard.dataset.object = currentObject;
 
@@ -2018,14 +2020,14 @@ function renderTable() {
       `,
         )
         .join("")}
-      <th class="actions-col">Actions</th>
+      ${showActions ? '<th class="actions-col">Actions</th>' : ''}
     </tr>
   `;
 
   if (!recordsToRender.length) {
     $("tbody").innerHTML = `
       <tr>
-        <td class="table-empty" colspan="${currentColumns.length + 1}">
+        <td class="table-empty" colspan="${columnCount}">
           <div class="table-empty-icon">${objectIcon(currentObject)}</div>
           <h3>No records found</h3>
           <p>Try a different search, list view, or create a new record.</p>
@@ -2040,21 +2042,21 @@ function renderTable() {
       (record) => `
     <tr onclick="openRecordDetail('${currentObject}', '${record.Id}')">
       ${currentColumns.map((field) => `<td class="${fieldColumnClass(field)}">${formatValue(field, getValue(record, field), record)}</td>`).join("")}
-      <td class="actions-col">
+      ${showActions ? `<td class="actions-col">
         <div class="row-acts">
-          <button class="row-action edit" title="Edit" aria-label="Edit" onclick="event.stopPropagation(); openEdit('${record.Id}')">
+          ${canDo(currentObject, "can_edit") ? `<button class="row-action edit" title="Edit" aria-label="Edit" onclick="event.stopPropagation(); openEdit('${record.Id}')">
             <svg viewBox="0 0 20 20" width="15" height="15" fill="currentColor">
               <path d="M13.586 3.586a2 2 0 112.828 2.828l-.793.793-2.828-2.828.793-.793z"/>
               <path d="M11.379 5.793L3 14.172V17h2.828l8.379-8.379-2.828-2.828z"/>
             </svg>
-          </button>
-          <button class="row-action del" title="Delete" aria-label="Delete" onclick="event.stopPropagation(); openDelete('${record.Id}')">
+          </button>` : ''}
+          ${canDo(currentObject, "can_delete") ? `<button class="row-action del" title="Delete" aria-label="Delete" onclick="event.stopPropagation(); openDelete('${record.Id}')">
             <svg viewBox="0 0 20 20" width="15" height="15" fill="currentColor">
               <path fill-rule="evenodd" d="M8 2a1 1 0 00-.894.553L6.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-2.382l-.724-1.447A1 1 0 0012 2H8zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm5-1a1 1 0 00-1 1v6a1 1 0 102 0V8a1 1 0 00-1-1z" clip-rule="evenodd"/>
             </svg>
-          </button>
+          </button>` : ''}
         </div>
-      </td>
+      </td>` : ''}
     </tr>
   `,
     )
@@ -2064,7 +2066,7 @@ function renderTable() {
   $("tbody").innerHTML = `
     ${rowHtml}
     <tr id="lazyLoadSentinel" class="lazy-load-row">
-      <td colspan="${currentColumns.length + 1}">
+      <td colspan="${columnCount}">
         ${loadingMoreRecords ? "Loading more records..." : canLoadMore ? "Scroll to load more records" : "All loaded"}
       </td>
     </tr>

@@ -23,23 +23,39 @@ module.exports.supabase = supabase;
 // All FALSE if user has no profile or no permission at all on that object.
 // =============================================================================
 async function getEffectivePermissions(userId, sfObject) {
-  const { data, error } = await supabase.rpc('get_effective_permissions', {
-    p_user_id:   userId,
-    p_sf_object: sfObject,
-  });
+  const deny = { can_read: false, can_create: false, can_edit: false, can_delete: false };
 
-  if (error) {
-    console.error('[getEffectivePermissions] DB error:', error);
-    // Fail closed — deny everything on DB error (safer than fail open)
-    return { can_read: false, can_create: false, can_edit: false, can_delete: false };
+  const { data: assignment, error: assignmentError } = await supabase
+    .from('user_profile_assignments')
+    .select('profiles(id, is_system_admin)')
+    .eq('user_id', userId)
+    .maybeSingle();
+
+  if (assignmentError) {
+    console.error('[getEffectivePermissions] Profile lookup error:', assignmentError);
+    return deny;
   }
 
-  // rpc returns an array (RETURNS TABLE) — we always want the first (only) row
-  if (!data || data.length === 0) {
-    return { can_read: false, can_create: false, can_edit: false, can_delete: false };
+  const profile = assignment?.profiles;
+  if (!profile?.id) return deny;
+
+  if (profile.is_system_admin) {
+    return { can_read: true, can_create: true, can_edit: true, can_delete: true };
   }
 
-  return data[0];
+  const { data: permission, error: permissionError } = await supabase
+    .from('profile_object_permissions')
+    .select('can_read, can_create, can_edit, can_delete')
+    .eq('profile_id', profile.id)
+    .eq('sf_object', sfObject)
+    .maybeSingle();
+
+  if (permissionError) {
+    console.error('[getEffectivePermissions] Permission lookup error:', permissionError);
+    return deny;
+  }
+
+  return permission || deny;
 }
 
 module.exports.getEffectivePermissions = getEffectivePermissions;
