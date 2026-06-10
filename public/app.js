@@ -589,6 +589,7 @@ let orgSettings = { activeOrgKey: "default", orgs: [] };
 let chatterState = { activeTab: "post", loadedFor: "", mentions: [] };
 let modalObject = null;
 let modalPresetValues = {};
+let savingRecord = false;
 let supabaseAuthClient = null;
 let supabaseAuthClientPromise = null;
 
@@ -1190,14 +1191,11 @@ async function submitLogin() {
 // ─────────────────────────────────────────────────────────────────────────────
 
 function canDo(sfObject, action) {
-  const role = window.portalUser?.role;
-  const perms = window.userPerms || getStoredPerms();
+  const perms        = window.userPerms || getStoredPerms();
+  const isSystemAdmin = window.portalUser?.isSystemAdmin;
 
-  // system_administrator and admin can do everything
-  if (role === "system_administrator" || role === "admin") return true;
-
-  // readonly can never write regardless of profile
-  if (role === "readonly" && action !== "can_read") return false;
+  // System Administrator profile bypasses all checks
+  if (isSystemAdmin) return true;
 
   return Boolean(perms[sfObject]?.[action]);
 }
@@ -1329,14 +1327,10 @@ async function loadProfile() {
     $("profileName").textContent = portalMe.name || "Portal User";
     $("profileEmail").textContent = portalMe.email || "";
 
-    const adminBtn = $("adminPanelBtn");
-    if (adminBtn) {
-      adminBtn.style.display = ["system_administrator", "admin"].includes(
-        portalMe?.role
-      )
-        ? ""
-        : "none";
-    }
+   const adminBtn = $('adminPanelBtn');
+if (adminBtn) {
+  adminBtn.style.display = window.portalUser?.isSystemAdmin ? '' : 'none';
+}
 
     // Hide org config from non-admins
     const orgBtn = document.querySelector(
@@ -3172,6 +3166,7 @@ function selectLookup(field, id, name) {
 }
 
 function closeModal() {
+  if (savingRecord) return;
   $("modalOverlay").classList.remove("open");
   modalObject = null;
   modalPresetValues = {};
@@ -5862,8 +5857,111 @@ async function sendCampaignEmail() {
   }
 }
 
+function setRecordSaveState(isSaving, objectName = currentObject) {
+  savingRecord = isSaving;
+  const saveBtn = $("saveBtn");
+  const saveText = $("saveBtnText");
+  const modal = $("modal");
+  const modalBody = $("modalBody");
+  if (saveBtn) {
+    saveBtn.disabled = isSaving;
+    saveBtn.style.minWidth = isSaving ? "132px" : "";
+  }
+  if (saveText) {
+    saveText.innerHTML = isSaving
+      ? `<span style="width:14px;height:14px;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;display:inline-block;animation:spin .75s linear infinite;margin-right:8px;vertical-align:-2px"></span>Saving ${escapeHtml(objectName)}...`
+      : "Save";
+  }
+  if (modalBody) {
+    modalBody.querySelectorAll("input,select,textarea,button").forEach((el) => {
+      if (isSaving) {
+        el.dataset.saveWasDisabled = el.disabled ? "true" : "false";
+        el.disabled = true;
+      } else if (el.dataset.saveWasDisabled) {
+        el.disabled = el.dataset.saveWasDisabled === "true";
+        delete el.dataset.saveWasDisabled;
+      }
+    });
+  }
+  if (modal) {
+    const closeBtn = modal.querySelector(".close-btn");
+    const cancelBtn = modal.querySelector(".modal-foot .btn-ghost");
+    if (closeBtn) closeBtn.disabled = isSaving;
+    if (cancelBtn) cancelBtn.disabled = isSaving;
+  }
+}
+
+async function refreshAfterSave(objectName, savedRecord, wasEditing) {
+  const startedAt = performance.now();
+  if (viewingDetail && detailRecordState && wasEditing) {
+    const mergedRecord = { ...detailRecordState.record, ...savedRecord };
+    const fields = detailRecordState.fields || [];
+    const title =
+      mergedRecord.Name ||
+      mergedRecord.Subject ||
+      mergedRecord.CaseNumber ||
+      mergedRecord.Email ||
+      detailRecordState.id;
+    const displayFields = fields
+      .filter(
+        (field) =>
+          mergedRecord[field.name] !== null &&
+          mergedRecord[field.name] !== undefined &&
+          field.name !== "attributes",
+      )
+      .slice(0, 80);
+    detailRecordState = {
+      ...detailRecordState,
+      record: mergedRecord,
+      fields,
+    };
+    renderRecordDetailPage(
+      detailRecordState.objectName,
+      mergedRecord,
+      fields,
+      displayFields,
+      title,
+      detailRecordState.id,
+    );
+    const refreshTasks =
+      detailRecordState.objectName === "Campaign"
+        ? [
+            loadRelatedRecords(detailRecordState.objectName, detailRecordState.id),
+            loadCampaignMembers(detailRecordState.id),
+            loadRecordActivity(detailRecordState.objectName, detailRecordState.id),
+          ]
+        : [
+            loadRelatedRecords(detailRecordState.objectName, detailRecordState.id),
+            loadRecordActivity(detailRecordState.objectName, detailRecordState.id),
+          ];
+    Promise.allSettled(refreshTasks).then((results) => {
+      const failed = results.find((result) => result.status === "rejected");
+      if (failed) console.warn("Detail background refresh failed:", failed.reason?.message || failed.reason);
+    });
+  } else if (viewingDetail && detailRecordState) {
+    openRecordDetail(detailRecordState.objectName, detailRecordState.id)
+      .catch((err) => toast(err.message || "Saved, but detail refresh failed", "err", 8000));
+  } else if (wasEditing && savedRecord?.Id && objectName === currentObject && !currentViewId.startsWith("sf:")) {
+    currentRecords = currentRecords.map((record) =>
+      record.Id === savedRecord.Id ? { ...record, ...savedRecord } : record,
+    );
+    applySort();
+    await renderCurrentView();
+    updateRecordCounts();
+    loadData().catch((err) => console.warn("Background refresh failed:", err.message));
+  } else {
+    loadData().catch((err) => console.warn("Background refresh failed:", err.message));
+  }
+  if (window.localStorage?.getItem("saasray_debug_timing") === "true") {
+    console.log(`[timing] frontend-save-refresh ${objectName}: ${Math.round(performance.now() - startedAt)}ms`);
+  }
+}
+
 async function saveRecord() {
+  if (savingRecord) return;
   const objectName = modalObject || currentObject;
+  const wasEditing = Boolean(editingRecord);
+  const savedRecord = wasEditing ? { ...editingRecord } : null;
   const body = {};
   $("modalBody")
     .querySelectorAll("[name]")
@@ -5883,33 +5981,30 @@ async function saveRecord() {
       setValue(body, input.name, input.value);
     });
   try {
-    $("saveBtn").disabled = true;
-    if (editingRecord) {
+    setRecordSaveState(true, objectName);
+    if (wasEditing) {
       await api(`/api/${objectName}/${editingRecord.Id}`, {
         method: "PATCH",
         body: JSON.stringify(body),
       });
+      Object.assign(savedRecord, body);
       toast("Record updated", "ok");
     } else {
-      await api(`/api/${objectName}`, {
+      const result = await api(`/api/${objectName}`, {
         method: "POST",
         body: JSON.stringify(body),
       });
+      if (result?.id) Object.assign(body, { Id: result.id });
       toast("Record created", "ok");
     }
+    setRecordSaveState(false, objectName);
     closeModal();
-    if (viewingDetail && detailRecordState) {
-      await openRecordDetail(
-        detailRecordState.objectName,
-        detailRecordState.id,
-      );
-    } else {
-      await loadData();
-    }
+    refreshAfterSave(objectName, wasEditing ? savedRecord : body, wasEditing)
+      .catch((err) => toast(err.message || "Saved, but refresh failed", "err", 8000));
   } catch (err) {
     toast(err.message || 'Could not save record. Please try again.', 'err', 10000);
   } finally {
-    $("saveBtn").disabled = false;
+    setRecordSaveState(false, objectName);
   }
 }
 

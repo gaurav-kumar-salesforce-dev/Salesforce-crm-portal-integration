@@ -23,17 +23,8 @@ app.use(express.static(path.join(__dirname, 'public')));
 // Verifies JWT on every request. Attaches req.user = { id, email, role, name }
 function checkAuth(req, res, next) {
   const header = req.headers.authorization || '';
-  const token = header.startsWith('Bearer ') ? header.slice(7) : null;
-
-  if (!token) {
-    return res.status(401).json({ error: 'Login required', code: 'NO_TOKEN' });
-  }
-
-  if (!JWT_SECRET) {
-    console.error('JWT_SECRET is not set in .env');
-    return res.status(500).json({ error: 'Server misconfiguration' });
-  }
-
+  const token  = header.startsWith('Bearer ') ? header.slice(7) : null;
+  if (!token) return res.status(401).json({ error: 'Login required', code: 'NO_TOKEN' });
   try {
     req.user = jwt.verify(token, JWT_SECRET);
     next();
@@ -59,26 +50,66 @@ const RESERVED_API_OBJECT_NAMES = new Set([
   'chatter'
 ]);
 
+// NEW: profile-based admin check
+// isAdminPanel = requires System Administrator profile
+// isAdminOrAbove = requires System Admin OR admin role (backward compat)
+function requireAdminPanel(req, res, next) {
+  // System Administrator profile always gets in
+  if (req.user?.isSystemAdmin) return next();
+
+  // Also allow users with role = system_administrator (backward compat)
+  if (req.user?.role === 'system_administrator') return next();
+
+  return res.status(403).json({
+    error: 'Admin panel access requires System Administrator profile.',
+    code:  'ADMIN_PANEL_REQUIRED'
+  });
+}
+
+function requireAdmin(req, res, next) {
+  if (req.user?.isSystemAdmin || req.user?.role === 'system_administrator') return next();
+  // Also allow admin role
+  const level = { system_administrator: 5, admin: 4, manager: 3, employee: 2, readonly: 1 };
+  if ((level[req.user?.role] || 0) >= 4) return next();
+  return res.status(403).json({
+    error: 'This action requires admin access.',
+    code:  'INSUFFICIENT_ACCESS'
+  });
+}
+
+// Keep checkRole for backward compat but map to new functions
 function checkRole(minimumRole) {
   return (req, res, next) => {
+    if (req.user?.isSystemAdmin || req.user?.role === 'system_administrator') return next();
+    const ROLE_LEVELS = { system_administrator: 5, admin: 4, manager: 3, employee: 2, readonly: 1 };
     const userLevel = ROLE_LEVELS[req.user?.role] || 0;
-    const minLevel = ROLE_LEVELS[minimumRole] || 0;
+    const minLevel  = ROLE_LEVELS[minimumRole]    || 0;
     if (userLevel >= minLevel) return next();
     return res.status(403).json({
-      error: `This action requires ${minimumRole} role or higher.`,
-      code: 'INSUFFICIENT_ROLE'
+      error: `This action requires ${minimumRole} access or higher.`,
+      code:  'INSUFFICIENT_ROLE'
     });
   };
+}
+
+function isFullAccessUser(user = {}) {
+  return Boolean(user.isSystemAdmin || user.role === 'system_administrator' || user.role === 'admin');
 }
 
 // Checks user's effective permissions for a SF object before allowing the action
 function checkPermission(sfObject, action) {
   return async (req, res, next) => {
     try {
+      const startedAt = Date.now();
       const role = req.user.role;
 
-      // system_administrator and admin bypass all object permission checks
-      if (role === 'system_administrator' || role === 'admin') return next();
+      // System Administrator profile, system_administrator role, and admin role bypass object permission checks
+      if (isFullAccessUser(req.user)) {
+        if (process.env.DEBUG_CRM_TIMING === 'true') {
+          console.log(`[timing] permission ${action} ${sfObject}: bypass ${Date.now() - startedAt}ms`);
+        }
+        return next();
+      }
 
       // readonly role can NEVER write
       if (role === 'readonly' && action !== 'can_read') {
@@ -104,6 +135,9 @@ function checkPermission(sfObject, action) {
         });
       }
 
+      if (process.env.DEBUG_CRM_TIMING === 'true') {
+        console.log(`[timing] permission ${action} ${sfObject}: ${Date.now() - startedAt}ms`);
+      }
       next();
     } catch (err) {
       console.error('Permission check error:', err.message);
@@ -120,9 +154,9 @@ function fieldPermCacheKey(userId, sfObject) {
   return `${userId}:${sfObject}`;
 }
 
-async function getEffectiveFieldPerms(userId, sfObject, userRole) {
+async function getEffectiveFieldPerms(userId, sfObject, userRole, isSystemAdmin = false) {
   // System administrator and admin see everything
-  if (userRole === 'system_administrator' || userRole === 'admin') return null;
+  if (isSystemAdmin || userRole === 'system_administrator' || userRole === 'admin') return null;
 
   const cacheKey = fieldPermCacheKey(userId, sfObject);
   if (fieldPermCache.has(cacheKey)) return fieldPermCache.get(cacheKey);
@@ -189,7 +223,8 @@ function attachFieldPerms(sfObject) {
       req.fieldPerms = await getEffectiveFieldPerms(
         req.user.id,
         sfObject,
-        req.user.role
+        req.user.role,
+        req.user.isSystemAdmin
       );
       next();
     } catch (err) {
@@ -229,8 +264,8 @@ function normalizeProfileImage(value) {
 }
 // ── SHARING-AWARE RECORD VISIBILITY ──────────────────────────
 
-async function canSeeRecord(record, userId, userRole, sfObject) {
-  if (userRole === 'system_administrator' || userRole === 'admin') return true;
+async function canSeeRecord(record, userId, userRole, sfObject, isSystemAdmin = false) {
+  if (isSystemAdmin || userRole === 'system_administrator' || userRole === 'admin') return true;
 
   const ownerId = record.Portal_Owner__c || null;
 
@@ -248,8 +283,8 @@ async function canSeeRecord(record, userId, userRole, sfObject) {
   }
 }
 
-async function applyRecordVisibility(records, userId, userRole, sfObject) {
-  if (userRole === 'system_administrator' || userRole === 'admin') return records;
+async function applyRecordVisibility(records, userId, userRole, sfObject, isSystemAdmin = false) {
+  if (isSystemAdmin || userRole === 'system_administrator' || userRole === 'admin') return records;
 
   // Check OWD first for performance — if public skip per-record check
   const { data: owd } = await supabase
@@ -265,14 +300,14 @@ async function applyRecordVisibility(records, userId, userRole, sfObject) {
 
   // Private — check each record
   const results = await Promise.all(
-    records.map(r => canSeeRecord(r, userId, userRole, sfObject))
+    records.map(r => canSeeRecord(r, userId, userRole, sfObject, isSystemAdmin))
   );
   return records.filter((_, i) => results[i]);
 }
 
 // Check if user can EDIT a specific record (beyond object-level edit perm)
-async function canEditRecord(record, userId, userRole, sfObject) {
-  if (userRole === 'system_administrator' || userRole === 'admin') return true;
+async function canEditRecord(record, userId, userRole, sfObject, isSystemAdmin = false) {
+  if (isSystemAdmin || userRole === 'system_administrator' || userRole === 'admin') return true;
 
   const ownerId = record.Portal_Owner__c || null;
   if (!ownerId) return true; // Legacy record — allow edit
@@ -1532,16 +1567,33 @@ const baseUrl = () => `${SF.instanceUrl}/services/data/${SF.version}`;
 
 async function sfGet(endpoint, params = {}, config = {}) {
   const token = await getAccessToken();
-  const res = await axios.get(`${baseUrl()}${endpoint}`, {
-    headers: { Authorization: `Bearer ${token}` },
-    params,
-    ...config,
-    headers: {
-      Authorization: `Bearer ${token}`,
-      ...(config.headers || {})
+  const maxAttempts = config.retry === false ? 1 : 3;
+  let lastErr;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      const res = await axios.get(`${baseUrl()}${endpoint}`, {
+        timeout: config.timeout || 30000,
+        headers: { Authorization: `Bearer ${token}` },
+        params,
+        ...config,
+        headers: {
+          Authorization: `Bearer ${token}`,
+          ...(config.headers || {})
+        }
+      });
+      return res.data;
+    } catch (err) {
+      lastErr = err;
+      if (!isTransientSalesforceNetworkError(err) || attempt === maxAttempts) break;
+      await sleep(250 * attempt);
     }
-  });
-  return res.data;
+  }
+  throw lastErr;
+}
+
+function isTransientSalesforceNetworkError(err) {
+  return ['ECONNRESET', 'ETIMEDOUT', 'ECONNABORTED', 'EAI_AGAIN'].includes(err?.code) ||
+    /socket hang up|network socket disconnected|read ECONNRESET/i.test(err?.message || '');
 }
 
 async function sfPost(endpoint, body) {
@@ -2498,6 +2550,9 @@ function handleSFError(err, res, context) {
   const msg = formatSalesforceError(sfErr) || err.message;
 
   console.error(`❌ ${context}:`, sfErr || err.message);
+  if (!err.response && isTransientSalesforceNetworkError(err)) {
+    return res.status(502).json({ error: 'Salesforce connection was interrupted. Please try again.' });
+  }
   res.status(err.response?.status || 500).json({ error: msg || 'Salesforce API error' });
 }
 
@@ -2661,11 +2716,13 @@ async function issuePortalSession(user, req, authMethod = 'password') {
     throw error;
   }
 
+  const isSystemAdmin = userData.profile?.is_system_admin || false;
   const tokenPayload = {
     id: user.id,
     email: user.email,
     name: user.name,
-    role: user.role
+    role: user.role,
+    isSystemAdmin
   };
   const token = jwt.sign(tokenPayload, JWT_SECRET, { expiresIn: JWT_EXPIRES_IN });
 
@@ -2691,6 +2748,7 @@ async function issuePortalSession(user, req, authMethod = 'password') {
       email: userData.email,
       name: userData.name,
       role: userData.role,
+      isSystemAdmin,
       profileImage: userData.profile_image || null,
       profile: userData.profile
     },
@@ -2743,11 +2801,14 @@ app.post('/api/auth/login', async (req, res) => {
     }
 
     // 4. Sign JWT — embed role so middleware doesn't need DB on every request
+    const isSystemAdmin = userData.profile?.is_system_admin || false;
+
     const tokenPayload = {
       id: user.id,
       email: user.email,
       name: user.name,
-      role: user.role
+      role: user.role,          // keep for backward compat
+      isSystemAdmin: isSystemAdmin       // NEW — profile-based
     };
     const token = jwt.sign(tokenPayload, JWT_SECRET, { expiresIn: JWT_EXPIRES_IN });
 
@@ -3128,27 +3189,50 @@ app.get('/api/auth/verify-reset-token', async (req, res) => {
 app.get('/api/portal/me', checkAuth, async (req, res) => {
   try {
     const userData = await getUserWithPermissions(req.user.id);
+
     if (!userData) {
-      return res.status(404).json({ error: 'User not found or deactivated' });
+      return res.status(404).json({
+        error: 'User not found or deactivated'
+      });
     }
+
     const { data: imageRow } = await supabase
       .from('users')
       .select('profile_image')
       .eq('id', req.user.id)
       .single();
+
+    // Check if assigned profile is System Administrator
+    const { data: profileData } = await supabase
+      .from('user_profile_assignments')
+      .select('profiles(id, name, is_system_admin)')
+      .eq('user_id', req.user.id)
+      .single();
+
+    const isSystemAdmin =
+      profileData?.profiles?.is_system_admin || false;
+
     res.json({
       id: userData.id,
       email: userData.email,
       name: userData.name,
       role: userData.role,
+
+      // NEW
+      isSystemAdmin: isSystemAdmin,
+
       profileImage: imageRow?.profile_image || null,
       profile: userData.profile,
       permissions: userData.permissions,
       lastLoginAt: userData.last_login_at
     });
+
   } catch (err) {
     console.error('GET /api/portal/me error:', err.message);
-    res.status(500).json({ error: 'Could not load user profile' });
+
+    res.status(500).json({
+      error: 'Could not load user profile'
+    });
   }
 });
 
@@ -3328,7 +3412,7 @@ app.post('/api/portal/users', checkAuth, checkRole('admin'), async (req, res) =>
 // PATCH /api/portal/users/:id — update user (admin+ only)
 app.patch('/api/portal/users/:id', checkAuth, checkRole('admin'), async (req, res) => {
   const { id } = req.params;
-  const { role, isActive, profileId, mustChangePw, profileImage } = req.body || {};
+  const { role, isActive, profileId, mustChangePw, email, name, password, permissionSetIds, profileImage } = req.body || {};
 
   // Admins cannot modify system_administrator users (only system_administrator can)
   if (req.user.role !== 'system_administrator') {
@@ -3338,83 +3422,101 @@ app.patch('/api/portal/users/:id', checkAuth, checkRole('admin'), async (req, re
       .eq('id', id)
       .single();
     if (target?.role === 'system_administrator') {
-      return res.status(403).json({ error: 'Only System Administrators can modify System Administrator accounts' });
+      return res.status(403).json({ error: 'Only system administrators can modify system administrator accounts' });
     }
   }
 
   try {
-    const updates = {};
-    if (role !== undefined) updates.role = role;
-    if (isActive !== undefined) updates.is_active = isActive;
-    if (mustChangePw !== undefined) updates.must_change_pw = mustChangePw;
+    const updates = { updated_at: new Date().toISOString() };
+
+    if (name     !== undefined && name.trim())     updates.name     = name.trim();
+    if (role     !== undefined)                    updates.role     = role;
+    if (isActive !== undefined)                    updates.is_active = isActive;
+    if (mustChangePw !== undefined)                updates.must_change_pw = mustChangePw;
     if (Object.prototype.hasOwnProperty.call(req.body || {}, 'profileImage')) {
       updates.profile_image = normalizeProfileImage(profileImage);
     }
-    updates.updated_at = new Date().toISOString();
 
-    // Handle optional password change on edit
-    if (req.body?.password) {
-      updates.password_hash = await bcrypt.hash(req.body.password, 12);
+    // Email update — check not already taken by another user
+    if (email !== undefined && email.trim()) {
+      const newEmail = email.toLowerCase().trim();
+      const { data: existing, error: existingError } = await supabase
+        .from('users')
+        .select('id')
+        .eq('email', newEmail)
+        .neq('id', id)
+        .maybeSingle();
+      if (existingError) throw existingError;
+      if (existing) {
+        return res.status(409).json({ error: 'This email is already used by another user' });
+      }
+      updates.email = newEmail;
+    }
+
+    // Password change
+    if (password) {
+      if (password.length < 8) {
+        return res.status(400).json({ error: 'Password must be at least 8 characters' });
+      }
+      updates.password_hash  = await bcrypt.hash(password, 12);
       updates.must_change_pw = false;
     }
 
+    // Apply user field updates
     if (Object.keys(updates).length > 1) {
-      // more than just updated_at
       const { error } = await supabase
-        .from("users")
+        .from('users')
         .update(updates)
-        .eq("id", id);
+        .eq('id', id);
       if (error) throw error;
     }
 
-    // Update profile assignment if provided
+    // Update profile assignment
     if (profileId) {
       await supabase
-        .from("user_profile_assignments")
+        .from('user_profile_assignments')
         .upsert(
-          {
-            user_id: id,
-            profile_id: profileId,
-            assigned_by: req.user.id,
-            assigned_at: new Date().toISOString(),
-          },
-          { onConflict: "user_id" },
+          { user_id: id, profile_id: profileId, assigned_by: req.user.id, assigned_at: new Date().toISOString() },
+          { onConflict: 'user_id' }
         );
     }
 
-    // Sync permission sets if provided
-    if (Array.isArray(req.body?.permissionSetIds)) {
-      await supabase
-        .from("user_permission_set_assignments")
-        .delete()
-        .eq("user_id", id);
-      if (req.body.permissionSetIds.length) {
-        await supabase.from("user_permission_set_assignments").insert(
-          req.body.permissionSetIds.map((psId) => ({
-            user_id: id,
+    // Sync permission sets
+    if (Array.isArray(permissionSetIds)) {
+      await supabase.from('user_permission_set_assignments').delete().eq('user_id', id);
+      if (permissionSetIds.length) {
+        await supabase.from('user_permission_set_assignments').insert(
+          permissionSetIds.map(psId => ({
+            user_id:     id,
             perm_set_id: psId,
-            assigned_by: req.user.id,
-          })),
+            assigned_by: req.user.id
+          }))
         );
       }
     }
 
-    await writeAuditLog({
-      userId: req.user.id,
-      userEmail: req.user.email,
-      userRole: req.user.role,
-      action: "update_user",
-      payload: { targetUserId: id, changes: updates },
-      ipAddress: req.ip,
-    });
-
-    // Clear cached field permissions for this user so changes take effect immediately
+    // Clear field perm cache
     clearFieldPermCache(id);
 
-    res.json({ success: true });
+    await writeAuditLog({
+      userId:    req.user.id,
+      userEmail: req.user.email,
+      userRole:  req.user.role,
+      action:    'update_user',
+      payload:   { targetUserId: id, changes: Object.keys(updates) },
+      ipAddress: req.ip
+    });
+
+    const { data: updatedUser } = await supabase
+      .from('users')
+      .select('id, email, name, role, profile_image, is_active, must_change_pw, updated_at')
+      .eq('id', id)
+      .single();
+
+    res.json({ success: true, user: updatedUser || null });
   } catch (err) {
     console.error('PATCH /api/portal/users error:', err.message);
-    res.status(err.statusCode || 500).json({ error: err.statusCode ? err.message : 'Could not update user' });
+    res.status(500).json({ error: err.message });
   }
 });
 
@@ -3759,19 +3861,23 @@ app.get('/api/portal/users', checkAuth, checkRole('admin'), async (req, res) => 
         return acc;
       }, {});
     }
-
     res.json({
       users: users.map(u => ({
         id: u.id,
         email: u.email,
         name: u.name,
         role: u.role,
+        isSystemAdmin: u.is_system_admin || false,
         profileImage: profileImagesByUserId[u.id] || null,
         isActive: u.is_active,
         mustChangePw: u.must_change_pw,
         createdAt: u.created_at,
         lastLoginAt: u.last_login_at,
-        profile: u.profile_id ? { id: u.profile_id, name: u.profile_name } : null,
+        profile: u.profile_id ? {
+          id: u.profile_id,
+          name: u.profile_name,
+          isSystemAdmin: u.is_system_admin || false
+        } : null,
         permissionSets: permissionSetsByUserId[u.id] || []
       }))
     });
@@ -5023,7 +5129,8 @@ app.get('/api/:object', checkAuth,
         records,
         req.user.id,
         req.user.role,
-        object
+        object,
+        req.user.isSystemAdmin
       );
 
       res.json({
@@ -5096,7 +5203,7 @@ app.get('/api/:object/:id', checkAuth,
 
       const cleanRecord = applyFieldSecurity(record, req.fieldPerms);
       // Check if user can see this specific record
-      const canSee = await canSeeRecord(record, req.user.id, req.user.role, object);
+      const canSee = await canSeeRecord(record, req.user.id, req.user.role, object, req.user.isSystemAdmin);
       if (!canSee) {
         return res.status(403).json({
           error: 'You do not have access to this record.',
@@ -5163,7 +5270,11 @@ app.post('/api/:object', checkAuth, async (req, res, next) => {
       Portal_Created_By__c: req.user.id,
       Portal_Last_Modified_By__c: req.user.id,
     };
+    const startedAt = Date.now();
     const result = await sfPost(`/sobjects/${object}`, bodyWithOwner);
+    if (process.env.DEBUG_CRM_TIMING === 'true') {
+      console.log(`[timing] sf-create ${object}: ${Date.now() - startedAt}ms`);
+    }
     res.json(result);
   } catch (err) {
     handleSFError(err, res, `POST ${object}`);
@@ -5227,8 +5338,10 @@ app.patch('/api/:object/:id', checkAuth,
     const { object, id } = req.params;
 
     if (!OBJECTS[object]) return next();
+    if (isFullAccessUser(req.user)) return next();
 
     try {
+      const startedAt = Date.now();
       const record = await sfGet(
         `/sobjects/${object}/${id}?fields=Portal_Owner__c`
       );
@@ -5237,7 +5350,8 @@ app.patch('/api/:object/:id', checkAuth,
         record,
         req.user.id,
         req.user.role,
-        object
+        object,
+        req.user.isSystemAdmin
       );
 
       if (!allowed) {
@@ -5247,6 +5361,9 @@ app.patch('/api/:object/:id', checkAuth,
         });
       }
 
+      if (process.env.DEBUG_CRM_TIMING === 'true') {
+        console.log(`[timing] record-edit-check ${object}/${id}: ${Date.now() - startedAt}ms`);
+      }
       next();
 
     } catch (err) {
@@ -5265,6 +5382,7 @@ app.patch('/api/:object/:id', checkAuth,
     }
 
     try {
+      const startedAt = Date.now();
       const bodyWithModifier = {
         ...req.body,
         Portal_Last_Modified_By__c: req.user.id
@@ -5275,6 +5393,9 @@ app.patch('/api/:object/:id', checkAuth,
         bodyWithModifier
       );
 
+      if (process.env.DEBUG_CRM_TIMING === 'true') {
+        console.log(`[timing] sf-patch ${object}/${id}: ${Date.now() - startedAt}ms`);
+      }
       res.json({
         success: true
       });

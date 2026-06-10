@@ -1794,8 +1794,8 @@
               </svg>
               <input type="text" id="userSearch" placeholder="Search users..." oninput="filterUsers()">
             </div>
-            <select class="filter-select" id="roleFilter" onchange="filterUsers()">
-              <option value="">All Roles</option>
+            <select class="filter-select" id="profileFilter" onchange="filterUsers()">
+              <option value="">All Profiles</option>
               <option value="system_administrator">System Administrator</option>
               <option value="admin">Admin</option>
               <option value="manager">Manager</option>
@@ -1822,9 +1822,8 @@
               <table id="usersTable">
                 <thead>
                   <tr>
-                    <th>User</th>
-                    <th>Role</th>
                     <th>Profile</th>
+                    <th>Org Role</th>
                     <th>Status</th>
                     <th>Last Login</th>
                     <th>Actions</th>
@@ -2528,7 +2527,7 @@
                 <tr>
                   <th>Time</th>
                   <th>User</th>
-                  <th>Role</th>
+                  <th>Profile</th>
                   <th>Action</th>
                   <th>Object</th>
                   <th>IP</th>
@@ -2609,56 +2608,63 @@
           </div>
         </div>
 
-        <div class="tab-panel" id="tab-access">
-          <div class="form-group">
-            <label class="form-label">System Role <span class="req">*</span></label>
-            <select class="form-ctrl" id="u-role">
-              <option value="employee">Employee</option>
-              <option value="readonly">Read-Only</option>
-              <option value="manager">Manager</option>
-              <option value="admin">Admin</option>
-              <option value="system_administrator">System Administrator</option>
-            </select>
-            <p class="form-hint">Role sets the UI access ceiling. Object-level permissions come from the profile below.
-            </p>
-          </div>
-          <div class="form-group">
-            <label class="form-label">Account Status</label>
-            <select class="form-ctrl" id="u-active">
-              <option value="true">Active — can log in</option>
-              <option value="false">Inactive — access revoked</option>
-            </select>
-          </div>
-          <div class="form-divider">Profile Assignment</div>
-          <div class="form-group">
-            <label class="form-label">Profile <span class="req">*</span></label>
-            <select class="form-ctrl" id="u-profile">
-              <option value="">Loading profiles...</option>
-            </select>
-            <p class="form-hint">Defines which Salesforce objects this user can Read / Create / Edit / Delete.</p>
-          </div>
-          <div class="form-divider" id="perm-sets-section">Permission Sets</div>
-          <div id="u-permsets-current" class="perm-tags" style="margin-bottom:10px"></div>
-          <div class="form-group">
-            <label class="form-label">Add Permission Set</label>
-            <select class="form-ctrl" id="u-permset-add"
-              onchange="addPermSetToUser(this.value, this.options[this.selectedIndex].text)">
-              <option value="">Select to add...</option>
-            </select>
-            <p class="form-hint">Permission sets add extra access on top of the profile. Multiple sets can be assigned.
-            </p>
-          </div>
-          <div class="form-divider">Permission Set Groups</div>
-          <div id="u-psg-current" class="perm-tags" style="margin-bottom:10px"></div>
-          <div class="form-group">
-            <label class="form-label">Add Permission Set Group</label>
-            <select class="form-ctrl" id="u-psg-add"
-              onchange="addPSGroupToUser(this.value, this.options[this.selectedIndex].text)">
-              <option value="">Select to add...</option>
-            </select>
-            <p class="form-hint">Groups bundle multiple permission sets with optional muting.</p>
-          </div>
-        </div>
+        <div class="tab-panel active" id="tab-access">
+
+  <!-- Account Status -->
+  <div class="form-group">
+    <label class="form-label">Account Status</label>
+    <select class="form-ctrl" id="u-active">
+      <option value="true">Active — can log in</option>
+      <option value="false">Inactive — access revoked</option>
+    </select>
+  </div>
+
+  <div class="form-divider">PROFILE ASSIGNMENT</div>
+  <div class="form-group">
+    <label class="form-label">Profile <span class="req">*</span></label>
+    <select class="form-ctrl" id="u-profile">
+      <option value="">Loading profiles...</option>
+    </select>
+    <p class="form-hint">
+      Controls which Salesforce objects this user can Read / Create / Edit / Delete.
+      Assign <strong>System Administrator</strong> profile to grant admin panel access.
+    </p>
+  </div>
+
+  <div class="form-divider">ROLE ASSIGNMENT</div>
+  <div class="form-group">
+    <label class="form-label">Role</label>
+    <select class="form-ctrl" id="u-org-role">
+      <option value="">No role assigned</option>
+    </select>
+    <p class="form-hint">
+      Controls whose records this user can see based on role hierarchy.
+      Users in higher roles see records owned by roles below them.
+    </p>
+  </div>
+
+  <div class="form-divider">PERMISSION SETS</div>
+  <div id="u-permsets-current" class="perm-tags" style="margin-bottom:10px"></div>
+  <div class="form-group">
+    <label class="form-label">Add Permission Set</label>
+    <select class="form-ctrl" id="u-permset-add"
+      onchange="addPermSetToUser(this.value, this.options[this.selectedIndex].text)">
+      <option value="">Select to add...</option>
+    </select>
+    <p class="form-hint">Permission sets add extra access on top of the profile.</p>
+  </div>
+
+  <div class="form-divider">PERMISSION SET GROUPS</div>
+  <div id="u-psg-current" class="perm-tags" style="margin-bottom:10px"></div>
+  <div class="form-group">
+    <label class="form-label">Add Permission Set Group</label>
+    <select class="form-ctrl" id="u-psg-add"
+      onchange="addPSGroupToUser(this.value, this.options[this.selectedIndex].text)">
+      <option value="">Select to add...</option>
+    </select>
+  </div>
+
+</div>
       </div>
       <div class="modal-foot">
         <button class="btn btn-ghost" onclick="closeUserModal()">Cancel</button>
@@ -2896,8 +2902,8 @@
 
       try {
         const me = await api('/api/portal/me');
-        if (!['system_administrator', 'admin'].includes(me.role)) {
-          alert('Access denied. Admin role required.');
+        if (!me.isSystemAdmin && me.role !== 'system_administrator') {
+          alert('Access denied. System Administrator profile required.');
           window.location.href = '/';
           return;
         }
@@ -2964,23 +2970,20 @@
         </div>
       </div>
     </div>
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px">
-      <div style="background:rgba(255,255,255,0.04);border-radius:6px;padding:7px 9px">
-        <div style="font-size:9px;font-weight:700;color:rgba(255,255,255,0.35);
-             text-transform:uppercase;letter-spacing:.05em;margin-bottom:2px">Role</div>
-        <div style="font-size:11px;font-weight:700;color:#7CB9F0">
-          ${roleLabels[user.role] || user.role}
-        </div>
-      </div>
-      <div style="background:rgba(255,255,255,0.04);border-radius:6px;padding:7px 9px">
-        <div style="font-size:9px;font-weight:700;color:rgba(255,255,255,0.35);
-             text-transform:uppercase;letter-spacing:.05em;margin-bottom:2px">Profile</div>
-        <div style="font-size:11px;font-weight:600;color:rgba(255,255,255,0.9);
-             white-space:nowrap;overflow:hidden;text-overflow:ellipsis">
-          ${esc(user.profile?.name || '—')}
-        </div>
-      </div>
-    </div>
+
+<div style="background:rgba(255,255,255,0.04);border-radius:6px;padding:7px 9px;margin-bottom:6px">
+  <div style="font-size:9px;font-weight:700;color:rgba(255,255,255,0.35);
+       text-transform:uppercase;letter-spacing:.05em;margin-bottom:2px">
+    Profile
+  </div>
+  <div style="font-size:12px;font-weight:700;color:rgba(255,255,255,0.9);
+       white-space:nowrap;overflow:hidden;text-overflow:ellipsis">
+    ${user.isSystemAdmin
+      ? '⭐ System Administrator'
+      : esc(user.profile?.name || '—')}
+  </div>
+</div>
+
     <div style="margin-top:6px;background:rgba(255,255,255,0.04);border-radius:6px;padding:7px 9px">
       <div style="font-size:9px;font-weight:700;color:rgba(255,255,255,0.35);
            text-transform:uppercase;letter-spacing:.05em;margin-bottom:2px">Last Login</div>
@@ -3070,18 +3073,40 @@
     // ═══════════════════════════════════════════════════════
     // USERS
     // ═══════════════════════════════════════════════════════
-    async function loadUsers() {
-      $('usersBody').innerHTML = '<tr><td colspan="6"><div class="spinner"></div></td></tr>';
-      try {
-        const data = await api('/api/portal/users');
-        allUsers = data.users || [];
-        updateUserStats();
-        renderUsers(allUsers);
-        $('nav-users-count').textContent = allUsers.length;
-      } catch (e) {
-        $('usersBody').innerHTML = `<tr><td colspan="6" style="text-align:center;color:var(--danger);padding:24px">${e.message}</td></tr>`;
-      }
+  async function loadUsers() {
+  $('usersBody').innerHTML = '<tr><td colspan="6"><div class="spinner"></div></td></tr>';
+
+  try {
+    const data = await api('/api/portal/users');
+
+    allUsers = data.users || [];
+
+    updateUserStats();
+    renderUsers(allUsers);
+
+    // Populate Profile Filter
+    const profileFilter = $('profileFilter');
+    if (profileFilter) {
+      const uniqueProfiles = [...new Map(
+        allUsers
+          .filter(u => u.profile?.name)
+          .map(u => [u.profile.id, u.profile])
+      ).values()];
+
+      profileFilter.innerHTML =
+        `<option value="">All Profiles</option>` +
+        uniqueProfiles
+          .map(p => `<option value="${p.id}">${esc(p.name)}</option>`)
+          .join('');
     }
+
+    $('nav-users-count').textContent = allUsers.length;
+
+  } catch (e) {
+    $('usersBody').innerHTML =
+      `<tr><td colspan="6" style="text-align:center;color:var(--danger);padding:24px">${e.message}</td></tr>`;
+  }
+}
 
     function updateUserStats() {
       const active = allUsers.filter(u => u.isActive).length;
@@ -3115,7 +3140,24 @@
           </div>
         </div>
       </td>
-      <td><span class="badge ${roleCls}">${roleName(u.role)}</span></td>
+
+<td>
+  <div style="display:flex;flex-direction:column;gap:3px">
+    ${u.isSystemAdmin
+      ? `<span class="badge" style="background:rgba(139,92,246,.15);color:#a78bfa;font-size:11px">
+           ⭐ System Administrator
+         </span>`
+      : `<span style="font-size:13px;color:var(--text-primary);font-weight:500">
+           ${esc(u.profile?.name || '—')}
+         </span>`
+    }
+  </div>
+</td>
+<td>
+  <span style="font-size:12px;color:var(--text-secondary)">
+    ${esc(u.orgRoleName || '—')}
+  </span>
+</td>
       <td><span style="font-size:12px;color:var(--text-secondary)">${esc(u.profile?.name || '—')}</span></td>
       <td><span class="badge ${u.isActive ? 'badge-active' : 'badge-inactive'}">${u.isActive ? 'Active' : 'Inactive'}</span>${u.mustChangePw ? '<span style="margin-left:5px;font-size:10px;color:var(--warning)">⚠ PW</span>' : ''}</td>
       <td style="font-size:12px;color:var(--text-muted)">${lastLogin}</td>
@@ -3143,18 +3185,27 @@
       }).join('');
     }
 
-    function filterUsers() {
-      const q = $('userSearch').value.toLowerCase();
-      const role = $('roleFilter').value;
-      const status = $('statusFilter').value;
-      const filtered = allUsers.filter(u => {
-        const matchQ = !q || u.name.toLowerCase().includes(q) || u.email.toLowerCase().includes(q);
-        const matchR = !role || u.role === role;
-        const matchS = !status || (status === 'active' ? u.isActive : !u.isActive);
-        return matchQ && matchR && matchS;
-      });
-      renderUsers(filtered);
-    }
+  function filterUsers() {
+  const q         = $('userSearch').value.toLowerCase();
+  const profileId = $('profileFilter')?.value || '';
+  const status    = $('statusFilter').value;
+
+  const filtered = allUsers.filter(u => {
+    const matchQ = !q ||
+      u.name.toLowerCase().includes(q) ||
+      u.email.toLowerCase().includes(q);
+
+    const matchP = !profileId ||
+      u.profile?.id === profileId;
+
+    const matchS = !status ||
+      (status === 'active' ? u.isActive : !u.isActive);
+
+    return matchQ && matchP && matchS;
+  });
+
+  renderUsers(filtered);
+}
 
     // ─── Create User ──────────────────────────────────────
     function renderUserImagePreview(user = {}) {
@@ -3195,7 +3246,7 @@
       $('userModalTitle').textContent = 'New User';
       $('userSaveBtn').textContent = 'Create User';
       $('u-name').value = $('u-email').value = $('u-password').value = '';
-      $('u-role').value = 'employee';
+
       $('u-active').value = 'true';
       $('u-pw-group').style.display = '';
       $('u-edit-note').style.display = 'none';
@@ -3222,7 +3273,7 @@
       $('userSaveBtn').textContent = 'Save Changes';
       $('u-name').value = u.name;
       $('u-email').value = u.email;
-      $('u-role').value = u.role;
+
       $('u-active').value = u.isActive ? 'true' : 'false';
       $('u-pw-group').style.display = 'none';
       $('u-edit-note').style.display = '';
@@ -3304,7 +3355,6 @@
     async function saveUser() {
       const name = $('u-name').value.trim();
       const email = $('u-email').value.trim();
-      const role = $('u-role').value;
       const isActive = $('u-active').value === 'true';
       const profileId = $('u-profile').value;
       const password = editingUserId ? $('u-password-edit').value : $('u-password').value;
@@ -3312,13 +3362,24 @@
       if (!name || !email) return toast('Name and email are required', 'err');
       if (!editingUserId && !password) return toast('Password is required for new users', 'err');
 
-      $('userSaveBtn').disabled = true;
-      try {
-        if (editingUserId) {
-          const body = { role, isActive, profileId, permissionSetIds: userPermSetsSelected.map(p => p.id) };
-          if (password) body.password = password;
-          if (userProfileImageDraft !== undefined) body.profileImage = userProfileImageDraft;
-          await api(`/api/portal/users/${editingUserId}`, { method: 'PATCH', body: JSON.stringify(body) });
+            $('userSaveBtn').disabled = true;
+            try {
+            if (editingUserId) {
+            const body = { name, email, isActive, profileId, permissionSetIds: userPermSetsSelected.map(p => p.id) };
+            if (password) body.password = password;
+            if (userProfileImageDraft !== undefined) body.profileImage = userProfileImageDraft;
+            await api(`/api/portal/users/${editingUserId}`, {
+            method: 'PATCH',
+            body: JSON.stringify(body)
+            });
+
+          // Save Org Role assignment
+          const orgRoleId = $('u-org-role')?.value || null;
+
+          await api(`/api/portal/users/${editingUserId}/org-role`, {
+            method: 'PATCH',
+            body: JSON.stringify({ orgRoleId })
+          });
           // Sync PS Groups
           const currentGroups = await api(`/api/portal/users/${editingUserId}/permission-set-groups`)
             .catch(() => ({ groups: [] }));
@@ -3339,7 +3400,7 @@
         } else {
           await api('/api/portal/users', {
             method: 'POST',
-            body: JSON.stringify({ name, email, password, role, profileId, profileImage: userProfileImageDraft, permissionSetIds: userPermSetsSelected.map(p => p.id) })
+            body: JSON.stringify({ name, email, password, profileId, profileImage: userProfileImageDraft, permissionSetIds: userPermSetsSelected.map(p => p.id) })
           });
           toast('User created — they can now log in', 'ok');
         }
@@ -3643,14 +3704,8 @@
     }
 
 
-    let allOrgRoles      = [];
+let allOrgRoles      = [];
 let editingOrgRoleId = null;
-
-// Add to PANEL_TITLES:
-// orgroles: 'Role Hierarchy',
-
-// Add to showPanel():
-// if (name === 'orgroles') loadOrgRoles();
 
 async function loadOrgRoles() {
   $('orgRolesBody').innerHTML = '<div class="spinner" style="margin:32px auto"></div>';
@@ -3793,26 +3848,39 @@ function renderOrgRoleTree() {
           </div>
         </div>
 
-        <!-- Actions -->
-        <div style="
-          display:flex;align-items:center;
-          gap:6px;padding:0 16px;flex-shrink:0;
-        ">
-          <button class="btn btn-ghost btn-sm"
-            onclick="openCreateOrgRole('${node.id}', '${esc(node.name)}')"
-            title="Add a child role under ${esc(node.name)}">
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
-              <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
-            </svg>
-            Child
-          </button>
-          <button class="btn btn-ghost btn-sm"
-            onclick="openEditOrgRole('${node.id}')">Edit</button>
-          <button class="btn btn-danger btn-sm"
-            onclick="deleteOrgRole('${node.id}', '${esc(node.name)}', ${node.user_count}, ${node.children.length})">
-            Delete
-          </button>
-        </div>
+
+<div style="
+  display:flex;align-items:center;
+  gap:6px;padding:0 16px;flex-shrink:0;
+">
+
+  <button class="btn btn-ghost btn-sm"
+    style="color:var(--success);border-color:rgba(34,197,94,.3);background:var(--success-soft)"
+    onclick="openAssignUsersToRole('${node.id}', '${esc(node.name)}')">
+    👤 Assign
+  </button>
+
+  <button class="btn btn-ghost btn-sm"
+    onclick="openCreateOrgRole('${node.id}', '${esc(node.name)}')"
+    title="Add a child role under ${esc(node.name)}">
+    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+      <line x1="12" y1="5" x2="12" y2="19"/>
+      <line x1="5" y1="12" x2="19" y2="12"/>
+    </svg>
+    Child
+  </button>
+
+  <button class="btn btn-ghost btn-sm"
+    onclick="openEditOrgRole('${node.id}')">
+    Edit
+  </button>
+
+  <button class="btn btn-danger btn-sm"
+    onclick="deleteOrgRole('${node.id}', '${esc(node.name)}', ${node.user_count}, ${node.children.length})">
+    Delete
+  </button>
+
+</div>
       </div>
     `);
 
@@ -4048,6 +4116,120 @@ function autoFillRoleApiName(label) {
     apiField.value = apiName;
   }
 }
+
+
+
+// ── ASSIGN USERS TO ROLE ──────────────────────────────────────
+let assigningRoleId   = null;
+let assigningRoleName = '';
+
+async function openAssignUsersToRole(roleId, roleName) {
+  assigningRoleId   = roleId;
+  assigningRoleName = roleName;
+  $('assignRoleTitle').textContent    = `Assign Users to Role`;
+  $('assignRoleSubtitle').textContent = `Role: ${roleName}`;
+
+  const list = $('assignRoleUsersList');
+  list.innerHTML = '<div class="spinner"></div>';
+  $('assignRoleModal').classList.add('open');
+
+  // Load all users
+  if (!allUsers.length) {
+    const d = await api('/api/portal/users').catch(() => ({ users: [] }));
+    allUsers = d.users || [];
+  }
+
+  // Get users already in this role
+  const usersInRole = new Set(
+    allUsers.filter(u => u.org_role_id === roleId).map(u => u.id)
+  );
+
+  list.innerHTML = allUsers
+    .filter(u => u.isActive)
+    .map(u => {
+      const initials = (u.name||'?').split(' ').map(p=>p[0]).join('').slice(0,2).toUpperCase();
+      const checked  = usersInRole.has(u.id);
+      return `
+        <label style="display:flex;align-items:center;gap:10px;
+               background:var(--bg-secondary);border:1px solid var(--border);
+               border-radius:8px;padding:10px 12px;cursor:pointer;
+               transition:border-color .15s"
+               onmouseover="this.style.borderColor='var(--accent)'"
+               onmouseout="this.style.borderColor='var(--border)'">
+          <input type="checkbox" value="${u.id}" ${checked ? 'checked' : ''}
+            style="accent-color:var(--accent);width:16px;height:16px;flex-shrink:0">
+          <div style="width:30px;height:30px;border-radius:50%;flex-shrink:0;
+               background:var(--accent-soft);color:var(--accent);
+               display:flex;align-items:center;justify-content:center;
+               font-size:11px;font-weight:700">${initials}</div>
+          <div style="min-width:0">
+            <div style="font-size:13px;font-weight:600;
+                 white-space:nowrap;overflow:hidden;text-overflow:ellipsis">
+              ${esc(u.name)}
+            </div>
+            <div style="font-size:11px;color:var(--text-muted);
+                 white-space:nowrap;overflow:hidden;text-overflow:ellipsis">
+              ${esc(u.email)}
+            </div>
+            ${u.org_role_name && u.org_role_id !== roleId ? `
+              <div style="font-size:10px;color:var(--warning)">
+                Currently: ${esc(u.org_role_name)}
+              </div>` : ''}
+          </div>
+        </label>
+      `;
+    }).join('') || '<p style="color:var(--text-muted);padding:20px;text-align:center">No active users found</p>';
+}
+
+function closeAssignRoleModal() {
+  $('assignRoleModal').classList.remove('open');
+  assigningRoleId = null;
+}
+
+async function saveRoleAssignments() {
+  if (!assigningRoleId) return;
+
+  const checked = [...$('assignRoleUsersList').querySelectorAll('input:checked')]
+    .map(cb => cb.value);
+  const unchecked = [...$('assignRoleUsersList').querySelectorAll('input:not(:checked)')]
+    .map(cb => cb.value);
+
+  $('assignRoleSaveBtn').disabled = true;
+  try {
+    // Assign checked users to this role
+    for (const userId of checked) {
+      await api(`/api/portal/users/${userId}/org-role`, {
+        method: 'PATCH',
+        body: JSON.stringify({ orgRoleId: assigningRoleId })
+      });
+    }
+
+    // Remove this role from unchecked users
+    // (only if they currently have THIS role)
+    const usersToUnassign = allUsers.filter(u =>
+      unchecked.includes(u.id) && u.org_role_id === assigningRoleId
+    );
+    for (const u of usersToUnassign) {
+      await api(`/api/portal/users/${u.id}/org-role`, {
+        method: 'PATCH',
+        body: JSON.stringify({ orgRoleId: null })
+      });
+    }
+
+    toast(`Users assigned to "${assigningRoleName}"`, 'ok');
+    closeAssignRoleModal();
+
+    // Reload both users and roles
+    await loadUsers();
+    await loadOrgRoles();
+  } catch(e) {
+    toast(e.message, 'err');
+  } finally {
+    $('assignRoleSaveBtn').disabled = false;
+  }
+}
+
+
 
 
 // ── PUBLIC GROUPS ─────────────────────────────────────────────
@@ -5462,6 +5644,46 @@ function deletePublicGroup(id, name) {
 
 </div>
 
+
+
+
+
+
+
+
+
+
+<div class="overlay" id="assignRoleModal" onclick="if(event.target===this)closeAssignRoleModal()">
+  <div class="modal modal-wide">
+    <div class="modal-head">
+      <div>
+        <h2 id="assignRoleTitle">Assign Users to Role</h2>
+        <p id="assignRoleSubtitle" style="font-size:12px;color:var(--text-muted);margin-top:3px"></p>
+      </div>
+      <button class="close-btn" onclick="closeAssignRoleModal()">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+        </svg>
+      </button>
+    </div>
+    <div class="modal-body">
+      <p style="font-size:13px;color:var(--text-secondary);margin-bottom:16px;line-height:1.6">
+        Select users to assign to this role. Users assigned here will have their record visibility
+        determined by this position in the hierarchy.
+      </p>
+      <div id="assignRoleUsersList"
+           style="display:grid;grid-template-columns:1fr 1fr;gap:8px;max-height:360px;overflow-y:auto">
+        <div class="spinner"></div>
+      </div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn btn-ghost" onclick="closeAssignRoleModal()">Cancel</button>
+      <button class="btn btn-primary" id="assignRoleSaveBtn" onclick="saveRoleAssignments()">
+        Save Assignments
+      </button>
+    </div>
+  </div>
+</div>
 
 
 </body>

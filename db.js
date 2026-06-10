@@ -55,7 +55,7 @@ async function getUserWithPermissions(userId) {
   // 1. Fetch user
   const { data: user, error: userErr } = await supabase
     .from('users')
-    .select('id, email, name, role, is_active, must_change_pw, last_login_at')
+    .select('id, email, name, role, profile_image, is_active, must_change_pw, last_login_at')
     .eq('id', userId)
     .eq('is_active', true)
     .single();
@@ -65,7 +65,7 @@ async function getUserWithPermissions(userId) {
   // 2. Fetch their profile assignment
   const { data: profileData } = await supabase
     .from('user_profile_assignments')
-    .select('profile_id, profiles(id, name, description)')
+    .select('profile_id, profiles(id, name, description, is_system_admin)')
     .eq('user_id', userId)
     .single();
 
