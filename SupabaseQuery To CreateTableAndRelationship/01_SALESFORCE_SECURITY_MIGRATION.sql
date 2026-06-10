@@ -1552,65 +1552,56 @@ ORDER BY r.level NULLS LAST, u.name;
 
 
 -- ============================================================================
--- Latest admin users + role hierarchy compatibility patch
--- Run this if User Management is not showing/saving org roles or profile images.
+-- Role hierarchy tree compatibility patch
+-- Run this in Supabase if Role Hierarchy does not show parent/child tree data.
+-- Collapsed/expanded state is UI-only and does not need a database column.
 -- ============================================================================
 
-ALTER TABLE public.users
-  ADD COLUMN IF NOT EXISTS org_role_id UUID REFERENCES public.org_roles(id) ON DELETE SET NULL,
-  ADD COLUMN IF NOT EXISTS profile_image TEXT;
+ALTER TABLE public.org_roles
+  ADD COLUMN IF NOT EXISTS api_name TEXT,
+  ADD COLUMN IF NOT EXISTS report_name TEXT,
+  ADD COLUMN IF NOT EXISTS opportunity_access TEXT NOT NULL DEFAULT 'edit',
+  ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT TRUE,
+  ADD COLUMN IF NOT EXISTS sort_order INT NOT NULL DEFAULT 0;
 
-CREATE INDEX IF NOT EXISTS idx_users_org_role_id ON public.users(org_role_id);
+CREATE INDEX IF NOT EXISTS idx_org_roles_parent_id ON public.org_roles(parent_id);
+CREATE INDEX IF NOT EXISTS idx_org_roles_path ON public.org_roles(path);
+CREATE INDEX IF NOT EXISTS idx_org_roles_level ON public.org_roles(level);
 
-ALTER TABLE public.profiles
-  ADD COLUMN IF NOT EXISTS is_system_admin BOOLEAN NOT NULL DEFAULT FALSE;
-
-UPDATE public.profiles
-SET is_system_admin = TRUE
-WHERE lower(name) = 'system administrator';
-
-DROP FUNCTION IF EXISTS public.get_portal_users();
-
-CREATE OR REPLACE FUNCTION public.get_portal_users()
-RETURNS TABLE (
-  id              UUID,
-  email           TEXT,
-  name            TEXT,
-  role            TEXT,
-  profile_image   TEXT,
-  is_active       BOOLEAN,
-  must_change_pw  BOOLEAN,
-  created_at      TIMESTAMPTZ,
-  last_login_at   TIMESTAMPTZ,
-  profile_id      UUID,
-  profile_name    TEXT,
-  is_system_admin BOOLEAN,
-  org_role_id     UUID,
-  org_role_name   TEXT,
-  org_role_level  INT
-)
+CREATE OR REPLACE FUNCTION public.get_org_role_tree()
+RETURNS JSON
 LANGUAGE sql
 SECURITY DEFINER
 AS $$
-  SELECT
-    u.id,
-    u.email,
-    u.name,
-    u.role,
-    u.profile_image,
-    u.is_active,
-    u.must_change_pw,
-    u.created_at,
-    u.last_login_at,
-    p.id AS profile_id,
-    p.name AS profile_name,
-    COALESCE(p.is_system_admin, FALSE) AS is_system_admin,
-    r.id AS org_role_id,
-    r.name AS org_role_name,
-    r.level AS org_role_level
-  FROM public.users u
-  LEFT JOIN public.user_profile_assignments upa ON upa.user_id = u.id
-  LEFT JOIN public.profiles p ON p.id = upa.profile_id
-  LEFT JOIN public.org_roles r ON r.id = u.org_role_id
-  ORDER BY u.created_at DESC;
+  SELECT COALESCE(json_agg(role_row ORDER BY (role_row->>'level')::int, (role_row->>'sort_order')::int, role_row->>'name'), '[]'::json)
+  FROM (
+    SELECT json_build_object(
+      'id', r.id,
+      'name', r.name,
+      'api_name', r.api_name,
+      'description', r.description,
+      'report_name', r.report_name,
+      'opportunity_access', r.opportunity_access,
+      'parent_id', r.parent_id,
+      'level', r.level,
+      'path', r.path,
+      'sort_order', COALESCE(r.sort_order, 0),
+      'is_active', COALESCE(r.is_active, TRUE),
+      'user_count', (
+        SELECT COUNT(*)::int
+        FROM public.users u
+        WHERE u.org_role_id = r.id
+          AND u.is_active = TRUE
+      ),
+      'total_subordinate_users', (
+        SELECT COUNT(*)::int
+        FROM public.users u
+        JOIN public.org_roles sr ON sr.id = u.org_role_id
+        WHERE sr.path LIKE r.path || '/%'
+          AND u.is_active = TRUE
+      )
+    ) AS role_row
+    FROM public.org_roles r
+    WHERE COALESCE(r.is_active, TRUE) = TRUE
+  ) rows;
 $$;
