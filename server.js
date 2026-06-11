@@ -176,43 +176,72 @@ function fieldPermCacheKey(userId, sfObject) {
 }
 
 async function getEffectiveFieldPerms(userId, sfObject, userRole, isSystemAdmin = false) {
-  // System administrator and admin see everything
-  if (isSystemAdmin) return null;
-
   const cacheKey = fieldPermCacheKey(userId, sfObject);
   if (fieldPermCache.has(cacheKey)) return fieldPermCache.get(cacheKey);
 
-  // Get sensitive fields for this object
-  const { data: sensitiveFields } = await supabase
+  const { data: sensitiveFields, error: sensitiveError } = await supabase
     .from('sensitive_fields')
     .select('field_name')
     .eq('sf_object', sfObject);
 
+  if (sensitiveError) throw sensitiveError;
+
   if (!sensitiveFields?.length) {
     fieldPermCache.set(cacheKey, null);
-    return null; // No sensitive fields on this object
+    return null;
   }
 
-  // Get what this user is allowed to see
-  const { data: allowed } = await supabase
-    .rpc('get_effective_field_permissions', {
-      p_user_id: userId,
-      p_sf_object: sfObject
-    });
+  const { data: profileAssignment, error: profileError } = await supabase
+    .from('user_profile_assignments')
+    .select('profile_id')
+    .eq('user_id', userId)
+    .maybeSingle();
+
+  if (profileError) throw profileError;
+
+  let profilePerms = [];
+  if (profileAssignment?.profile_id) {
+    const { data, error } = await supabase
+      .from('field_permissions')
+      .select('field_name, can_view, can_edit')
+      .eq('profile_id', profileAssignment.profile_id)
+      .eq('sf_object', sfObject);
+    if (error) throw error;
+    profilePerms = data || [];
+  }
+
+  const { data: permSetAssignments, error: permSetAssignmentError } = await supabase
+    .from('user_permission_set_assignments')
+    .select('perm_set_id')
+    .eq('user_id', userId);
+
+  if (permSetAssignmentError) throw permSetAssignmentError;
+
+  const permSetIds = [...new Set((permSetAssignments || []).map(row => row.perm_set_id).filter(Boolean))];
+  let permSetPerms = [];
+  if (permSetIds.length) {
+    const { data, error } = await supabase
+      .from('field_permissions')
+      .select('field_name, can_view, can_edit')
+      .in('permission_set_id', permSetIds)
+      .eq('sf_object', sfObject);
+    if (error) throw error;
+    permSetPerms = data || [];
+  }
 
   const allowedMap = {};
-  (allowed || []).forEach(f => {
-    allowedMap[f.field_name] = { can_view: f.can_view, can_edit: f.can_edit };
+  [...profilePerms, ...permSetPerms].forEach(f => {
+    if (!allowedMap[f.field_name]) allowedMap[f.field_name] = { can_view: false, can_edit: false };
+    allowedMap[f.field_name].can_view = Boolean(allowedMap[f.field_name].can_view || f.can_view);
+    allowedMap[f.field_name].can_edit = Boolean(allowedMap[f.field_name].can_edit || f.can_edit);
   });
 
-  // Build hidden fields set — sensitive fields the user cannot view
   const hiddenFields = new Set(
     sensitiveFields
       .filter(sf => !allowedMap[sf.field_name]?.can_view)
       .map(sf => sf.field_name)
   );
 
-  // Build readonly fields set — sensitive fields user can view but not edit
   const readonlyFields = new Set(
     sensitiveFields
       .filter(sf => allowedMap[sf.field_name]?.can_view && !allowedMap[sf.field_name]?.can_edit)
@@ -223,7 +252,6 @@ async function getEffectiveFieldPerms(userId, sfObject, userRole, isSystemAdmin 
   fieldPermCache.set(cacheKey, result);
   return result;
 }
-
 // Strips hidden fields from a record object
 function applyFieldSecurity(record, fieldPerms) {
   if (!fieldPerms || !record) return record;
@@ -232,6 +260,20 @@ function applyFieldSecurity(record, fieldPerms) {
 
   const cleaned = { ...record };
   hiddenFields.forEach(field => {
+    if (field in cleaned) delete cleaned[field];
+  });
+  return cleaned;
+}
+
+function applyFieldWriteSecurity(body, fieldPerms) {
+  if (!fieldPerms || !body) return body;
+  const blocked = new Set([
+    ...(fieldPerms.hiddenFields || []),
+    ...(fieldPerms.readonlyFields || [])
+  ]);
+  if (!blocked.size) return body;
+  const cleaned = { ...body };
+  blocked.forEach(field => {
     if (field in cleaned) delete cleaned[field];
   });
   return cleaned;
@@ -261,6 +303,10 @@ function clearFieldPermCache(userId) {
   for (const key of fieldPermCache.keys()) {
     if (key.startsWith(`${userId}:`)) fieldPermCache.delete(key);
   }
+}
+
+function clearAllFieldPermCache() {
+  fieldPermCache.clear();
 }
 
 function normalizeProfileImage(value) {
@@ -3723,12 +3769,106 @@ app.get('/api/portal/field-security/sensitive', checkAuth, checkRole('admin'), a
   try {
     const { data, error } = await supabase
       .from('sensitive_fields')
-      .select('field_name, label, reason')
+      .select('id, field_name, label, reason')
       .eq('sf_object', req.query.object)
       .order('field_name');
     if (error) throw error;
     res.json({ fields: data || [] });
   } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.get('/api/portal/field-security/available-fields', checkAuth, checkRole('admin'), async (req, res) => {
+  const sfObject = req.query.object;
+  if (!OBJECTS[sfObject]) return res.status(400).json({ error: 'Unknown object' });
+  try {
+    const data = await sfGet(`/sobjects/${sfObject}/describe`);
+    const fields = (data.fields || [])
+      .filter(field => !field.deprecatedAndHidden)
+      .filter(field => !['address', 'location'].includes(field.type))
+      .map(field => ({
+        name: field.name,
+        label: field.label,
+        type: field.type,
+        createable: field.createable,
+        updateable: field.updateable
+      }))
+      .sort((a, b) => a.label.localeCompare(b.label));
+    res.json({ fields });
+  } catch (e) {
+    handleSFError(e, res, `Describe fields ${sfObject}`);
+  }
+});
+
+app.post('/api/portal/field-security/sensitive', checkAuth, checkRole('admin'), async (req, res) => {
+  const { sfObject, fieldName, label, reason } = req.body || {};
+  if (!OBJECTS[sfObject] || !fieldName || !label) {
+    return res.status(400).json({ error: 'sfObject, fieldName, and label are required' });
+  }
+  try {
+    const { data, error } = await supabase
+      .from('sensitive_fields')
+      .upsert(
+        {
+          sf_object: sfObject,
+          field_name: fieldName,
+          label: label.trim(),
+          reason: reason?.trim() || null
+        },
+        { onConflict: 'sf_object,field_name' }
+      )
+      .select('id, field_name, label, reason')
+      .single();
+    if (error) throw error;
+    clearAllFieldPermCache();
+    res.status(201).json({ success: true, field: data });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.patch('/api/portal/field-security/sensitive/:id', checkAuth, checkRole('admin'), async (req, res) => {
+  const { label, reason } = req.body || {};
+  if (!label?.trim()) return res.status(400).json({ error: 'Label is required' });
+  try {
+    const { data, error } = await supabase
+      .from('sensitive_fields')
+      .update({ label: label.trim(), reason: reason?.trim() || null })
+      .eq('id', req.params.id)
+      .select('id, field_name, label, reason')
+      .single();
+    if (error) throw error;
+    clearAllFieldPermCache();
+    res.json({ success: true, field: data });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.delete('/api/portal/field-security/sensitive/:id', checkAuth, checkRole('admin'), async (req, res) => {
+  try {
+    const { data: field, error: fieldError } = await supabase
+      .from('sensitive_fields')
+      .select('sf_object, field_name')
+      .eq('id', req.params.id)
+      .single();
+    if (fieldError) throw fieldError;
+
+    await supabase
+      .from('field_permissions')
+      .delete()
+      .eq('sf_object', field.sf_object)
+      .eq('field_name', field.field_name);
+
+    const { error } = await supabase
+      .from('sensitive_fields')
+      .delete()
+      .eq('id', req.params.id);
+    if (error) throw error;
+    clearAllFieldPermCache();
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
 });
 
 // GET field permissions for a profile on an object
@@ -3772,6 +3912,7 @@ app.post('/api/portal/field-security/permissions', checkAuth, checkRole('admin')
       const { error } = await supabase.from('field_permissions').insert(toInsert);
       if (error) throw error;
     }
+    clearAllFieldPermCache();
 
     await writeAuditLog({
       userId: req.user.id, userEmail: req.user.email,
@@ -4342,38 +4483,51 @@ app.get('/api/debug/data-source', async (req, res) => {
   }
 });
 
-app.get('/api/:object/listviews/:id/results', checkAuth, async (req, res) => {
+app.get('/api/:object/listviews/:id/results', checkAuth, async (req, res, next) => {
+  const obj = req.params.object;
+  if (OBJECTS[obj]) return attachFieldPerms(obj)(req, res, next);
+  next();
+}, async (req, res) => {
   const { object, id } = req.params;
   if (!OBJECTS[object]) return res.status(400).json({ error: `Unknown object: ${object}` });
 
   try {
     if (req.query.cursor) {
       const data = await sfGet(queryMoreEndpoint(req.query.cursor), {}, { headers: QUERY_BATCH_HEADERS });
+      const records = (data.records || []).map(record => applyFieldSecurity(record, req.fieldPerms));
       return res.json({
-        records: data.records || [],
+        records,
         totalSize: data.totalSize || 0,
         done: Boolean(data.done),
-        nextRecordsUrl: data.nextRecordsUrl || null
+        nextRecordsUrl: data.nextRecordsUrl || null,
+        hiddenFields: [...(req.fieldPerms?.hiddenFields || [])]
       });
     }
 
     const detail = await sfGet(`/sobjects/${object}/listviews/${id}/describe`);
     const data = await sfGet('/query', { q: detail.query }, { headers: QUERY_BATCH_HEADERS });
+    const records = (data.records || []).map(record => applyFieldSecurity(record, req.fieldPerms));
+    const hiddenFields = new Set(req.fieldPerms?.hiddenFields || []);
     res.json({
       label: detail.label,
-      columns: detail.columns || [],
+      columns: (detail.columns || []).filter(column => !hiddenFields.has(column.fieldNameOrPath)),
       query: detail.query,
-      records: data.records || [],
+      records,
       totalSize: data.totalSize || 0,
       done: Boolean(data.done),
-      nextRecordsUrl: data.nextRecordsUrl || null
+      nextRecordsUrl: data.nextRecordsUrl || null,
+      hiddenFields: [...hiddenFields]
     });
   } catch (err) {
     handleSFError(err, res, `List view results ${object}/${id}`);
   }
 });
 
-app.get('/api/:object/fields', checkAuth, async (req, res) => {
+app.get('/api/:object/fields', checkAuth, async (req, res, next) => {
+  const obj = req.params.object;
+  if (OBJECTS[obj]) return attachFieldPerms(obj)(req, res, next);
+  next();
+}, async (req, res) => {
   const { object } = req.params;
   if (!OBJECTS[object]) return res.status(400).json({ error: `Unknown object: ${object}` });
 
@@ -4393,7 +4547,10 @@ app.get('/api/:object/fields', checkAuth, async (req, res) => {
         controllerValues: field.controllerValues || {},
         picklistValues: normalizePicklistValues(field)
       }));
-    res.json({ fields });
+    res.json({
+      fields: fields.filter(field => !req.fieldPerms?.hiddenFields?.has(field.name)),
+      hiddenFields: [...(req.fieldPerms?.hiddenFields || [])]
+    });
   } catch (err) {
     handleSFError(err, res, `Fields ${object}`);
   }
@@ -5042,6 +5199,12 @@ app.post('/api/bulk/:object/:operation', checkAuth, async (req, res, next) => {
   const action = bulkOperationAction(operation);
   if (action) return checkPermission(object, action)(req, res, next);
   next();
+}, async (req, res, next) => {
+  const { object, operation } = req.params;
+  if (OBJECTS[object] && ['insert', 'update', 'upsert'].includes(operation)) {
+    return attachFieldPerms(object)(req, res, next);
+  }
+  next();
 }, async (req, res) => {
   const { object, operation } = req.params;
   if (!OBJECTS[object]) return res.status(400).json({ error: `Unknown object: ${object}` });
@@ -5050,7 +5213,15 @@ app.post('/api/bulk/:object/:operation', checkAuth, async (req, res, next) => {
   }
 
   try {
-    const records = Array.isArray(req.body) ? req.body : req.body?.records;
+    let records = Array.isArray(req.body) ? req.body : req.body?.records;
+    if (Array.isArray(records) && ['insert', 'update', 'upsert'].includes(operation)) {
+      records = records.map(record => {
+        const clean = flattenRecord(record);
+        if (operation === 'insert') return applyFieldWriteSecurity(clean, req.fieldPerms);
+        const { Id, ...fields } = clean;
+        return { Id, ...applyFieldWriteSecurity(fields, req.fieldPerms) };
+      });
+    }
     const result = await runBulkIngest(object, operation, records, {
       externalIdFieldName: req.body?.externalIdFieldName,
       wait: req.body?.wait,
@@ -5109,7 +5280,8 @@ app.get('/api/:object', checkAuth,
           records,
           totalSize: data.totalSize || 0,
           done: Boolean(data.done),
-          nextRecordsUrl: data.nextRecordsUrl || null
+          nextRecordsUrl: data.nextRecordsUrl || null,
+          hiddenFields: [...(req.fieldPerms?.hiddenFields || [])]
         });
       }
 
@@ -5144,7 +5316,8 @@ app.get('/api/:object', checkAuth,
         records: visibleRecords,
         totalSize: data.totalSize || 0,
         done: Boolean(data.done),
-        nextRecordsUrl: data.nextRecordsUrl || null
+        nextRecordsUrl: data.nextRecordsUrl || null,
+        hiddenFields: [...(req.fieldPerms?.hiddenFields || [])]
       });
 
     } catch (err) {
@@ -5239,6 +5412,10 @@ app.post('/api/:object', checkAuth, async (req, res, next) => {
   const obj = req.params.object;
   if (OBJECTS[obj]) return checkPermission(obj, 'can_create')(req, res, next);
   next();
+}, async (req, res, next) => {
+  const obj = req.params.object;
+  if (OBJECTS[obj]) return attachFieldPerms(obj)(req, res, next);
+  next();
 }, async (req, res) => {
   const { object } = req.params;
   if (!OBJECTS[object]) return res.status(400).json({ error: `Unknown object: ${object}` });
@@ -5247,8 +5424,9 @@ app.post('/api/:object', checkAuth, async (req, res, next) => {
     const records = Array.isArray(req.body) ? req.body : req.body?.records;
     if (Array.isArray(records)) {
       if (!records.length) return res.status(400).json({ error: 'Create requires at least one record' });
+      const securedRecords = records.map(record => applyFieldWriteSecurity(flattenRecord(record), req.fieldPerms));
       if (records.length >= BULK_AUTO_THRESHOLD || req.query.bulk === 'true' || req.body?.bulk === true) {
-        const result = await runBulkIngest(object, 'insert', records, {
+        const result = await runBulkIngest(object, 'insert', securedRecords, {
           wait: req.body?.wait,
           includeResults: req.body?.includeResults
         });
@@ -5258,9 +5436,9 @@ app.post('/api/:object', checkAuth, async (req, res, next) => {
       const result = await sfPost('/composite/sobjects', {
         allOrNone: false,
         // Bulk create - stamp ownership
-        records: records.map(record => ({
+        records: securedRecords.map(record => ({
           attributes: { type: object },
-          ...flattenRecord(record),
+          ...record,
           Portal_Owner__c: req.user.id,
           Portal_Created_By__c: req.user.id,
           Portal_Last_Modified_By__c: req.user.id
@@ -5271,7 +5449,7 @@ app.post('/api/:object', checkAuth, async (req, res, next) => {
 
     // Stamp portal ownership fields on create
     const bodyWithOwner = {
-      ...req.body,
+      ...applyFieldWriteSecurity(req.body, req.fieldPerms),
       Portal_Owner__c: req.user.id,
       Portal_Created_By__c: req.user.id,
       Portal_Last_Modified_By__c: req.user.id,
@@ -5292,6 +5470,10 @@ app.patch('/api/:object', checkAuth, async (req, res, next) => {
   const { object } = req.params;
   if (OBJECTS[object]) return checkPermission(object, 'can_edit')(req, res, next);
   next();
+}, async (req, res, next) => {
+  const { object } = req.params;
+  if (OBJECTS[object]) return attachFieldPerms(object)(req, res, next);
+  next();
 }, async (req, res) => {
   const { object } = req.params;
   if (!OBJECTS[object]) return res.status(400).json({ error: `Unknown object: ${object}` });
@@ -5303,7 +5485,12 @@ app.patch('/api/:object', checkAuth, async (req, res, next) => {
     }
 
     if (records.length >= BULK_AUTO_THRESHOLD || req.query.bulk === 'true' || req.body?.bulk === true) {
-      const result = await runBulkIngest(object, 'update', records, {
+      const securedRecords = records.map(record => {
+        const clean = flattenRecord(record);
+        const { Id, ...fields } = clean;
+        return { Id, ...applyFieldWriteSecurity(fields, req.fieldPerms) };
+      });
+      const result = await runBulkIngest(object, 'update', securedRecords, {
         wait: req.body?.wait,
         includeResults: req.body?.includeResults
       });
@@ -5314,7 +5501,7 @@ app.patch('/api/:object', checkAuth, async (req, res, next) => {
       const clean = flattenRecord(record);
       const { Id, ...fields } = clean;
       if (!Id) throw new Error('Update requires Id on every record');
-      return sfPatch(`/sobjects/${object}/${Id}`, fields);
+      return sfPatch(`/sobjects/${object}/${Id}`, applyFieldWriteSecurity(fields, req.fieldPerms));
     }));
     res.json({
       bulk: false,
@@ -5382,6 +5569,12 @@ app.patch('/api/:object/:id', checkAuth,
     }
   },
 
+  async (req, res, next) => {
+    const { object } = req.params;
+    if (OBJECTS[object]) return attachFieldPerms(object)(req, res, next);
+    next();
+  },
+
   async (req, res) => {
     const { object, id } = req.params;
 
@@ -5394,7 +5587,7 @@ app.patch('/api/:object/:id', checkAuth,
     try {
       const startedAt = Date.now();
       const bodyWithModifier = {
-        ...req.body,
+        ...applyFieldWriteSecurity(req.body, req.fieldPerms),
         Portal_Last_Modified_By__c: req.user.id
       };
 

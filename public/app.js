@@ -551,6 +551,7 @@ const OBJECT_FIELD_LAYOUTS = {
 let currentObject = "Account";
 let currentRecords = [];
 let currentColumns = [];
+let currentHiddenFields = new Set();
 let currentViewId = "all";
 let sfListViews = [];
 let searchTimer = null;
@@ -1868,6 +1869,7 @@ async function loadData() {
   const search = $("objSearch")?.value || "";
   const meta = OBJECT_META[currentObject];
   currentColumns = meta.columns.slice();
+  currentHiddenFields = new Set();
 
   $("pageIcon").innerHTML = objectIcon(currentObject);
   $("pageTitle").textContent = getCurrentViewName();
@@ -1889,6 +1891,8 @@ async function loadData() {
       nextRecordsUrl = data.nextRecordsUrl || null;
       totalRecords = data.totalSize || currentRecords.length;
       currentColumns = normalizeListViewColumns(data.columns);
+      currentHiddenFields = new Set(data.hiddenFields || []);
+      currentColumns = currentColumns.filter(field => !currentHiddenFields.has(field));
     } else {
       const params = new URLSearchParams();
       if (search) params.set("search", search);
@@ -1897,7 +1901,9 @@ async function loadData() {
       currentRecords = data.records || [];
       nextRecordsUrl = data.nextRecordsUrl || null;
       totalRecords = data.totalSize || currentRecords.length;
+      currentHiddenFields = new Set(data.hiddenFields || []);
       applyLocalView();
+      currentColumns = currentColumns.filter(field => !currentHiddenFields.has(field));
     }
 
     visibleRecordCount = RENDER_CHUNK_SIZE;
@@ -2704,14 +2710,38 @@ function openCreate() {
   openRecordModal(`New ${currentObject}`, {}, null, currentObject);
 }
 
-function openEdit(id) {
-  editingRecord = currentRecords.find((record) => record.Id === id);
-  openRecordModal(
-    `Edit ${currentObject}`,
-    editingRecord || {},
-    null,
-    currentObject,
-  );
+async function openEdit(id) {
+  const objectName = currentObject;
+  const listRecord = currentRecords.find((record) => record.Id === id);
+  editingRecord = listRecord || { Id: id };
+
+  $("modalObjIcon").innerHTML = objectIcon(objectName);
+  $("modalTitle").textContent = `Edit ${objectName}`;
+  $("modalBody").innerHTML = `
+    <div class="state-box compact">
+      <div class="spinner-ring"><div></div><div></div><div></div><div></div></div>
+      <p>Loading ${escapeHtml(objectName)}...</p>
+    </div>
+  `;
+  $("modalOverlay").classList.add("open");
+
+  try {
+    const data = await api(`/api/${objectName}/${id}`);
+    editingRecord = data.record || editingRecord;
+    await openRecordModal(
+      `Edit ${objectName}`,
+      editingRecord,
+      data.fields || null,
+      objectName,
+    );
+  } catch (err) {
+    $("modalBody").innerHTML = `
+      <div class="state-box compact error-state">
+        <h3>Could not load record</h3>
+        <p>${escapeHtml(err.message)}</p>
+      </div>
+    `;
+  }
 }
 
 async function openRecordModal(
@@ -2889,6 +2919,7 @@ function renderFieldControl(
   const spanClass = shouldSpanField(field, type) ? "span-2" : "";
   const readOnly =
     Boolean(fieldMeta.readOnly) ||
+    Boolean(fieldMeta.fieldSecurityReadOnly) ||
     (editingRecord && fieldMeta.updateable === false) ||
     (!editingRecord && fieldMeta.createable === false);
   const disabled = readOnly ? 'disabled data-readonly="true"' : "";

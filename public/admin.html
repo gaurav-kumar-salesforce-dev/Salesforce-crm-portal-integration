@@ -1947,6 +1947,9 @@
               <option value="">Loading profiles...</option>
             </select>
             <div class="toolbar-right">
+              <button class="btn btn-ghost" onclick="openFieldSecurityFieldModal()">
+                + Add Field
+              </button>
               <button class="btn btn-primary" onclick="saveFieldSecurity()">Save Changes</button>
             </div>
           </div>
@@ -1954,6 +1957,45 @@
             <div id="fieldSecurityBody" style="padding:20px">
               <div class="spinner"></div>
             </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="overlay" id="fieldSecurityFieldModal" onclick="if(event.target===this)closeFieldSecurityFieldModal()">
+        <div class="modal">
+          <div class="modal-head">
+            <h2>Add Field Security Field</h2>
+            <button class="close-btn" onclick="closeFieldSecurityFieldModal()">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <line x1="18" y1="6" x2="6" y2="18" />
+                <line x1="6" y1="6" x2="18" y2="18" />
+              </svg>
+            </button>
+          </div>
+          <div class="modal-body">
+            <div class="form-group">
+              <label class="form-label">Salesforce Object</label>
+              <input class="form-ctrl" id="fs-field-object" disabled>
+            </div>
+            <div class="form-group">
+              <label class="form-label">Field <span class="req">*</span></label>
+              <select class="form-ctrl" id="fs-field-name" onchange="syncFieldSecurityFieldLabel()">
+                <option value="">Loading fields...</option>
+              </select>
+              <p class="form-hint">Only fields added here are controlled by field-level security.</p>
+            </div>
+            <div class="form-group">
+              <label class="form-label">Display Label <span class="req">*</span></label>
+              <input class="form-ctrl" id="fs-field-label" placeholder="Annual Revenue">
+            </div>
+            <div class="form-group">
+              <label class="form-label">Reason</label>
+              <input class="form-ctrl" id="fs-field-reason" placeholder="Financial data">
+            </div>
+          </div>
+          <div class="modal-foot">
+            <button class="btn btn-ghost" onclick="closeFieldSecurityFieldModal()">Cancel</button>
+            <button class="btn btn-primary" id="fsFieldSaveBtn" onclick="saveFieldSecurityField()">Add Field</button>
           </div>
         </div>
       </div>
@@ -2827,6 +2869,7 @@
     let allUsers = [];
     let allProfiles = [];
     let allPermSets = [];
+    let fieldSecurityAvailableFields = [];
     let allAuditLogs = [];
     let editingUserId = null;
     let editingProfileId = null;
@@ -4896,7 +4939,7 @@ function deletePublicGroup(id, name) {
           $('fieldSecurityBody').innerHTML = `
         <div class="empty-state">
           <h3>No sensitive fields configured</h3>
-          <p>No sensitive fields are registered for ${sfObject}. Add them via Supabase SQL.</p>
+          <p>No fields are controlled for ${sfObject}. Use Add Field to start managing field access from the portal.</p>
         </div>`;
           return;
         }
@@ -4913,6 +4956,7 @@ function deletePublicGroup(id, name) {
             <th style="text-align:left">Reason</th>
             <th>Can View</th>
             <th>Can Edit</th>
+            <th>Actions</th>
           </tr>
         </thead>
         <tbody>
@@ -4932,6 +4976,11 @@ function deletePublicGroup(id, name) {
                   data-field="${esc(sf.field_name)}" data-col="can_edit"
                   ${perm.can_edit ? 'checked' : ''}
                   ${!perm.can_view ? 'disabled' : ''}>
+              </td>
+              <td style="text-align:center">
+                <button class="action-icon-btn delete" title="Remove field security field" onclick="deleteFieldSecurityField('${sf.id}')">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v5"/><path d="M14 11v5"/></svg>
+                </button>
               </td>
             </tr>`;
         }).join('')}
@@ -4955,6 +5004,84 @@ function deletePublicGroup(id, name) {
       } else {
         editCb.disabled = false;
       }
+    }
+
+    async function openFieldSecurityFieldModal() {
+      const sfObject = $('fsObjectSelect')?.value;
+      if (!sfObject) return toast('Select an object first', 'err');
+
+      $('fs-field-object').value = sfObject;
+      $('fs-field-name').innerHTML = '<option value="">Loading fields...</option>';
+      $('fs-field-label').value = '';
+      $('fs-field-reason').value = '';
+      $('fieldSecurityFieldModal').classList.add('open');
+
+      try {
+        const [availableRes, sensitiveRes] = await Promise.all([
+          api(`/api/portal/field-security/available-fields?object=${sfObject}`),
+          api(`/api/portal/field-security/sensitive?object=${sfObject}`)
+        ]);
+        const configured = new Set((sensitiveRes.fields || []).map(f => f.field_name));
+        fieldSecurityAvailableFields = (availableRes.fields || []).filter(f => !configured.has(f.name));
+        $('fs-field-name').innerHTML =
+          '<option value="">Select field...</option>' +
+          fieldSecurityAvailableFields
+            .map(f => `<option value="${esc(f.name)}">${esc(f.label)} (${esc(f.name)})</option>`)
+            .join('');
+      } catch (e) {
+        toast(e.message, 'err');
+        closeFieldSecurityFieldModal();
+      }
+    }
+
+    function closeFieldSecurityFieldModal() {
+      $('fieldSecurityFieldModal').classList.remove('open');
+      fieldSecurityAvailableFields = [];
+    }
+
+    function syncFieldSecurityFieldLabel() {
+      const fieldName = $('fs-field-name')?.value;
+      const field = fieldSecurityAvailableFields.find(f => f.name === fieldName);
+      if (field) $('fs-field-label').value = field.label || field.name;
+    }
+
+    async function saveFieldSecurityField() {
+      const sfObject = $('fs-field-object')?.value;
+      const fieldName = $('fs-field-name')?.value;
+      const label = $('fs-field-label')?.value.trim();
+      const reason = $('fs-field-reason')?.value.trim();
+      if (!sfObject || !fieldName || !label) return toast('Object, field, and label are required', 'err');
+
+      $('fsFieldSaveBtn').disabled = true;
+      try {
+        await api('/api/portal/field-security/sensitive', {
+          method: 'POST',
+          body: JSON.stringify({ sfObject, fieldName, label, reason })
+        });
+        closeFieldSecurityFieldModal();
+        toast('Field added to field security', 'ok');
+        await loadFieldSecurity();
+      } catch (e) {
+        toast(e.message, 'err');
+      } finally {
+        $('fsFieldSaveBtn').disabled = false;
+      }
+    }
+
+    async function deleteFieldSecurityField(id) {
+      const row = [...document.querySelectorAll('#fieldSecurityBody button[onclick^="deleteFieldSecurityField"]')]
+        .find(btn => btn.getAttribute('onclick')?.includes(id))
+        ?.closest('tr');
+      const label = row?.querySelector('td')?.textContent?.trim() || 'this field';
+      openConfirm(
+        `Remove ${label}?`,
+        'This removes the field from field security and clears all profile field permissions for it.',
+        async () => {
+          await api(`/api/portal/field-security/sensitive/${id}`, { method: 'DELETE' });
+          toast('Field removed from field security', 'ok');
+          await loadFieldSecurity();
+        }
+      );
     }
 
     async function saveFieldSecurity() {

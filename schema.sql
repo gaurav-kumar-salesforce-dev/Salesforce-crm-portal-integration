@@ -333,28 +333,13 @@ ALTER FUNCTION "public"."get_all_teams"() OWNER TO "postgres";
 CREATE OR REPLACE FUNCTION "public"."get_effective_field_permissions"("p_user_id" "uuid", "p_sf_object" "text") RETURNS TABLE("field_name" "text", "can_view" boolean, "can_edit" boolean)
     LANGUAGE "plpgsql"
     AS $$
-DECLARE
-  v_role TEXT;
 BEGIN
-  SELECT role INTO v_role FROM users WHERE id = p_user_id AND is_active = TRUE;
-
-  -- System administrator sees and edits everything
-  IF v_role = 'system_administrator' THEN
-    RETURN QUERY
-      SELECT sf.field_name, TRUE::BOOLEAN, TRUE::BOOLEAN
-      FROM sensitive_fields sf
-      WHERE sf.sf_object = p_sf_object;
-    RETURN;
-  END IF;
-
-  -- Merge profile + permission set field permissions using OR logic
   RETURN QUERY
   SELECT
     f.field_name,
-    BOOL_OR(f.can_view) AS can_view,
-    BOOL_OR(f.can_edit) AS can_edit
+    COALESCE(BOOL_OR(f.can_view), FALSE) AS can_view,
+    COALESCE(BOOL_OR(f.can_edit), FALSE) AS can_edit
   FROM (
-    -- From profile
     SELECT fp.field_name, fp.can_view, fp.can_edit
     FROM user_profile_assignments upa
     JOIN field_permissions fp
@@ -364,7 +349,6 @@ BEGIN
 
     UNION ALL
 
-    -- From permission sets
     SELECT fp.field_name, fp.can_view, fp.can_edit
     FROM user_permission_set_assignments upsa
     JOIN field_permissions fp
@@ -2435,7 +2419,6 @@ ALTER DEFAULT PRIVILEGES FOR ROLE "postgres" IN SCHEMA "public" GRANT ALL ON TAB
 ALTER DEFAULT PRIVILEGES FOR ROLE "postgres" IN SCHEMA "public" GRANT ALL ON TABLES TO "anon";
 ALTER DEFAULT PRIVILEGES FOR ROLE "postgres" IN SCHEMA "public" GRANT ALL ON TABLES TO "authenticated";
 ALTER DEFAULT PRIVILEGES FOR ROLE "postgres" IN SCHEMA "public" GRANT ALL ON TABLES TO "service_role";
-
 
 
 
