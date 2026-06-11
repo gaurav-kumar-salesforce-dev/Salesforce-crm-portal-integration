@@ -331,16 +331,167 @@ function normalizeProfileImage(value) {
 }
 // ── SHARING-AWARE RECORD VISIBILITY ──────────────────────────
 
+const PORTAL_OWNER_FIELD = 'Portal_Owner__c';
+const PORTAL_AUDIT_FIELDS = [
+  'Portal_Owner__c',
+  'Portal_Created_By__c',
+  'Portal_Last_Modified_By__c'
+];
+const roleVisibilityCache = new Map();
+
+function getRecordOwnerId(record = {}) {
+  return record?.[PORTAL_OWNER_FIELD] || null;
+}
+
+function roleVisibilityKey(viewerUserId, ownerUserId) {
+  return `${viewerUserId}:${ownerUserId}`;
+}
+
+async function canViewerAccessOwnerRole(viewerUserId, ownerUserId) {
+  if (!viewerUserId || !ownerUserId) return false;
+  if (viewerUserId === ownerUserId) return true;
+
+  const cacheKey = roleVisibilityKey(viewerUserId, ownerUserId);
+  if (roleVisibilityCache.has(cacheKey)) return roleVisibilityCache.get(cacheKey);
+
+  const { data: users, error: usersError } = await supabase
+    .from('users')
+    .select('id, org_role_id')
+    .in('id', [viewerUserId, ownerUserId])
+    .eq('is_active', true);
+
+  if (usersError) {
+    console.error('[record-visibility] user role lookup failed:', usersError.message);
+    roleVisibilityCache.set(cacheKey, false);
+    return false;
+  }
+
+  const viewer = (users || []).find(row => row.id === viewerUserId);
+  const owner = (users || []).find(row => row.id === ownerUserId);
+  const roleIds = [...new Set([viewer?.org_role_id, owner?.org_role_id].filter(Boolean))];
+  if (!viewer?.org_role_id || !owner?.org_role_id || !roleIds.length) {
+    roleVisibilityCache.set(cacheKey, false);
+    return false;
+  }
+
+  const { data: roles, error: rolesError } = await supabase
+    .from('org_roles')
+    .select('id, path')
+    .in('id', roleIds)
+    .eq('is_active', true);
+
+  if (rolesError) {
+    console.error('[record-visibility] org role path lookup failed:', rolesError.message);
+    roleVisibilityCache.set(cacheKey, false);
+    return false;
+  }
+
+  const viewerPath = (roles || []).find(role => role.id === viewer.org_role_id)?.path;
+  const ownerPath = (roles || []).find(role => role.id === owner.org_role_id)?.path;
+  let allowed = false;
+
+  if (viewer.org_role_id === owner.org_role_id) {
+    allowed = true;
+  } else if (viewerPath && ownerPath) {
+    allowed = ownerPath === viewerPath || ownerPath.startsWith(`${viewerPath}/`);
+  }
+
+  roleVisibilityCache.set(cacheKey, allowed);
+  return allowed;
+}
+
+async function evaluateRecordAccess(record, userId, userRole, sfObject, isSystemAdmin = false) {
+  if (isSystemAdmin) return { allowed: true, accessLevel: 'edit', via: 'admin' };
+
+  const ownerId = getRecordOwnerId(record);
+  if (!ownerId) {
+    return { allowed: false, accessLevel: 'none', via: 'missing_owner' };
+  }
+
+  if (ownerId === userId) {
+    return { allowed: true, accessLevel: 'edit', via: 'owner' };
+  }
+
+  if (await canViewerAccessOwnerRole(userId, ownerId)) {
+    return { allowed: true, accessLevel: 'edit', via: 'hierarchy' };
+  }
+
+  return { allowed: false, accessLevel: 'none', via: 'denied' };
+}
+
 async function canSeeRecord(record, userId, userRole, sfObject, isSystemAdmin = false) {
-  return true;
+  const access = await evaluateRecordAccess(record, userId, userRole, sfObject, isSystemAdmin);
+  return access.allowed;
 }
 
 async function applyRecordVisibility(records, userId, userRole, sfObject, isSystemAdmin = false) {
-  return records;
+  if (isSystemAdmin) return records;
+  const decisions = await Promise.all(
+    (records || []).map(async (record) => ({
+      record,
+      allowed: await canSeeRecord(record, userId, userRole, sfObject, isSystemAdmin)
+    }))
+  );
+  return decisions.filter(item => item.allowed).map(item => item.record);
 }
 
 async function canEditRecord(record, userId, userRole, sfObject, isSystemAdmin = false) {
-  return true;
+  const access = await evaluateRecordAccess(record, userId, userRole, sfObject, isSystemAdmin);
+  return access.allowed && access.accessLevel === 'edit';
+}
+
+async function filterSearchRecordsByVisibility(searchRecords = [], req) {
+  if (req.user?.isSystemAdmin) return searchRecords;
+
+  const grouped = searchRecords.reduce((acc, record) => {
+    const objectName = record?.attributes?.type;
+    if (!OBJECTS[objectName]) return acc;
+    if (!acc[objectName]) acc[objectName] = [];
+    acc[objectName].push(record);
+    return acc;
+  }, {});
+
+  const allowedByKey = new Set();
+  await Promise.all(Object.entries(grouped).map(async ([objectName, records]) => {
+    const perms = await getEffectivePermissions(req.user.id, objectName);
+    if (!perms?.can_read) return;
+
+    const ownedRecords = await hydrateRecordOwners(records, objectName);
+    const visibleRecords = await applyRecordVisibility(
+      ownedRecords,
+      req.user.id,
+      req.user.role,
+      objectName,
+      req.user.isSystemAdmin
+    );
+    visibleRecords.forEach(record => allowedByKey.add(`${objectName}:${record.Id}`));
+  }));
+
+  return searchRecords.filter(record => allowedByKey.has(`${record?.attributes?.type}:${record?.Id}`));
+}
+
+async function filterRelatedListsByVisibility(lists = [], req) {
+  if (req.user?.isSystemAdmin) return lists;
+
+  return Promise.all((lists || []).map(async (list) => {
+    if (!OBJECTS[list.objectName]) return list;
+
+    const perms = await getEffectivePermissions(req.user.id, list.objectName);
+    if (!perms?.can_read) {
+      return { ...list, records: [], totalSize: 0 };
+    }
+
+    const ownedRecords = await hydrateRecordOwners(list.records || [], list.objectName);
+    const records = await applyRecordVisibility(
+      ownedRecords,
+      req.user.id,
+      req.user.role,
+      list.objectName,
+      req.user.isSystemAdmin
+    );
+
+    return { ...list, records, totalSize: records.length };
+  }));
 }
 // GET org wide defaults
 app.get('/api/portal/owd', checkAuth, checkRole('admin'), async (req, res) => {
@@ -742,6 +893,8 @@ app.post('/api/portal/org-roles', checkAuth, checkRole('system_administrator'), 
       .select('id, name, api_name, level, path')
       .single();
 
+    roleVisibilityCache.clear();
+
     if (error) {
       if (error.code === '23505') {
         return res.status(409).json({
@@ -819,6 +972,8 @@ app.patch('/api/portal/org-roles/:id', checkAuth, checkRole('system_administrato
 
     if (error) throw error;
 
+    roleVisibilityCache.clear();
+
     await writeAuditLog({
       userId: req.user.id,
       userEmail: req.user.email,
@@ -877,6 +1032,8 @@ app.delete('/api/portal/org-roles/:id', checkAuth, checkRole('system_administrat
 
     if (error) throw error;
 
+    roleVisibilityCache.clear();
+
     res.json({ success: true });
   } catch(e) {
     console.error('DELETE org-roles error:', e.message);
@@ -894,6 +1051,8 @@ app.patch('/api/portal/users/:id/org-role', checkAuth, checkRole('admin'), async
       .eq('id', req.params.id);
 
     if (error) throw error;
+
+    roleVisibilityCache.clear();
 
     await writeAuditLog({
       userId:    req.user.id,
@@ -2012,7 +2171,41 @@ async function fieldsCsvForObject(objectName, overrideFields = '') {
   const availableFields = await getObjectFieldSet(objectName);
   const fields = splitConfiguredFields(overrideFields || cfg.fields)
     .filter(field => field === 'Id' || isSelectableField(field, availableFields));
+  PORTAL_AUDIT_FIELDS.forEach((field) => {
+    if (availableFields.has(field)) fields.push(field);
+  });
   return fields.length ? [...new Set(['Id', ...fields])].join(', ') : 'Id';
+}
+
+async function hydrateRecordOwners(records = [], objectName) {
+  if (!records.length) return records;
+  const availableFields = await getObjectFieldSet(objectName);
+  if (!availableFields.has(PORTAL_OWNER_FIELD)) return records;
+
+  const missingOwnerIds = [...new Set(
+    records
+      .filter(record => record?.Id && record[PORTAL_OWNER_FIELD] === undefined)
+      .map(record => record.Id)
+  )];
+  if (!missingOwnerIds.length) return records;
+
+  const ownerById = new Map();
+  for (let i = 0; i < missingOwnerIds.length; i += 100) {
+    const chunk = missingOwnerIds.slice(i, i + 100);
+    const ids = chunk.map(id => `'${escapeSOQL(id)}'`).join(', ');
+    const data = await sfGet('/query', {
+      q: `SELECT Id, ${PORTAL_OWNER_FIELD} FROM ${objectName} WHERE Id IN (${ids})`
+    });
+    (data.records || []).forEach(record => {
+      ownerById.set(record.Id, record[PORTAL_OWNER_FIELD] || null);
+    });
+  }
+
+  return records.map(record => (
+    record?.Id && ownerById.has(record.Id)
+      ? { ...record, [PORTAL_OWNER_FIELD]: ownerById.get(record.Id) }
+      : record
+  ));
 }
 
 function buildWhereClause(objectName, search, extraWhere, availableFields = null) {
@@ -3427,6 +3620,8 @@ app.post('/api/portal/users', checkAuth, checkRole('admin'), async (req, res) =>
       );
     }
 
+    roleVisibilityCache.clear();
+
     await writeAuditLog({
       userId: req.user.id,
       userEmail: req.user.email,
@@ -4407,6 +4602,16 @@ app.get('/api/lookup/:object', checkAuth, async (req, res) => {
   if (!OBJECTS[object]) return res.status(400).json({ error: `Unknown object: ${object}` });
 
   try {
+    if (!isFullAccessUser(req.user)) {
+      const perms = await getEffectivePermissions(req.user.id, object);
+      if (!perms?.can_read) {
+        return res.status(403).json({
+          error: permissionDeniedMessage(),
+          code: 'PERMISSION_DENIED'
+        });
+      }
+    }
+
     const availableFields = await getObjectFieldSet(object);
     const searchFields = OBJECTS[object].searchFields || ['Name'];
     const where = search
@@ -4423,8 +4628,15 @@ app.get('/api/lookup/:object', checkAuth, async (req, res) => {
     const data = await sfGet('/query', {
       q: `SELECT ${selectFields} FROM ${object} ${where === 'WHERE ' ? '' : where} ORDER BY ${OBJECTS[object].orderBy} LIMIT 25`
     });
+    const visibleRecords = await applyRecordVisibility(
+      data.records || [],
+      req.user.id,
+      req.user.role,
+      object,
+      req.user.isSystemAdmin
+    );
     res.json({
-      records: (data.records || []).map((record) => ({
+      records: visibleRecords.map((record) => ({
         ...record,
         Name: record.Name || record.Subject || record.CaseNumber || record.Id
       }))
@@ -4446,11 +4658,24 @@ app.get('/api/:object/listviews', checkAuth, async (req, res) => {
   }
 });
 
-app.get('/api/:object/count', async (req, res) => {
+app.get('/api/:object/count', checkAuth, async (req, res, next) => {
+  const { object } = req.params;
+  if (OBJECTS[object]) return checkPermission(object, 'can_read')(req, res, next);
+  next();
+}, async (req, res) => {
   const { object } = req.params;
   if (!OBJECTS[object]) return res.status(400).json({ error: `Unknown object: ${object}` });
 
   try {
+    if (!isFullAccessUser(req.user)) {
+      return res.json({
+        object,
+        totalSize: null,
+        filtered: true,
+        message: 'Counts are hidden when role hierarchy filtering is active.'
+      });
+    }
+
     const soql = await buildCountSOQL(object, req.query.search, req.query.where);
     const data = await sfGet(req.query.all === 'true' ? '/queryAll' : '/query', { q: soql });
     const countValue = Number(data.records?.[0]?.expr0 ?? data.totalSize ?? 0);
@@ -4465,7 +4690,7 @@ app.get('/api/:object/count', async (req, res) => {
   }
 });
 
-app.get('/api/debug/data-source', async (req, res) => {
+app.get('/api/debug/data-source', checkAuth, requireAdminPanel, async (req, res) => {
   try {
     const results = {};
     for (const objectName of ['Account', 'Contact', 'Opportunity', 'Case', 'Lead', 'Campaign']) {
@@ -4494,10 +4719,18 @@ app.get('/api/:object/listviews/:id/results', checkAuth, async (req, res, next) 
   try {
     if (req.query.cursor) {
       const data = await sfGet(queryMoreEndpoint(req.query.cursor), {}, { headers: QUERY_BATCH_HEADERS });
-      const records = (data.records || []).map(record => applyFieldSecurity(record, req.fieldPerms));
+      const ownedRecords = await hydrateRecordOwners(data.records || [], object);
+      const visibleRecords = await applyRecordVisibility(
+        ownedRecords,
+        req.user.id,
+        req.user.role,
+        object,
+        req.user.isSystemAdmin
+      );
+      const records = visibleRecords.map(record => applyFieldSecurity(record, req.fieldPerms));
       return res.json({
         records,
-        totalSize: data.totalSize || 0,
+        totalSize: req.user.isSystemAdmin ? (data.totalSize || 0) : records.length,
         done: Boolean(data.done),
         nextRecordsUrl: data.nextRecordsUrl || null,
         hiddenFields: [...(req.fieldPerms?.hiddenFields || [])]
@@ -4506,14 +4739,22 @@ app.get('/api/:object/listviews/:id/results', checkAuth, async (req, res, next) 
 
     const detail = await sfGet(`/sobjects/${object}/listviews/${id}/describe`);
     const data = await sfGet('/query', { q: detail.query }, { headers: QUERY_BATCH_HEADERS });
-    const records = (data.records || []).map(record => applyFieldSecurity(record, req.fieldPerms));
+    const ownedRecords = await hydrateRecordOwners(data.records || [], object);
+    const visibleRecords = await applyRecordVisibility(
+      ownedRecords,
+      req.user.id,
+      req.user.role,
+      object,
+      req.user.isSystemAdmin
+    );
+    const records = visibleRecords.map(record => applyFieldSecurity(record, req.fieldPerms));
     const hiddenFields = new Set(req.fieldPerms?.hiddenFields || []);
     res.json({
       label: detail.label,
       columns: (detail.columns || []).filter(column => !hiddenFields.has(column.fieldNameOrPath)),
       query: detail.query,
       records,
-      totalSize: data.totalSize || 0,
+      totalSize: req.user.isSystemAdmin ? (data.totalSize || 0) : records.length,
       done: Boolean(data.done),
       nextRecordsUrl: data.nextRecordsUrl || null,
       hiddenFields: [...hiddenFields]
@@ -4578,7 +4819,8 @@ app.get('/api/search/global', checkAuth, async (req, res) => {
 
   try {
     const data = await sfGet('/search', { q: sosl });
-    res.json(data);
+    const searchRecords = await filterSearchRecordsByVisibility(data.searchRecords || [], req);
+    res.json({ ...data, searchRecords });
   } catch (err) {
     handleSFError(err, res, 'Global search');
   }
@@ -4707,7 +4949,18 @@ app.get('/api/:object/:id/related', checkAuth, async (req, res, next) => {
   if (!OBJECTS[object]) return res.status(400).json({ error: `Unknown object: ${object}` });
 
   try {
-    const lists = await getRelatedListsForRecord(object, id);
+    const record = await sfGet(`/sobjects/${object}/${id}?fields=${PORTAL_OWNER_FIELD}`);
+    if (!(await canSeeRecord(record, req.user.id, req.user.role, object, req.user.isSystemAdmin))) {
+      return res.status(403).json({
+        error: 'You do not have access to this record.',
+        code: 'RECORD_ACCESS_DENIED'
+      });
+    }
+
+    const lists = await filterRelatedListsByVisibility(
+      await getRelatedListsForRecord(object, id),
+      req
+    );
     res.json({ object, id, lists });
   } catch (err) {
     handleSFError(err, res, `Related lists ${object}/${id}`);
@@ -5222,6 +5475,33 @@ app.post('/api/bulk/:object/:operation', checkAuth, async (req, res, next) => {
         return { Id, ...applyFieldWriteSecurity(fields, req.fieldPerms) };
       });
     }
+
+    if (!isFullAccessUser(req.user) && ['update', 'upsert', 'delete'].includes(operation)) {
+      const rows = Array.isArray(records) ? records : [];
+      const ids = rows.map(record => record?.Id).filter(Boolean);
+      if (!rows.length || ids.length !== rows.length) {
+        return res.status(403).json({
+          error: 'Bulk update, upsert, and delete require record Id values for record-level security checks.',
+          code: 'RECORD_ACCESS_CHECK_REQUIRED'
+        });
+      }
+
+      const ownedRecords = await hydrateRecordOwners(ids.map(Id => ({ Id })), object);
+      const denied = [];
+      for (const record of ownedRecords) {
+        if (!(await canEditRecord(record, req.user.id, req.user.role, object, req.user.isSystemAdmin))) {
+          denied.push(record.Id);
+        }
+      }
+      if (denied.length) {
+        return res.status(403).json({
+          error: permissionDeniedMessage(),
+          code: operation === 'delete' ? 'RECORD_DELETE_DENIED' : 'RECORD_EDIT_DENIED',
+          deniedIds: denied
+        });
+      }
+    }
+
     const result = await runBulkIngest(object, operation, records, {
       externalIdFieldName: req.body?.externalIdFieldName,
       wait: req.body?.wait,
@@ -5272,13 +5552,21 @@ app.get('/api/:object', checkAuth,
           { headers: QUERY_BATCH_HEADERS }
         );
 
-        const records = (data.records || []).map(record =>
+        const ownedRecords = await hydrateRecordOwners(data.records || [], object);
+        const visibleRecords = await applyRecordVisibility(
+          ownedRecords,
+          req.user.id,
+          req.user.role,
+          object,
+          req.user.isSystemAdmin
+        );
+        const records = visibleRecords.map(record =>
           applyFieldSecurity(record, req.fieldPerms)
         );
 
         return res.json({
           records,
-          totalSize: data.totalSize || 0,
+          totalSize: req.user.isSystemAdmin ? (data.totalSize || 0) : records.length,
           done: Boolean(data.done),
           nextRecordsUrl: data.nextRecordsUrl || null,
           hiddenFields: [...(req.fieldPerms?.hiddenFields || [])]
@@ -5298,23 +5586,24 @@ app.get('/api/:object', checkAuth,
         { headers: QUERY_BATCH_HEADERS }
       );
 
-      const records = (data.records || []).map(record =>
-        applyFieldSecurity(record, req.fieldPerms)
-      );
+      const ownedRecords = await hydrateRecordOwners(data.records || [], object);
 
       // Apply record visibility
       const visibleRecords = await applyRecordVisibility(
-        records,
+        ownedRecords,
         req.user.id,
         req.user.role,
         object,
         req.user.isSystemAdmin
       );
+      const records = visibleRecords.map(record =>
+        applyFieldSecurity(record, req.fieldPerms)
+      );
 
       res.json({
         ...data,
-        records: visibleRecords,
-        totalSize: data.totalSize || 0,
+        records,
+        totalSize: req.user.isSystemAdmin ? (data.totalSize || 0) : records.length,
         done: Boolean(data.done),
         nextRecordsUrl: data.nextRecordsUrl || null,
         hiddenFields: [...(req.fieldPerms?.hiddenFields || [])]
@@ -5484,6 +5773,28 @@ app.patch('/api/:object', checkAuth, async (req, res, next) => {
       return res.status(400).json({ error: 'Update requires records with Id values' });
     }
 
+    if (!isFullAccessUser(req.user)) {
+      const ids = records.map(record => record?.Id).filter(Boolean);
+      if (ids.length !== records.length) {
+        return res.status(400).json({ error: 'Update requires Id on every record' });
+      }
+
+      const ownedRecords = await hydrateRecordOwners(ids.map(Id => ({ Id })), object);
+      const denied = [];
+      for (const record of ownedRecords) {
+        if (!(await canEditRecord(record, req.user.id, req.user.role, object, req.user.isSystemAdmin))) {
+          denied.push(record.Id);
+        }
+      }
+      if (denied.length) {
+        return res.status(403).json({
+          error: permissionDeniedMessage(),
+          code: 'RECORD_EDIT_DENIED',
+          deniedIds: denied
+        });
+      }
+    }
+
     if (records.length >= BULK_AUTO_THRESHOLD || req.query.bulk === 'true' || req.body?.bulk === true) {
       const securedRecords = records.map(record => {
         const clean = flattenRecord(record);
@@ -5629,6 +5940,23 @@ app.delete('/api/:object', checkAuth, async (req, res, next) => {
     const records = [...new Set(ids.map(String).filter(Boolean))].map((Id) => ({ Id }));
     if (!records.length) return res.status(400).json({ error: 'Delete requires ids or records with Id values' });
 
+    if (!isFullAccessUser(req.user)) {
+      const ownedRecords = await hydrateRecordOwners(records, object);
+      const denied = [];
+      for (const record of ownedRecords) {
+        if (!(await canEditRecord(record, req.user.id, req.user.role, object, req.user.isSystemAdmin))) {
+          denied.push(record.Id);
+        }
+      }
+      if (denied.length) {
+        return res.status(403).json({
+          error: permissionDeniedMessage(),
+          code: 'RECORD_DELETE_DENIED',
+          deniedIds: denied
+        });
+      }
+    }
+
     if (records.length >= BULK_AUTO_THRESHOLD || req.query.bulk === 'true' || req.body?.bulk === true) {
       const result = await runBulkIngest(object, 'delete', records, {
         wait: req.body?.wait,
@@ -5662,6 +5990,17 @@ app.delete('/api/:object/:id', checkAuth, async (req, res, next) => {
   if (!OBJECTS[object]) return res.status(400).json({ error: `Unknown object: ${object}` });
 
   try {
+    if (!isFullAccessUser(req.user)) {
+      const [record] = await hydrateRecordOwners([{ Id: id }], object);
+      const allowed = await canEditRecord(record, req.user.id, req.user.role, object, req.user.isSystemAdmin);
+      if (!allowed) {
+        return res.status(403).json({
+          error: permissionDeniedMessage(),
+          code: 'RECORD_DELETE_DENIED'
+        });
+      }
+    }
+
     await sfDelete(`/sobjects/${object}/${id}`);
     res.json({ success: true });
   } catch (err) {
@@ -5692,7 +6031,8 @@ app.get('/api/search/global', checkAuth, async (req, res) => {
 
   try {
     const data = await sfGet('/search', { q: sosl });
-    res.json(data);
+    const searchRecords = await filterSearchRecordsByVisibility(data.searchRecords || [], req);
+    res.json({ ...data, searchRecords });
   } catch (err) {
     handleSFError(err, res, 'Global search');
   }
