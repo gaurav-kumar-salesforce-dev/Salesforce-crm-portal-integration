@@ -1063,6 +1063,7 @@ async function completePortalLogin(data) {
   setStoredPerms(data.permissions || {});
   window.portalUser = data.user;
   applyAllPermissionGuards();
+  currentObject = firstReadableNavObject() || currentObject;
 
   hideLoginPage();
 
@@ -1201,7 +1202,50 @@ function canDo(sfObject, action) {
   return Boolean(perms[sfObject]?.[action]);
 }
 
+function canReadObject(sfObject) {
+  return canDo(sfObject, "can_read");
+}
+
+function readableObjectNames(objectNames) {
+  return (objectNames || []).filter((objectName) => {
+    if (objectName === "User") return true;
+    return OBJECT_META[objectName] && canReadObject(objectName);
+  });
+}
+
+function firstReadableNavObject() {
+  return ["Account", "Contact", "Opportunity", "Case", "Lead", "Campaign"].find(
+    (objectName) => canReadObject(objectName),
+  );
+}
+
+function showNoObjectAccess() {
+  $("pageIcon").innerHTML = "";
+  $("pageTitle").textContent = "No CRM Access";
+  $("pageSub").textContent = "Your profile does not have read access to any CRM object.";
+  $("stateLoading").style.display = "none";
+  $("tableCard").style.display = "none";
+  if ($("kanbanCard")) $("kanbanCard").style.display = "none";
+  $("stateError").style.display = "flex";
+  $("errMsg").textContent = "Access denied";
+  $("errDetail").textContent =
+    "Ask your administrator to grant object read permission to your profile or permission set.";
+}
+
+function applyObjectNavGuards() {
+  document.querySelectorAll(".nav-item[data-obj]").forEach((item) => {
+    const objectName = item.dataset.obj;
+    const canRead = canReadObject(objectName);
+    item.style.display = canRead ? "" : "none";
+    item.setAttribute("aria-hidden", canRead ? "false" : "true");
+    item.classList.toggle("active", canRead && objectName === currentObject);
+    const badge = item.querySelector(".nav-badge");
+    if (badge && !canRead) badge.textContent = "-";
+  });
+}
+
 function applyAllPermissionGuards() {
+  applyObjectNavGuards();
   applyPermissionGuards(currentObject);
 }
 
@@ -1833,6 +1877,11 @@ function showAuthRequired(message) {
 }
 
 async function loadListViews() {
+  if (!canReadObject(currentObject)) {
+    sfListViews = [];
+    renderListViewSelect();
+    return;
+  }
   try {
     const data = await api(`/api/${currentObject}/listviews`);
     sfListViews = data.listviews || [];
@@ -1868,6 +1917,16 @@ async function handleListViewChange(value) {
 async function loadData() {
   const search = $("objSearch")?.value || "";
   const meta = OBJECT_META[currentObject];
+  if (!meta || !canReadObject(currentObject)) {
+    currentRecords = [];
+    totalRecords = 0;
+    nextRecordsUrl = null;
+    currentColumns = [];
+    currentHiddenFields = new Set();
+    applyObjectNavGuards();
+    showNoObjectAccess();
+    return;
+  }
   currentColumns = meta.columns.slice();
   currentHiddenFields = new Set();
 
@@ -2550,6 +2609,10 @@ function applySort() {
 }
 
 async function switchObject(objectName) {
+  if (!canReadObject(objectName)) {
+    toast(`You do not have access to ${OBJECT_META[objectName]?.title || objectName}.`, "err");
+    return;
+  }
   if (viewingDetail) restoreListContent(false);
   currentObject = objectName;
   currentRecords = [];
@@ -2666,7 +2729,11 @@ async function handleGlobalSearch(value) {
 
 function renderGlobalResults(records) {
   const results = $("globalResults");
-  const grouped = records.reduce((acc, record) => {
+  const allowedRecords = (records || []).filter((record) => {
+    const type = record.attributes?.type || objectFromId(record.Id);
+    return type === "User" || canReadObject(type);
+  });
+  const grouped = allowedRecords.reduce((acc, record) => {
     const type = record.attributes?.type || "Record";
     acc[type] = acc[type] || [];
     acc[type].push(record);
@@ -3205,6 +3272,10 @@ function closeModal() {
 
 async function openRecordDetail(objectName, id) {
   if (!id || !OBJECT_META[objectName]) return;
+  if (!canReadObject(objectName)) {
+    toast(`You do not have access to ${OBJECT_META[objectName]?.title || objectName}.`, "err");
+    return;
+  }
 
   try {
     $("content").innerHTML = `
@@ -3404,7 +3475,8 @@ function getSummaryFields(objectName) {
 
 function renderRelatedPanel(objectName) {
   const configs = getRelatedListConfigs(objectName);
-  if (!configs.length && objectName !== "Campaign") {
+  const canShowCampaignMembers = objectName === "Campaign" && canReadObject("Campaign");
+  if (!configs.length && !canShowCampaignMembers) {
     return `
       <div class="related-panel no-margin">
         <div class="related-head">
@@ -3423,12 +3495,12 @@ function renderRelatedPanel(objectName) {
 
   return `
     ${configs.map((config, index) => renderRelatedListShell(config, index === 0)).join("")}
-    ${objectName === "Campaign" ? renderCampaignMembersShell(!configs.length) : ""}
+    ${canShowCampaignMembers ? renderCampaignMembersShell(!configs.length) : ""}
   `;
 }
 
 function getRelatedListConfigs(objectName) {
-  return (
+  const configs =
     {
       Account: [
         {
@@ -3491,8 +3563,8 @@ function getRelatedListConfigs(objectName) {
           parentLookup: "CampaignId",
         },
       ],
-    }[objectName] || []
-  );
+    }[objectName] || [];
+  return configs.filter((config) => canReadObject(config.objectName));
 }
 
 function renderRelatedListShell(config, noMargin = false) {
@@ -3504,7 +3576,7 @@ function renderRelatedListShell(config, noMargin = false) {
           <p>${escapeHtml(relatedListSubtitle(config.objectName))}</p>
         </div>
         <div class="related-actions">
-          <button class="btn btn-primary btn-related-new" onclick="openRelatedCreate('${escapeJs(config.key)}')">
+          <button class="btn btn-primary btn-related-new" style="${canDo(config.objectName, "can_create") ? "" : "display:none"}" onclick="openRelatedCreate('${escapeJs(config.key)}')">
             <span aria-hidden="true">+</span>
             New
           </button>
@@ -4219,6 +4291,7 @@ function renderCampaignMembersShell(noMargin = false) {
 }
 
 async function loadCampaignMembers(campaignId) {
+  if (!canReadObject("Campaign")) return;
   const table = $("campaignMembersTable");
   if (!table) return;
   table.innerHTML =
@@ -4396,12 +4469,20 @@ function activityLookupControl(
   objects,
   placeholder = "Search...",
 ) {
+  const allowedObjects = readableObjectNames(objects);
+  if (!allowedObjects.length) return "";
   const state = activityLookupState[kind] || {
-    object: objects[0],
+    object: allowedObjects[0],
     id: "",
     label: "",
   };
-  const options = objects
+  if (!allowedObjects.includes(state.object)) {
+    state.object = allowedObjects[0];
+    state.id = "";
+    state.label = "";
+    activityLookupState[kind] = state;
+  }
+  const options = allowedObjects
     .map(
       (objectName) => `
     <option value="${escapeHtml(objectName)}" ${state.object === objectName ? "selected" : ""}>${escapeHtml(OBJECT_META[objectName]?.title || objectName)}</option>
@@ -4438,6 +4519,7 @@ function activityLookupControl(
 }
 
 function setActivityLookupObject(kind, objectName) {
+  if (objectName !== "User" && !canReadObject(objectName)) return;
   activityLookupState[kind] = { object: objectName, id: "", label: "" };
   const results = $(`activityLookupResults-${kind}`);
   if (results) results.classList.remove("open");
@@ -4457,6 +4539,7 @@ async function searchActivityLookup(kind, value) {
   const results = $(`activityLookupResults-${kind}`);
   const state = activityLookupState[kind];
   if (!results || !state?.object) return;
+  if (state.object !== "User" && !canReadObject(state.object)) return;
   if (!String(value || "").trim()) {
     results.classList.remove("open");
     results.innerHTML = "";
@@ -4494,6 +4577,7 @@ async function searchActivityLookup(kind, value) {
 }
 
 function selectActivityLookup(kind, objectName, id, label) {
+  if (objectName !== "User" && !canReadObject(objectName)) return;
   activityLookupState[kind] = { object: objectName, id, label };
   rerenderActivityFormPreservingFields();
 }
@@ -4562,7 +4646,7 @@ function initializeEmailComposer() {
     mergeMenuOpen: false,
   };
   loadEmailFromOptions();
-  loadEmailTemplates();
+  if (canReadObject("Campaign")) loadEmailTemplates();
 }
 
 async function loadEmailFromOptions() {
@@ -5686,6 +5770,7 @@ function toggleAllCampaignMembers(checked) {
 
 async function openCampaignMemberModal(objectName) {
   if (!activeCampaign?.Id) return;
+  if (!canReadObject("Campaign") || !canReadObject(objectName)) return;
   memberCandidateObject = objectName;
   memberCandidateSelection = new Set();
   $("campaignMemberTitle").textContent = `Add ${objectName}s to Campaign`;
@@ -5805,6 +5890,7 @@ async function addSelectedCampaignMembers() {
 
 async function openCampaignEmailModal() {
   if (!activeCampaign?.Id) return;
+  if (!canReadObject("Campaign")) return;
   if (!campaignMemberSelection.size) {
     toast("Select campaign members with email first", "err");
     return;
@@ -6282,6 +6368,8 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   // Token exists — load cached perms immediately (so UI guards work instantly)
   window.userPerms = getStoredPerms();
+  currentObject = firstReadableNavObject() || currentObject;
+  applyAllPermissionGuards();
 
   // Then boot the app normally
   loadOrgSettings()
@@ -6294,6 +6382,7 @@ document.addEventListener("DOMContentLoaded", async () => {
           if (me) {
             setStoredPerms(me.permissions || {});
             window.portalUser = me;
+            currentObject = firstReadableNavObject() || currentObject;
             applyAllPermissionGuards();
           }
         } catch {
