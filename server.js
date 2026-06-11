@@ -338,6 +338,7 @@ const PORTAL_AUDIT_FIELDS = [
   'Portal_Last_Modified_By__c'
 ];
 const roleVisibilityCache = new Map();
+const owdCache = new Map();
 
 function getRecordOwnerId(record = {}) {
   return record?.[PORTAL_OWNER_FIELD] || null;
@@ -345,6 +346,26 @@ function getRecordOwnerId(record = {}) {
 
 function roleVisibilityKey(viewerUserId, ownerUserId) {
   return `${viewerUserId}:${ownerUserId}`;
+}
+
+async function getOrgWideDefaultAccess(sfObject) {
+  if (owdCache.has(sfObject)) return owdCache.get(sfObject);
+
+  const { data, error } = await supabase
+    .from('org_wide_defaults')
+    .select('access_level')
+    .eq('sf_object', sfObject)
+    .maybeSingle();
+
+  if (error) {
+    console.error('[record-visibility] OWD lookup failed:', error.message);
+    owdCache.set(sfObject, 'private');
+    return 'private';
+  }
+
+  const accessLevel = data?.access_level || 'private';
+  owdCache.set(sfObject, accessLevel);
+  return accessLevel;
 }
 
 async function canViewerAccessOwnerRole(viewerUserId, ownerUserId) {
@@ -404,7 +425,16 @@ async function evaluateRecordAccess(record, userId, userRole, sfObject, isSystem
   if (isSystemAdmin) return { allowed: true, accessLevel: 'edit', via: 'admin' };
 
   const ownerId = getRecordOwnerId(record);
+  const owdAccess = await getOrgWideDefaultAccess(sfObject);
+
+  if (owdAccess === 'public_read_write') {
+    return { allowed: true, accessLevel: 'edit', via: 'owd' };
+  }
+
   if (!ownerId) {
+    if (owdAccess === 'public_read') {
+      return { allowed: true, accessLevel: 'read', via: 'owd' };
+    }
     return { allowed: false, accessLevel: 'none', via: 'missing_owner' };
   }
 
@@ -414,6 +444,10 @@ async function evaluateRecordAccess(record, userId, userRole, sfObject, isSystem
 
   if (await canViewerAccessOwnerRole(userId, ownerId)) {
     return { allowed: true, accessLevel: 'edit', via: 'hierarchy' };
+  }
+
+  if (owdAccess === 'public_read') {
+    return { allowed: true, accessLevel: 'read', via: 'owd' };
   }
 
   return { allowed: false, accessLevel: 'none', via: 'denied' };
@@ -501,7 +535,15 @@ app.get('/api/portal/owd', checkAuth, checkRole('admin'), async (req, res) => {
       .select('sf_object, access_level, description')
       .order('sf_object');
     if (error) throw error;
-    res.json({ defaults: data || [] });
+    const existingByObject = new Map((data || []).map(row => [row.sf_object, row]));
+    const defaults = Object.keys(OBJECTS)
+      .filter(objectName => !['Task', 'Event', 'EmailMessage', 'Pricebook2', 'User'].includes(objectName))
+      .map(objectName => existingByObject.get(objectName) || {
+        sf_object: objectName,
+        access_level: 'private',
+        description: null
+      });
+    res.json({ defaults });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
@@ -515,9 +557,14 @@ app.patch('/api/portal/owd', checkAuth, checkRole('system_administrator'), async
   try {
     const { error } = await supabase
       .from('org_wide_defaults')
-      .update({ access_level: accessLevel, updated_at: new Date().toISOString(), updated_by: req.user.id })
-      .eq('sf_object', sfObject);
+      .upsert({
+        sf_object: sfObject,
+        access_level: accessLevel,
+        updated_at: new Date().toISOString(),
+        updated_by: req.user.id
+      }, { onConflict: 'sf_object' });
     if (error) throw error;
+    owdCache.delete(sfObject);
     await writeAuditLog({
       userId: req.user.id, userEmail: req.user.email,
       userRole: req.user.role, action: 'edit',
@@ -4667,7 +4714,8 @@ app.get('/api/:object/count', checkAuth, async (req, res, next) => {
   if (!OBJECTS[object]) return res.status(400).json({ error: `Unknown object: ${object}` });
 
   try {
-    if (!isFullAccessUser(req.user)) {
+    const owdAccess = await getOrgWideDefaultAccess(object);
+    if (!isFullAccessUser(req.user) && !['public_read', 'public_read_write'].includes(owdAccess)) {
       return res.json({
         object,
         totalSize: null,
@@ -4728,9 +4776,11 @@ app.get('/api/:object/listviews/:id/results', checkAuth, async (req, res, next) 
         req.user.isSystemAdmin
       );
       const records = visibleRecords.map(record => applyFieldSecurity(record, req.fieldPerms));
+      const owdAccess = await getOrgWideDefaultAccess(object);
+      const canUseSalesforceTotal = req.user.isSystemAdmin || ['public_read', 'public_read_write'].includes(owdAccess);
       return res.json({
         records,
-        totalSize: req.user.isSystemAdmin ? (data.totalSize || 0) : records.length,
+        totalSize: canUseSalesforceTotal ? (data.totalSize || 0) : records.length,
         done: Boolean(data.done),
         nextRecordsUrl: data.nextRecordsUrl || null,
         hiddenFields: [...(req.fieldPerms?.hiddenFields || [])]
@@ -4749,12 +4799,14 @@ app.get('/api/:object/listviews/:id/results', checkAuth, async (req, res, next) 
     );
     const records = visibleRecords.map(record => applyFieldSecurity(record, req.fieldPerms));
     const hiddenFields = new Set(req.fieldPerms?.hiddenFields || []);
+    const owdAccess = await getOrgWideDefaultAccess(object);
+    const canUseSalesforceTotal = req.user.isSystemAdmin || ['public_read', 'public_read_write'].includes(owdAccess);
     res.json({
       label: detail.label,
       columns: (detail.columns || []).filter(column => !hiddenFields.has(column.fieldNameOrPath)),
       query: detail.query,
       records,
-      totalSize: req.user.isSystemAdmin ? (data.totalSize || 0) : records.length,
+      totalSize: canUseSalesforceTotal ? (data.totalSize || 0) : records.length,
       done: Boolean(data.done),
       nextRecordsUrl: data.nextRecordsUrl || null,
       hiddenFields: [...hiddenFields]
@@ -5563,10 +5615,12 @@ app.get('/api/:object', checkAuth,
         const records = visibleRecords.map(record =>
           applyFieldSecurity(record, req.fieldPerms)
         );
+        const owdAccess = await getOrgWideDefaultAccess(object);
+        const canUseSalesforceTotal = req.user.isSystemAdmin || ['public_read', 'public_read_write'].includes(owdAccess);
 
         return res.json({
           records,
-          totalSize: req.user.isSystemAdmin ? (data.totalSize || 0) : records.length,
+          totalSize: canUseSalesforceTotal ? (data.totalSize || 0) : records.length,
           done: Boolean(data.done),
           nextRecordsUrl: data.nextRecordsUrl || null,
           hiddenFields: [...(req.fieldPerms?.hiddenFields || [])]
@@ -5599,11 +5653,13 @@ app.get('/api/:object', checkAuth,
       const records = visibleRecords.map(record =>
         applyFieldSecurity(record, req.fieldPerms)
       );
+      const owdAccess = await getOrgWideDefaultAccess(object);
+      const canUseSalesforceTotal = req.user.isSystemAdmin || ['public_read', 'public_read_write'].includes(owdAccess);
 
       res.json({
         ...data,
         records,
-        totalSize: req.user.isSystemAdmin ? (data.totalSize || 0) : records.length,
+        totalSize: canUseSalesforceTotal ? (data.totalSize || 0) : records.length,
         done: Boolean(data.done),
         nextRecordsUrl: data.nextRecordsUrl || null,
         hiddenFields: [...(req.fieldPerms?.hiddenFields || [])]

@@ -103,9 +103,6 @@ BEGIN
   IF v_owd_level = 'public_read_write' THEN
     RETURN QUERY SELECT TRUE, 'edit'::TEXT, 'owd'::TEXT; RETURN;
   END IF;
-  IF v_owd_level = 'public_read' THEN
-    RETURN QUERY SELECT TRUE, 'read'::TEXT, 'owd'::TEXT; RETURN;
-  END IF;
 
   -- 4. Org role hierarchy check (path-based — works for any custom org)
   IF p_owner_id IS NOT NULL AND p_owner_id != '' THEN
@@ -118,6 +115,10 @@ BEGIN
       -- owner ID may not be a valid UUID (old records) — skip
       NULL;
     END;
+  END IF;
+
+  IF v_owd_level = 'public_read' THEN
+    RETURN QUERY SELECT TRUE, 'read'::TEXT, 'owd'::TEXT; RETURN;
   END IF;
 
   -- 5. Sharing rules — based on system role (admin/manager/etc)
@@ -202,9 +203,6 @@ BEGIN
   IF v_owd_level = 'public_read_write' THEN
     RETURN QUERY SELECT TRUE, 'edit'::TEXT, 'owd'::TEXT; RETURN;
   END IF;
-  IF v_owd_level = 'public_read' THEN
-    RETURN QUERY SELECT TRUE, 'read'::TEXT, 'owd'::TEXT; RETURN;
-  END IF;
 
   IF p_owner_id IS NOT NULL AND p_owner_id <> '' THEN
     BEGIN
@@ -217,6 +215,10 @@ BEGIN
     EXCEPTION WHEN OTHERS THEN
       NULL;
     END;
+  END IF;
+
+  IF v_owd_level = 'public_read' THEN
+    RETURN QUERY SELECT TRUE, 'read'::TEXT, 'owd'::TEXT; RETURN;
   END IF;
 
   SELECT role INTO v_viewer_role FROM public.users WHERE id = p_user_id;
@@ -2526,8 +2528,6 @@ ALTER DEFAULT PRIVILEGES FOR ROLE "postgres" IN SCHEMA "public" GRANT ALL ON TAB
 ALTER DEFAULT PRIVILEGES FOR ROLE "postgres" IN SCHEMA "public" GRANT ALL ON TABLES TO "anon";
 ALTER DEFAULT PRIVILEGES FOR ROLE "postgres" IN SCHEMA "public" GRANT ALL ON TABLES TO "authenticated";
 ALTER DEFAULT PRIVILEGES FOR ROLE "postgres" IN SCHEMA "public" GRANT ALL ON TABLES TO "service_role";
-
-
 
 
 

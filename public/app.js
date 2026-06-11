@@ -5114,7 +5114,13 @@ function rerenderActivityFormPreservingFields() {
 
 function ensureActivityModal() {
   let overlay = $("activityOverlay");
-  if (overlay) return overlay;
+  const hasCompleteModal =
+    overlay?.querySelector("#activityModalIcon") &&
+    overlay?.querySelector("#activityModalTitle") &&
+    overlay?.querySelector("#activityModalBody") &&
+    overlay?.querySelector("#activitySaveBtn");
+  if (overlay && hasCompleteModal) return overlay;
+  if (overlay) overlay.remove();
 
   overlay = document.createElement("div");
   overlay.className = "overlay activity-overlay";
@@ -5152,15 +5158,18 @@ function ensureActivityModal() {
 function openActivityModal(type) {
   if (!detailRecordState?.id) return;
   const overlay = ensureActivityModal();
+  const titleEl = overlay.querySelector("#activityModalTitle");
+  const iconEl = overlay.querySelector("#activityModalIcon");
+  const saveBtn = overlay.querySelector("#activitySaveBtn");
+  const bodyEl = overlay.querySelector("#activityModalBody");
   overlay.dataset.type = type;
   initializeActivityLookups();
   if (type === "email") initializeEmailComposer();
-  $("activityModalTitle").textContent = activityModalTitle(type);
-  $("activityModalIcon").className =
-    `activity-modal-icon ${activityIconClass(type)}`;
-  $("activityModalIcon").innerHTML = activityIconImage(type);
-  $("activitySaveBtn").textContent = type === "email" ? "Send" : "Save";
-  $("activityModalBody").innerHTML = renderActivityForm(type);
+  titleEl.textContent = activityModalTitle(type);
+  iconEl.className = `activity-modal-icon ${activityIconClass(type)}`;
+  iconEl.innerHTML = activityIconImage(type);
+  saveBtn.textContent = type === "email" ? "Send" : "Save";
+  bodyEl.innerHTML = renderActivityForm(type);
   if (type === "email") {
     renderEmailFromOptions();
     renderActivityFiles();
@@ -5168,7 +5177,7 @@ function openActivityModal(type) {
   overlay.classList.add("open");
   setTimeout(
     () =>
-      $("activityModalBody").querySelector("input, textarea, select")?.focus(),
+      bodyEl.querySelector("input, textarea, select")?.focus(),
     0,
   );
 }

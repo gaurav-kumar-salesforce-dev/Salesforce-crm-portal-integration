@@ -1,38 +1,6 @@
--- Salesforce-style role hierarchy record access patch.
--- Run this in Supabase after the profile, permission set, and FLS schema is present.
-
-CREATE OR REPLACE FUNCTION public.is_above_in_hierarchy(
-  p_viewer_user_id UUID,
-  p_owner_user_id UUID
-)
-RETURNS BOOLEAN
-LANGUAGE plpgsql
-AS $$
-DECLARE
-  v_viewer_path TEXT;
-  v_owner_path  TEXT;
-BEGIN
-  SELECT r.path INTO v_viewer_path
-  FROM public.users u
-  JOIN public.org_roles r ON r.id = u.org_role_id
-  WHERE u.id = p_viewer_user_id
-    AND u.is_active = TRUE
-    AND r.is_active = TRUE;
-
-  SELECT r.path INTO v_owner_path
-  FROM public.users u
-  JOIN public.org_roles r ON r.id = u.org_role_id
-  WHERE u.id = p_owner_user_id
-    AND u.is_active = TRUE
-    AND r.is_active = TRUE;
-
-  IF v_viewer_path IS NULL OR v_owner_path IS NULL THEN
-    RETURN FALSE;
-  END IF;
-
-  RETURN v_owner_path = v_viewer_path OR v_owner_path LIKE v_viewer_path || '/%';
-END;
-$$;
+-- Align OWD evaluation with Salesforce-style record access:
+-- owner/full access, Public Read/Write, role hierarchy edit, Public Read Only,
+-- then future sharing mechanisms.
 
 CREATE OR REPLACE FUNCTION public.check_record_access(
   p_user_id UUID,
@@ -153,10 +121,6 @@ BEGIN
   RETURN QUERY SELECT FALSE, 'none'::TEXT, 'denied'::TEXT;
 END;
 $$;
-
-GRANT ALL ON FUNCTION public.is_above_in_hierarchy(UUID, UUID) TO anon;
-GRANT ALL ON FUNCTION public.is_above_in_hierarchy(UUID, UUID) TO authenticated;
-GRANT ALL ON FUNCTION public.is_above_in_hierarchy(UUID, UUID) TO service_role;
 
 GRANT ALL ON FUNCTION public.check_record_access(UUID, TEXT, TEXT, TEXT) TO anon;
 GRANT ALL ON FUNCTION public.check_record_access(UUID, TEXT, TEXT, TEXT) TO authenticated;
