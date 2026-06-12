@@ -1139,6 +1139,7 @@
     .audit-card .toolbar {
       flex-shrink: 0;
       background: var(--surface);
+      flex-wrap: wrap;
     }
 
     .audit-table-wrap {
@@ -1147,7 +1148,7 @@
     }
 
     .audit-table {
-      min-width: 1120px;
+      min-width: 900px;
       table-layout: fixed;
     }
 
@@ -2533,7 +2534,7 @@
         <div class="page-header">
           <div>
             <h1>Audit Log</h1>
-            <p>Immutable record of every action taken through the portal</p>
+            <p>Search, filter, and prune portal activity history</p>
           </div>
           <button class="btn btn-ghost" onclick="loadAuditLog()">
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
@@ -2550,9 +2551,9 @@
                 <circle cx="11" cy="11" r="8" />
                 <line x1="21" y1="21" x2="16.65" y2="16.65" />
               </svg>
-              <input type="text" id="auditSearch" placeholder="Search by user, action..." oninput="filterAudit()">
+              <input type="text" id="auditSearch" placeholder="Search user or action..." oninput="queueAuditReload()">
             </div>
-            <select class="filter-select" id="auditActionFilter" onchange="filterAudit()">
+            <select class="filter-select" id="auditActionFilter" onchange="loadAuditLog()">
               <option value="">All Actions</option>
               <option value="login">Login</option>
               <option value="failed_login">Failed Login</option>
@@ -2562,22 +2563,34 @@
               <option value="create_user">Create User</option>
               <option value="update_user">Update User</option>
             </select>
+            <select class="filter-select" id="auditRangeFilter" onchange="loadAuditLog()">
+              <option value="30">Last 30 days</option>
+              <option value="60">Last 2 months</option>
+              <option value="180">Last 6 months</option>
+              <option value="365">Last 1 year</option>
+              <option value="all">All time</option>
+              <option value="custom">Custom range</option>
+            </select>
+            <input class="filter-select" type="date" id="auditFromDate" onchange="loadAuditLog()" style="display:none">
+            <input class="filter-select" type="date" id="auditToDate" onchange="loadAuditLog()" style="display:none">
+            <button class="btn btn-ghost btn-sm" onclick="deleteSelectedAuditLogs()">Delete Selected</button>
+            <button class="btn btn-danger btn-sm" onclick="deleteFilteredAuditLogs()">Delete Filtered</button>
+            <span id="auditMeta" style="font-size:12px;color:var(--text-muted);margin-left:auto"></span>
           </div>
-          <div class="table-wrap audit-table-wrap">
+          <div class="table-wrap audit-table-wrap" onscroll="handleAuditScroll(this)">
             <table class="audit-table">
               <thead>
                 <tr>
+                  <th style="width:44px"><input type="checkbox" id="auditSelectAll" onchange="toggleAuditSelectAll(this.checked)"></th>
                   <th>Time</th>
                   <th>User</th>
                   <th>Profile</th>
                   <th>Action</th>
-                  <th>Object</th>
-                  <th>IP</th>
                 </tr>
               </thead>
               <tbody id="auditBody">
                 <tr>
-                  <td colspan="6">
+                  <td colspan="5">
                     <div class="spinner"></div>
                   </td>
                 </tr>
@@ -2870,6 +2883,11 @@
     let allPermSets = [];
     let fieldSecurityAvailableFields = [];
     let allAuditLogs = [];
+    let auditSelectedIds = new Set();
+    let auditSearchTimer = null;
+    let auditTotalRows = 0;
+    let auditLoadingMore = false;
+    const loadedPanels = new Set();
     let allSharingRules = [];
     let editingUserId = null;
     let editingProfileId = null;
@@ -3092,19 +3110,33 @@
       $(`panel-${name}`).classList.add('active');
       event.currentTarget.classList.add('active');
       $('topbarTitle').textContent = PANEL_TITLES[name] || name;
-      if (name === 'audit') loadAuditLog();
-      if (name === 'fieldsecurity') initFieldSecurity();
-      if (name === 'owd') loadOWD();
-      if (name === 'sharing') loadSharingRules();
-      if (name === 'psggroups') loadPSGroups();
-      if (name === 'teamsqueues') loadTeamsAndQueues();
-      if (name === 'orgroles') loadOrgRoles();
-      if (name === 'publicgroups') loadPublicGroups();
+      loadPanelOnce(name);
 
       // Close sidebar on mobile
       document.querySelector('.sidebar').classList.remove('open');
       var ov = document.getElementById('sidebarOverlay');
       if (ov) ov.classList.remove('open');
+    }
+
+    async function loadPanelOnce(name) {
+      if (loadedPanels.has(name)) return;
+      loadedPanels.add(name);
+      try {
+        if (name === 'audit') await loadAuditLog();
+        if (name === 'fieldsecurity') await initFieldSecurity();
+        if (name === 'owd') await loadOWD();
+        if (name === 'sharing') await loadSharingRules();
+        if (name === 'psggroups') await loadPSGroups();
+        if (name === 'teamsqueues') await loadTeamsAndQueues();
+        if (name === 'orgroles') await loadOrgRoles();
+        if (name === 'publicgroups') await loadPublicGroups();
+      } catch {
+        loadedPanels.delete(name);
+      }
+    }
+
+    function invalidatePanel(name) {
+      loadedPanels.delete(name);
     }
 
     function toggleSidebar() {
@@ -4759,6 +4791,150 @@ function deletePublicGroup(id, name) {
         return matchQ && matchA;
       });
       renderAuditLog(filtered);
+    }
+
+    async function loadAuditLog(append = false) {
+      const range = $('auditRangeFilter')?.value || '30';
+      const custom = range === 'custom';
+      if ($('auditFromDate')) $('auditFromDate').style.display = custom ? '' : 'none';
+      if ($('auditToDate')) $('auditToDate').style.display = custom ? '' : 'none';
+      if (auditLoadingMore) return;
+      auditLoadingMore = true;
+      if (!append) $('auditBody').innerHTML = '<tr><td colspan="5"><div class="spinner"></div></td></tr>';
+      try {
+        const params = auditFilterParams();
+        params.set('limit', '50');
+        params.set('offset', append ? String(allAuditLogs.length) : '0');
+        const data = await api(`/api/portal/audit-log?${params.toString()}`);
+        auditTotalRows = Number(data.total || 0);
+        allAuditLogs = append ? [...allAuditLogs, ...(data.logs || [])] : (data.logs || []);
+        auditSelectedIds = new Set([...auditSelectedIds].filter(id => allAuditLogs.some(log => String(log.id) === String(id))));
+        renderAuditLog(allAuditLogs);
+        updateAuditMeta(data);
+      } catch (e) {
+        if (!append) $('auditBody').innerHTML = `<tr><td colspan="5" style="text-align:center;color:var(--danger);padding:24px">${esc(e.message)}</td></tr>`;
+        else toast(e.message, 'err');
+      } finally {
+        auditLoadingMore = false;
+      }
+    }
+
+    function renderAuditLog(logs) {
+      if (!logs.length) {
+        $('auditBody').innerHTML = `<tr><td colspan="5"><div class="empty-state"><h3>No audit logs found</h3></div></td></tr>`;
+        if ($('auditSelectAll')) $('auditSelectAll').checked = false;
+        updateAuditMeta();
+        return;
+      }
+      $('auditBody').innerHTML = logs.map(log => {
+        const actionCls = getActionClass(log.action);
+        const time = new Date(log.created_at).toLocaleString();
+        const id = String(log.id);
+        return `<tr class="audit-row">
+      <td><input type="checkbox" value="${esc(id)}" ${auditSelectedIds.has(id) ? 'checked' : ''} onchange="toggleAuditSelection('${esc(id)}', this.checked)"></td>
+      <td>${time}</td>
+      <td>
+        <div class="audit-user-email" title="${esc(log.user_email || '')}">${esc(log.user_email || '—')}</div>
+      </td>
+      <td><span class="badge badge-${esc(log.user_role || 'readonly')}">${roleName(log.user_role || '')}</span></td>
+      <td><span class="action-badge ${actionCls}">${esc(log.action)}</span></td>
+    </tr>`;
+      }).join('');
+      if ($('auditSelectAll')) {
+        $('auditSelectAll').checked = logs.length > 0 && logs.every(log => auditSelectedIds.has(String(log.id)));
+      }
+    }
+
+    function filterAudit() { queueAuditReload(); }
+
+    function auditFilterParams() {
+      const params = new URLSearchParams();
+      const q = $('auditSearch')?.value.trim();
+      const action = $('auditActionFilter')?.value;
+      const range = $('auditRangeFilter')?.value || '30';
+      if (q) params.set('search', q);
+      if (action) params.set('action', action);
+      if (range && range !== 'all') params.set('range', range);
+      if (range === 'custom') {
+        if ($('auditFromDate')?.value) params.set('from', $('auditFromDate').value);
+        if ($('auditToDate')?.value) params.set('to', $('auditToDate').value);
+      }
+      return params;
+    }
+
+    function queueAuditReload() {
+      clearTimeout(auditSearchTimer);
+      auditSearchTimer = setTimeout(() => loadAuditLog(false), 250);
+    }
+
+    function updateAuditMeta(data = {}) {
+      const shown = allAuditLogs.length;
+      const total = data.total ?? auditTotalRows ?? shown;
+      if ($('auditMeta')) $('auditMeta').textContent = `${shown} shown${total !== null && total !== undefined ? ` of ${total}` : ''} · ${auditSelectedIds.size} selected`;
+    }
+
+    function handleAuditScroll(el) {
+      if (auditLoadingMore) return;
+      if (auditTotalRows && allAuditLogs.length >= auditTotalRows) return;
+      if (el.scrollTop + el.clientHeight >= el.scrollHeight - 120) {
+        loadAuditLog(true);
+      }
+    }
+
+    function toggleAuditSelection(id, checked) {
+      if (checked && auditSelectedIds.size >= 50 && !auditSelectedIds.has(id)) {
+        toast('You can select up to 50 audit rows at once', 'info');
+        const input = document.querySelector(`#auditBody input[value="${CSS.escape(id)}"]`);
+        if (input) input.checked = false;
+        return;
+      }
+      if (checked) auditSelectedIds.add(id);
+      else auditSelectedIds.delete(id);
+      updateAuditMeta();
+    }
+
+    function toggleAuditSelectAll(checked) {
+      if (!checked) {
+        allAuditLogs.forEach(log => auditSelectedIds.delete(String(log.id)));
+      } else {
+        allAuditLogs.slice(0, Math.max(0, 50 - auditSelectedIds.size)).forEach(log => auditSelectedIds.add(String(log.id)));
+        if (allAuditLogs.length > 50) toast('Selected first 50 rows only', 'info');
+      }
+      renderAuditLog(allAuditLogs);
+      updateAuditMeta();
+    }
+
+    function deleteSelectedAuditLogs() {
+      const ids = [...auditSelectedIds].slice(0, 50);
+      if (!ids.length) return toast('Select audit rows to delete', 'info');
+      openConfirm(
+        `Delete ${ids.length} audit log${ids.length !== 1 ? 's' : ''}?`,
+        'This permanently removes selected audit rows from the portal audit table.',
+        async () => {
+          await api('/api/portal/audit-log', {
+            method: 'DELETE',
+            body: JSON.stringify({ ids })
+          });
+          toast('Audit logs deleted', 'ok');
+          auditSelectedIds.clear();
+          loadAuditLog();
+        }
+      );
+    }
+
+    function deleteFilteredAuditLogs() {
+      const params = auditFilterParams();
+      const label = params.toString() ? 'matching the current filter' : 'from the current view';
+      openConfirm(
+        'Delete filtered audit logs?',
+        `This permanently deletes audit rows ${label}. Use filters first if you only want old records removed.`,
+        async () => {
+          const result = await api(`/api/portal/audit-log?${params.toString()}`, { method: 'DELETE' });
+          toast(`${result.deleted || 0} audit logs deleted`, 'ok');
+          auditSelectedIds.clear();
+          loadAuditLog();
+        }
+      );
     }
 
     function getActionClass(action) {

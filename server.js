@@ -4512,17 +4512,84 @@ app.delete('/api/portal/permission-sets/:id', checkAuth, checkRole('admin'), asy
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+function auditFilterValues(query = {}) {
+  const filters = {};
+  const search = String(query.search || '').trim();
+  const action = String(query.action || '').trim();
+  const range = String(query.range || '').trim();
+  const from = String(query.from || '').trim();
+  const to = String(query.to || '').trim();
+
+  if (search) filters.search = search;
+  if (action) filters.action = action;
+
+  if (range && range !== 'all' && range !== 'custom') {
+    const days = Math.min(Math.max(parseInt(range, 10) || 30, 1), 3650);
+    filters.fromIso = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
+  }
+
+  if (range === 'custom') {
+    if (from) filters.fromIso = new Date(`${from}T00:00:00.000Z`).toISOString();
+    if (to) filters.toIso = new Date(`${to}T23:59:59.999Z`).toISOString();
+  }
+
+  return filters;
+}
+
+function applyAuditFilters(query, filters = {}) {
+  let q = query;
+  if (filters.action) q = q.eq('action', filters.action);
+  if (filters.fromIso) q = q.gte('created_at', filters.fromIso);
+  if (filters.toIso) q = q.lte('created_at', filters.toIso);
+  if (filters.search) {
+    const safe = filters.search.replace(/[%_,]/g, char => `\\${char}`);
+    q = q.or(`user_email.ilike.%${safe}%,action.ilike.%${safe}%`);
+  }
+  return q;
+}
+
 // ── GET /api/portal/audit-log
 app.get('/api/portal/audit-log', checkAuth, checkRole('admin'), async (req, res) => {
   try {
-    const limit = Math.min(parseInt(req.query.limit) || 100, 500);
-    const { data, error } = await supabase
+    const limit = Math.min(parseInt(req.query.limit) || 50, 50);
+    const offset = Math.max(parseInt(req.query.offset) || 0, 0);
+    const filters = auditFilterValues(req.query);
+    const base = supabase
       .from('audit_log')
-      .select('id, created_at, user_email, user_role, action, sf_object, record_id, ip_address')
+      .select('id, created_at, user_email, user_role, action', { count: 'exact' })
       .order('created_at', { ascending: false })
-      .limit(limit);
+      .range(offset, offset + limit - 1);
+    const { data, error, count } = await applyAuditFilters(base, filters);
     if (error) throw error;
-    res.json({ logs: data || [] });
+    res.json({ logs: data || [], total: count || 0, limit, offset });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.delete('/api/portal/audit-log', checkAuth, checkRole('system_administrator'), async (req, res) => {
+  try {
+    const rawIds = Array.isArray(req.body?.ids) ? req.body.ids : [];
+    const ids = rawIds.map(id => Number(id)).filter(Number.isFinite).slice(0, 50);
+
+    if (ids.length) {
+      const { error, count } = await supabase
+        .from('audit_log')
+        .delete({ count: 'exact' })
+        .in('id', ids);
+      if (error) throw error;
+      return res.json({ success: true, deleted: count || ids.length });
+    }
+
+    const filters = auditFilterValues(req.query);
+    if (!Object.keys(filters).length) {
+      return res.status(400).json({ error: 'Select rows or apply a filter before deleting audit logs.' });
+    }
+
+    const base = supabase
+      .from('audit_log')
+      .delete({ count: 'exact' });
+    const { error, count } = await applyAuditFilters(base, filters);
+    if (error) throw error;
+    res.json({ success: true, deleted: count || 0 });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
