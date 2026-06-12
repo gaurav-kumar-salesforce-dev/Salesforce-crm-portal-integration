@@ -30,7 +30,7 @@ BEGIN
     RETURN FALSE;
   END IF;
 
-  RETURN v_owner_path = v_viewer_path OR v_owner_path LIKE v_viewer_path || '/%';
+  RETURN v_owner_path LIKE v_viewer_path || '/%';
 END;
 $$;
 

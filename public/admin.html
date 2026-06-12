@@ -2068,21 +2068,20 @@
               <label class="form-label">Records Owned By (Role)</label>
               <select class="form-ctrl" id="sr-owner-role">
                 <option value="">Any role</option>
-                <option value="system_administrator">System Administrator</option>
-                <option value="admin">Admin</option>
-                <option value="manager">Manager</option>
-                <option value="employee">Employee</option>
-                <option value="readonly">Read Only</option>
               </select>
               <p class="form-hint">Leave blank to share all records of this object type</p>
             </div>
             <div class="form-group">
-              <label class="form-label">Share With (Role) <span class="req">*</span></label>
-              <select class="form-ctrl" id="sr-shared-role">
-                <option value="admin">Admin</option>
-                <option value="manager">Manager</option>
-                <option value="employee">Employee</option>
-                <option value="readonly">Read Only</option>
+              <label class="form-label">Share With Type <span class="req">*</span></label>
+              <select class="form-ctrl" id="sr-shared-type" onchange="updateSharingTargetControl()">
+                <option value="role">Role</option>
+                <option value="public_group">Public Group</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label class="form-label">Share With <span class="req">*</span></label>
+              <select class="form-ctrl" id="sr-shared-target">
+                <option value="">Select...</option>
               </select>
             </div>
             <div class="form-group">
@@ -5130,10 +5129,27 @@ function deletePublicGroup(id, name) {
           return;
         }
 
+        if (!allOrgRoles.length) {
+          const roleData = await api('/api/portal/org-roles').catch(() => ({ roles: [] }));
+          allOrgRoles = roleData.roles || [];
+        }
+        const roleById = new Map((allOrgRoles || []).map(r => [r.id, r]));
+        const publicGroupsData = await api('/api/portal/public-groups').catch(() => ({ groups: [] }));
+        const groupById = new Map((publicGroupsData.groups || []).map(g => [g.id, g]));
         const roleLabel = {
           system_administrator: 'System Administrator', admin: 'Admin',
           manager: 'Manager', employee: 'Employee', readonly: 'Read Only'
         };
+        const ownerLabel = (r) =>
+          r.owner_org_role_id
+            ? (roleById.get(r.owner_org_role_id)?.name || 'Role')
+            : (roleLabel[r.owner_role] || 'Any');
+        const targetLabel = (r) =>
+          r.shared_with_group_id
+            ? (groupById.get(r.shared_with_group_id)?.name || 'Public Group')
+            : r.shared_with_org_role_id
+              ? (roleById.get(r.shared_with_org_role_id)?.name || 'Role')
+              : (roleLabel[r.shared_with_role] || r.shared_with_role || 'Role');
 
         $('sharingBody').innerHTML = `
       <table style="width:100%;border-collapse:collapse">
@@ -5152,11 +5168,11 @@ function deletePublicGroup(id, name) {
               <td style="padding:12px 16px;font-weight:700">${esc(r.name)}</td>
               <td style="padding:12px 16px">${esc(r.sf_object)}</td>
               <td style="padding:12px 16px;font-size:12px;color:var(--text-muted)">
-                ${esc(roleLabel[r.owner_role] || 'Any')}
+                ${esc(ownerLabel(r))}
               </td>
               <td style="padding:12px 16px">
-                <span class="badge badge-${r.shared_with_role}">
-                  ${esc(roleLabel[r.shared_with_role] || r.shared_with_role)}
+                <span class="badge ${r.shared_with_group_id ? 'badge-manager' : 'badge-employee'}">
+                  ${esc(targetLabel(r))}
                 </span>
               </td>
               <td style="padding:12px 16px">
@@ -5192,25 +5208,77 @@ function deletePublicGroup(id, name) {
       }
     }
 
-    function openSharingRuleModal() { $('sharingModal').classList.add('open'); }
+    async function openSharingRuleModal() {
+      await hydrateSharingRuleControls();
+      $('sharingModal').classList.add('open');
+    }
     function closeSharingModal() { $('sharingModal').classList.remove('open'); }
+
+    async function hydrateSharingRuleControls() {
+      if (!allOrgRoles.length) {
+        const d = await api('/api/portal/org-roles').catch(() => ({ roles: [] }));
+        allOrgRoles = d.roles || [];
+      }
+      const ownerSelect = $('sr-owner-role');
+      ownerSelect.innerHTML = '<option value="">Any role</option>' +
+        allOrgRoles
+          .filter(r => r.is_active !== false)
+          .map(r => `<option value="${r.id}">${esc(r.name)}</option>`)
+          .join('');
+      await updateSharingTargetControl();
+    }
+
+    async function updateSharingTargetControl() {
+      const type = $('sr-shared-type')?.value || 'role';
+      const target = $('sr-shared-target');
+      if (!target) return;
+      target.innerHTML = '<option value="">Select...</option>';
+
+      if (type === 'public_group') {
+        const data = await api('/api/portal/public-groups').catch(() => ({ groups: [] }));
+        target.innerHTML += (data.groups || [])
+          .filter(g => g.is_active !== false)
+          .map(g => `<option value="${g.id}">${esc(g.name)}</option>`)
+          .join('');
+        return;
+      }
+
+      if (!allOrgRoles.length) {
+        const d = await api('/api/portal/org-roles').catch(() => ({ roles: [] }));
+        allOrgRoles = d.roles || [];
+      }
+      target.innerHTML += allOrgRoles
+        .filter(r => r.is_active !== false)
+        .map(r => `<option value="${r.id}">${esc(r.name)}</option>`)
+        .join('');
+    }
 
     async function saveSharingRule() {
       const name = $('sr-name').value.trim();
       const sfObject = $('sr-object').value;
-      const ownerRole = $('sr-owner-role').value;
-      const sharedWithRole = $('sr-shared-role').value;
+      const ownerOrgRoleId = $('sr-owner-role').value;
+      const sharedWithType = $('sr-shared-type').value;
+      const sharedWithTarget = $('sr-shared-target').value;
       const accessLevel = $('sr-access').value;
       const description = $('sr-desc').value.trim();
 
-      if (!name || !sfObject || !sharedWithRole) {
-        return toast('Name, object, and shared-with role are required', 'err');
+      if (!name || !sfObject || !sharedWithTarget) {
+        return toast('Name, object, and share target are required', 'err');
       }
 
       try {
         await api('/api/portal/sharing-rules', {
           method: 'POST',
-          body: JSON.stringify({ name, sfObject, ownerRole, sharedWithRole, accessLevel, description })
+          body: JSON.stringify({
+            name,
+            sfObject,
+            ownerOrgRoleId,
+            sharedWithType,
+            sharedWithOrgRoleId: sharedWithType === 'role' ? sharedWithTarget : null,
+            sharedWithGroupId: sharedWithType === 'public_group' ? sharedWithTarget : null,
+            accessLevel,
+            description
+          })
         });
         toast('Sharing rule created', 'ok');
         closeSharingModal();

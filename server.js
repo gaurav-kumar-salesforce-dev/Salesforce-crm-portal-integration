@@ -339,6 +339,17 @@ const PORTAL_AUDIT_FIELDS = [
 ];
 const roleVisibilityCache = new Map();
 const owdCache = new Map();
+const portalUserContextCache = new Map();
+const publicGroupMembershipCache = new Map();
+const sharingRulesCache = new Map();
+const recordShareCache = new Map();
+
+function clearSharingAccessCaches() {
+  portalUserContextCache.clear();
+  publicGroupMembershipCache.clear();
+  sharingRulesCache.clear();
+  recordShareCache.clear();
+}
 
 function getRecordOwnerId(record = {}) {
   return record?.[PORTAL_OWNER_FIELD] || null;
@@ -411,14 +422,205 @@ async function canViewerAccessOwnerRole(viewerUserId, ownerUserId) {
   const ownerPath = (roles || []).find(role => role.id === owner.org_role_id)?.path;
   let allowed = false;
 
-  if (viewer.org_role_id === owner.org_role_id) {
-    allowed = true;
-  } else if (viewerPath && ownerPath) {
-    allowed = ownerPath === viewerPath || ownerPath.startsWith(`${viewerPath}/`);
+  if (viewerPath && ownerPath && viewer.org_role_id !== owner.org_role_id) {
+    allowed = ownerPath.startsWith(`${viewerPath}/`);
   }
 
   roleVisibilityCache.set(cacheKey, allowed);
   return allowed;
+}
+
+function strongestRecordAccess(current, next) {
+  const rank = { none: 0, read: 1, edit: 2 };
+  if (!next?.allowed) return current;
+  const currentRank = rank[current.accessLevel] || 0;
+  const nextRank = rank[next.accessLevel] || 0;
+  return nextRank > currentRank ? next : current;
+}
+
+async function getPortalUserRoleContext(userId) {
+  if (!userId) return null;
+  if (portalUserContextCache.has(userId)) return portalUserContextCache.get(userId);
+
+  const promise = (async () => {
+    try {
+      const { data: user, error } = await supabase
+        .from('users')
+        .select('id, role, org_role_id')
+        .eq('id', userId)
+        .eq('is_active', true)
+        .maybeSingle();
+
+      if (error) {
+        console.error('[record-visibility] portal user context lookup failed:', error.message);
+        return null;
+      }
+      return user || null;
+    } catch (err) {
+      console.error('[record-visibility] portal user context lookup failed:', err.message);
+      return null;
+    }
+  })();
+
+  portalUserContextCache.set(userId, promise);
+  return promise;
+}
+
+async function getPublicGroupIdsForUser(userId, orgRoleId) {
+  const cacheKey = `${userId}:${orgRoleId || ''}`;
+  if (publicGroupMembershipCache.has(cacheKey)) {
+    return publicGroupMembershipCache.get(cacheKey);
+  }
+
+  const promise = (async () => {
+    const directGroups = new Set();
+
+    try {
+      const { data, error } = await supabase
+        .from('public_group_members')
+        .select('group_id, member_type, user_id, org_role_id')
+        .or(`user_id.eq.${userId}${orgRoleId ? `,org_role_id.eq.${orgRoleId}` : ''}`);
+
+      if (error) {
+        console.error('[record-visibility] public group membership lookup failed:', error.message);
+        return directGroups;
+      }
+
+      const candidateRows = data || [];
+      const groupIds = [...new Set(candidateRows.map(row => row.group_id).filter(Boolean))];
+      if (!groupIds.length) return directGroups;
+
+      const { data: groups, error: groupsError } = await supabase
+        .from('public_groups')
+        .select('id, is_active')
+        .in('id', groupIds);
+
+      if (groupsError) {
+        console.error('[record-visibility] public group lookup failed:', groupsError.message);
+        return directGroups;
+      }
+
+      const activeGroupIds = new Set((groups || []).filter(group => group.is_active).map(group => group.id));
+      candidateRows.forEach((row) => {
+        if (!activeGroupIds.has(row.group_id)) return;
+        if (row.member_type === 'user' && row.user_id === userId) directGroups.add(row.group_id);
+        if (row.member_type === 'role' && orgRoleId && row.org_role_id === orgRoleId) directGroups.add(row.group_id);
+      });
+
+      return directGroups;
+    } catch (err) {
+      console.error('[record-visibility] public group membership lookup failed:', err.message);
+      return directGroups;
+    }
+  })();
+
+  publicGroupMembershipCache.set(cacheKey, promise);
+  return promise;
+}
+
+async function getSharingRulesForObject(sfObject) {
+  if (sharingRulesCache.has(sfObject)) return sharingRulesCache.get(sfObject);
+
+  const promise = (async () => {
+    try {
+      const { data: rules, error } = await supabase
+        .from('sharing_rules')
+        .select('*')
+        .eq('sf_object', sfObject)
+        .eq('is_active', true);
+
+      if (error) {
+        console.error('[record-visibility] sharing rule lookup failed:', error.message);
+        return [];
+      }
+      return rules || [];
+    } catch (err) {
+      console.error('[record-visibility] sharing rule lookup failed:', err.message);
+      return [];
+    }
+  })();
+
+  sharingRulesCache.set(sfObject, promise);
+  return promise;
+}
+
+async function getRecordSharesForViewer(recordId, sfObject, userId, viewerGroupIds) {
+  if (!recordId) return [];
+  const groupKey = [...viewerGroupIds].sort().join(',');
+  const cacheKey = `${sfObject}:${recordId}:${userId}:${groupKey}`;
+  if (recordShareCache.has(cacheKey)) return recordShareCache.get(cacheKey);
+
+  const promise = (async () => {
+    try {
+      const orFilter = `shared_with.eq.${userId}${viewerGroupIds.size ? `,shared_with_group.in.(${[...viewerGroupIds].join(',')})` : ''}`;
+      const { data: shares, error } = await supabase
+        .from('record_shares')
+        .select('access_level, shared_with, shared_with_group, expires_at')
+        .eq('sf_object', sfObject)
+        .eq('record_id', recordId)
+        .or(orFilter);
+
+      if (error) {
+        console.error('[record-visibility] record share lookup failed:', error.message);
+        return [];
+      }
+
+      const now = Date.now();
+      return (shares || []).filter(share => !share.expires_at || new Date(share.expires_at).getTime() > now);
+    } catch (err) {
+      console.error('[record-visibility] record share lookup failed:', err.message);
+      return [];
+    }
+  })();
+
+  recordShareCache.set(cacheKey, promise);
+  return promise;
+}
+
+async function getSharingAccess(record, userId, userRole, sfObject) {
+  const ownerId = getRecordOwnerId(record);
+  const viewer = await getPortalUserRoleContext(userId);
+  const owner = ownerId ? await getPortalUserRoleContext(ownerId) : null;
+  const viewerGroupIds = await getPublicGroupIdsForUser(userId, viewer?.org_role_id);
+  const rules = await getSharingRulesForObject(sfObject);
+
+  let best = { allowed: false, accessLevel: 'none', via: 'sharing_rule' };
+  (rules || []).forEach((rule) => {
+    const ownerMatches =
+      (!rule.owner_org_role_id && !rule.owner_role) ||
+      (rule.owner_org_role_id && owner?.org_role_id === rule.owner_org_role_id) ||
+      (!rule.owner_org_role_id && rule.owner_role && owner?.role === rule.owner_role);
+
+    if (!ownerMatches) return;
+
+    const viewerMatches =
+      (rule.shared_with_group_id && viewerGroupIds.has(rule.shared_with_group_id)) ||
+      (rule.shared_with_org_role_id && viewer?.org_role_id === rule.shared_with_org_role_id) ||
+      (!rule.shared_with_org_role_id && !rule.shared_with_group_id && rule.shared_with_role && userRole === rule.shared_with_role);
+
+    if (!viewerMatches) return;
+
+    best = strongestRecordAccess(best, {
+      allowed: true,
+      accessLevel: rule.access_level === 'edit' ? 'edit' : 'read',
+      via: rule.shared_with_group_id ? 'sharing_rule_public_group' : 'sharing_rule'
+    });
+  });
+
+  const shares = await getRecordSharesForViewer(record?.Id, sfObject, userId, viewerGroupIds);
+
+  (shares || []).forEach((share) => {
+    const matchedUser = share.shared_with === userId;
+    const matchedGroup = share.shared_with_group && viewerGroupIds.has(share.shared_with_group);
+    if (!matchedUser && !matchedGroup) return;
+    best = strongestRecordAccess(best, {
+      allowed: true,
+      accessLevel: share.access_level === 'edit' ? 'edit' : 'read',
+      via: matchedGroup ? 'manual_public_group' : 'manual'
+    });
+  });
+
+  return best;
 }
 
 async function evaluateRecordAccess(record, userId, userRole, sfObject, isSystemAdmin = false) {
@@ -426,31 +628,31 @@ async function evaluateRecordAccess(record, userId, userRole, sfObject, isSystem
 
   const ownerId = getRecordOwnerId(record);
   const owdAccess = await getOrgWideDefaultAccess(sfObject);
+  let access = { allowed: false, accessLevel: 'none', via: 'denied' };
 
   if (owdAccess === 'public_read_write') {
     return { allowed: true, accessLevel: 'edit', via: 'owd' };
   }
 
-  if (!ownerId) {
-    if (owdAccess === 'public_read') {
-      return { allowed: true, accessLevel: 'read', via: 'owd' };
-    }
-    return { allowed: false, accessLevel: 'none', via: 'missing_owner' };
-  }
-
-  if (ownerId === userId) {
+  if (ownerId && ownerId === userId) {
     return { allowed: true, accessLevel: 'edit', via: 'owner' };
   }
 
-  if (await canViewerAccessOwnerRole(userId, ownerId)) {
+  if (ownerId && await canViewerAccessOwnerRole(userId, ownerId)) {
     return { allowed: true, accessLevel: 'edit', via: 'hierarchy' };
   }
 
   if (owdAccess === 'public_read') {
-    return { allowed: true, accessLevel: 'read', via: 'owd' };
+    access = { allowed: true, accessLevel: 'read', via: 'owd' };
   }
 
-  return { allowed: false, accessLevel: 'none', via: 'denied' };
+  access = strongestRecordAccess(access, await getSharingAccess(record, userId, userRole, sfObject));
+
+  if (!access.allowed && !ownerId) {
+    return { allowed: false, accessLevel: 'none', via: 'missing_owner' };
+  }
+
+  return access;
 }
 
 async function canSeeRecord(record, userId, userRole, sfObject, isSystemAdmin = false) {
@@ -608,6 +810,7 @@ app.post('/api/:object/:id/share', checkAuth, async (req, res) => {
       }, { onConflict: 'sf_object,record_id,shared_with' });
 
     if (error) throw error;
+    clearSharingAccessCaches();
 
     await writeAuditLog({
       userId: req.user.id, userEmail: req.user.email,
@@ -632,6 +835,7 @@ app.delete('/api/:object/:id/share/:userId', checkAuth, async (req, res) => {
       .eq('sf_object', object)
       .eq('record_id', id)
       .eq('shared_with', userId);
+    clearSharingAccessCaches();
     res.json({ success: true });
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -652,9 +856,24 @@ app.get('/api/portal/sharing-rules', checkAuth, checkRole('admin'), async (req, 
 
 // POST create sharing rule
 app.post('/api/portal/sharing-rules', checkAuth, checkRole('system_administrator'), async (req, res) => {
-  const { name, sfObject, ownerRole, sharedWithRole, accessLevel, description } = req.body || {};
-  if (!name || !sfObject || !sharedWithRole || !accessLevel) {
-    return res.status(400).json({ error: 'name, sfObject, sharedWithRole, accessLevel required' });
+  const {
+    name,
+    sfObject,
+    ownerRole,
+    sharedWithRole,
+    ownerOrgRoleId,
+    sharedWithOrgRoleId,
+    sharedWithGroupId,
+    sharedWithType = sharedWithGroupId ? 'public_group' : 'role',
+    accessLevel,
+    description
+  } = req.body || {};
+  const hasShareTarget =
+    (sharedWithType === 'public_group' && sharedWithGroupId) ||
+    (sharedWithType !== 'public_group' && (sharedWithOrgRoleId || sharedWithRole));
+
+  if (!name || !sfObject || !hasShareTarget || !accessLevel) {
+    return res.status(400).json({ error: 'name, sfObject, share target, accessLevel required' });
   }
   try {
     const { data, error } = await supabase
@@ -662,13 +881,18 @@ app.post('/api/portal/sharing-rules', checkAuth, checkRole('system_administrator
       .insert({
         name, sf_object: sfObject,
         owner_role: ownerRole || null,
-        shared_with_role: sharedWithRole,
+        shared_with_role: sharedWithRole || null,
+        owner_org_role_id: ownerOrgRoleId || null,
+        shared_with_org_role_id: sharedWithType === 'public_group' ? null : (sharedWithOrgRoleId || null),
+        shared_with_group_id: sharedWithType === 'public_group' ? sharedWithGroupId : null,
+        shared_with_type: sharedWithType === 'public_group' ? 'public_group' : 'role',
         access_level: accessLevel,
         description: description || null,
         created_by: req.user.id
       })
       .select('id').single();
     if (error) throw error;
+    clearSharingAccessCaches();
     await writeAuditLog({
       userId: req.user.id, userEmail: req.user.email,
       userRole: req.user.role, action: 'create',
@@ -687,6 +911,7 @@ app.patch('/api/portal/sharing-rules/:id', checkAuth, checkRole('system_administ
       .update({ is_active: req.body.isActive, ...(req.body.accessLevel ? { access_level: req.body.accessLevel } : {}) })
       .eq('id', req.params.id);
     if (error) throw error;
+    clearSharingAccessCaches();
     res.json({ success: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -695,6 +920,7 @@ app.patch('/api/portal/sharing-rules/:id', checkAuth, checkRole('system_administ
 app.delete('/api/portal/sharing-rules/:id', checkAuth, checkRole('system_administrator'), async (req, res) => {
   try {
     await supabase.from('sharing_rules').delete().eq('id', req.params.id);
+    clearSharingAccessCaches();
     res.json({ success: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -941,6 +1167,7 @@ app.post('/api/portal/org-roles', checkAuth, checkRole('system_administrator'), 
       .single();
 
     roleVisibilityCache.clear();
+    clearSharingAccessCaches();
 
     if (error) {
       if (error.code === '23505') {
@@ -1020,6 +1247,7 @@ app.patch('/api/portal/org-roles/:id', checkAuth, checkRole('system_administrato
     if (error) throw error;
 
     roleVisibilityCache.clear();
+    clearSharingAccessCaches();
 
     await writeAuditLog({
       userId: req.user.id,
@@ -1080,6 +1308,7 @@ app.delete('/api/portal/org-roles/:id', checkAuth, checkRole('system_administrat
     if (error) throw error;
 
     roleVisibilityCache.clear();
+    clearSharingAccessCaches();
 
     res.json({ success: true });
   } catch(e) {
@@ -1190,6 +1419,7 @@ app.post('/api/portal/public-groups', checkAuth, checkRole('admin'), async (req,
       if (error.code === '23505') return res.status(409).json({ error: 'A group with this name already exists' });
       throw error;
     }
+    clearSharingAccessCaches();
     res.status(201).json({ success: true, id: data.id });
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
@@ -1203,6 +1433,7 @@ app.patch('/api/portal/public-groups/:id', checkAuth, checkRole('admin'), async 
     if (description !== undefined) updates.description = description;
     if (isActive    !== undefined) updates.is_active   = isActive;
     await supabase.from('public_groups').update(updates).eq('id', req.params.id);
+    clearSharingAccessCaches();
     res.json({ success: true });
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
@@ -1226,6 +1457,7 @@ app.post('/api/portal/public-groups/:id/members', checkAuth, checkRole('admin'),
       if (error.code === '23505') return res.status(409).json({ error: 'Already a member of this group' });
       throw error;
     }
+    clearSharingAccessCaches();
     res.json({ success: true });
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
@@ -1235,6 +1467,7 @@ app.delete('/api/portal/public-groups/:id/members/:memberId', checkAuth, checkRo
   try {
     await supabase.from('public_group_members')
       .delete().eq('id', req.params.memberId).eq('group_id', req.params.id);
+    clearSharingAccessCaches();
     res.json({ success: true });
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
@@ -1244,6 +1477,7 @@ app.delete('/api/portal/public-groups/:id', checkAuth, checkRole('admin'), async
   try {
     await supabase.from('public_group_members').delete().eq('group_id', req.params.id);
     await supabase.from('public_groups').delete().eq('id', req.params.id);
+    clearSharingAccessCaches();
     res.json({ success: true });
   } catch(e) { res.status(500).json({ error: e.message }); }
 });

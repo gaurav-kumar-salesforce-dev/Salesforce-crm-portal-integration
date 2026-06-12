@@ -652,8 +652,9 @@ BEGIN
     RETURN FALSE;
   END IF;
 
-  -- Same role or owner's role path under viewer's role path = viewer can see owner's records.
-  RETURN v_owner_path = v_viewer_path OR v_owner_path LIKE v_viewer_path || '/%';
+  -- Salesforce role hierarchy grants access only to roles above the owner.
+  -- Users in the same role do not inherit access to each other's records.
+  RETURN v_owner_path LIKE v_viewer_path || '/%';
 END;
 $$;
 
@@ -970,12 +971,13 @@ CREATE TABLE IF NOT EXISTS "public"."record_shares" (
     "sf_object" "text" NOT NULL,
     "record_id" "text" NOT NULL,
     "shared_by" "uuid" NOT NULL,
-    "shared_with" "uuid" NOT NULL,
+    "shared_with" "uuid",
     "access_level" "text" DEFAULT 'read'::"text" NOT NULL,
     "expires_at" timestamp with time zone,
     "created_at" timestamp with time zone DEFAULT "now"() NOT NULL,
     "shared_with_group" "uuid",
-    CONSTRAINT "record_shares_access_level_check" CHECK (("access_level" = ANY (ARRAY['read'::"text", 'edit'::"text"])))
+    CONSTRAINT "record_shares_access_level_check" CHECK (("access_level" = ANY (ARRAY['read'::"text", 'edit'::"text"]))),
+    CONSTRAINT "record_shares_target_check" CHECK (((("shared_with" IS NOT NULL) AND ("shared_with_group" IS NULL)) OR (("shared_with" IS NULL) AND ("shared_with_group" IS NOT NULL))))
 );
 
 
@@ -1103,7 +1105,12 @@ CREATE TABLE IF NOT EXISTS "public"."sharing_rules" (
     "description" "text",
     "created_at" timestamp with time zone DEFAULT "now"() NOT NULL,
     "created_by" "uuid",
-    CONSTRAINT "sharing_rules_access_level_check" CHECK (("access_level" = ANY (ARRAY['read'::"text", 'edit'::"text"])))
+    "owner_org_role_id" "uuid",
+    "shared_with_org_role_id" "uuid",
+    "shared_with_group_id" "uuid",
+    "shared_with_type" "text" DEFAULT 'role'::"text" NOT NULL,
+    CONSTRAINT "sharing_rules_access_level_check" CHECK (("access_level" = ANY (ARRAY['read'::"text", 'edit'::"text"]))),
+    CONSTRAINT "sharing_rules_shared_with_type_check" CHECK (("shared_with_type" = ANY (ARRAY['role'::"text", 'public_group'::"text"])))
 );
 
 
@@ -1618,6 +1625,9 @@ CREATE INDEX "idx_rs_sf_object" ON "public"."record_shares" USING "btree" ("sf_o
 CREATE INDEX "idx_rs_shared_with" ON "public"."record_shares" USING "btree" ("shared_with");
 
 
+CREATE INDEX "idx_rs_shared_group" ON "public"."record_shares" USING "btree" ("shared_with_group");
+
+
 
 CREATE INDEX "idx_rta_record_id" ON "public"."record_team_assignments" USING "btree" ("record_id");
 
@@ -1642,12 +1652,21 @@ CREATE INDEX "idx_sessions_user_id" ON "public"."sessions" USING "btree" ("user_
 CREATE INDEX "idx_sr_owner_role" ON "public"."sharing_rules" USING "btree" ("owner_role");
 
 
+CREATE INDEX "idx_sr_owner_org_role" ON "public"."sharing_rules" USING "btree" ("owner_org_role_id");
+
+
 
 CREATE INDEX "idx_sr_sf_object" ON "public"."sharing_rules" USING "btree" ("sf_object");
 
 
 
 CREATE INDEX "idx_sr_shared_with" ON "public"."sharing_rules" USING "btree" ("shared_with_role");
+
+
+CREATE INDEX "idx_sr_shared_org_role" ON "public"."sharing_rules" USING "btree" ("shared_with_org_role_id");
+
+
+CREATE INDEX "idx_sr_shared_group" ON "public"."sharing_rules" USING "btree" ("shared_with_group_id");
 
 
 
@@ -1874,6 +1893,18 @@ ALTER TABLE ONLY "public"."sessions"
 
 ALTER TABLE ONLY "public"."sharing_rules"
     ADD CONSTRAINT "sharing_rules_created_by_fkey" FOREIGN KEY ("created_by") REFERENCES "public"."users"("id") ON DELETE SET NULL;
+
+
+ALTER TABLE ONLY "public"."sharing_rules"
+    ADD CONSTRAINT "sharing_rules_owner_org_role_id_fkey" FOREIGN KEY ("owner_org_role_id") REFERENCES "public"."org_roles"("id") ON DELETE SET NULL;
+
+
+ALTER TABLE ONLY "public"."sharing_rules"
+    ADD CONSTRAINT "sharing_rules_shared_with_org_role_id_fkey" FOREIGN KEY ("shared_with_org_role_id") REFERENCES "public"."org_roles"("id") ON DELETE CASCADE;
+
+
+ALTER TABLE ONLY "public"."sharing_rules"
+    ADD CONSTRAINT "sharing_rules_shared_with_group_id_fkey" FOREIGN KEY ("shared_with_group_id") REFERENCES "public"."public_groups"("id") ON DELETE CASCADE;
 
 
 
