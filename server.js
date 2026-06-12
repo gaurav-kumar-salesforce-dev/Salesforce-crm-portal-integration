@@ -343,6 +343,18 @@ const portalUserContextCache = new Map();
 const publicGroupMembershipCache = new Map();
 const sharingRulesCache = new Map();
 const recordShareCache = new Map();
+let securityPerfSeq = 0;
+
+function msSince(startedAt) {
+  return Number((performance.now() - startedAt).toFixed(1));
+}
+
+function securityPerfLog(requestId, label, data = {}) {
+  const suffix = Object.entries(data)
+    .map(([key, value]) => `${key}=${value}`)
+    .join(' ');
+  console.log(`[security-perf:${requestId}] ${label}${suffix ? ` ${suffix}` : ''}`);
+}
 
 function clearSharingAccessCaches() {
   portalUserContextCache.clear();
@@ -577,12 +589,189 @@ async function getRecordSharesForViewer(recordId, sfObject, userId, viewerGroupI
   return promise;
 }
 
-async function getSharingAccess(record, userId, userRole, sfObject) {
-  const ownerId = getRecordOwnerId(record);
+async function getRecordSharesForViewerBatch(recordIds = [], sfObject, userId, viewerGroupIds) {
+  const ids = [...new Set((recordIds || []).filter(Boolean))];
+  const sharesByRecordId = new Map(ids.map(id => [id, []]));
+  if (!ids.length) return sharesByRecordId;
+
+  const groupIds = [...viewerGroupIds];
+  const now = Date.now();
+  for (let i = 0; i < ids.length; i += 100) {
+    const chunk = ids.slice(i, i + 100);
+    const orFilter = `shared_with.eq.${userId}${groupIds.length ? `,shared_with_group.in.(${groupIds.join(',')})` : ''}`;
+    const { data: shares, error } = await supabase
+      .from('record_shares')
+      .select('record_id, access_level, shared_with, shared_with_group, expires_at')
+      .eq('sf_object', sfObject)
+      .in('record_id', chunk)
+      .or(orFilter);
+
+    if (error) {
+      console.error('[record-visibility] batch record share lookup failed:', error.message);
+      continue;
+    }
+
+    (shares || [])
+      .filter(share => !share.expires_at || new Date(share.expires_at).getTime() > now)
+      .forEach((share) => {
+        if (!sharesByRecordId.has(share.record_id)) sharesByRecordId.set(share.record_id, []);
+        sharesByRecordId.get(share.record_id).push(share);
+      });
+  }
+  return sharesByRecordId;
+}
+
+async function buildVisibilityContext(userId, userRole, sfObject) {
   const viewer = await getPortalUserRoleContext(userId);
-  const owner = ownerId ? await getPortalUserRoleContext(ownerId) : null;
   const viewerGroupIds = await getPublicGroupIdsForUser(userId, viewer?.org_role_id);
   const rules = await getSharingRulesForObject(sfObject);
+  return { viewer, viewerGroupIds, rules };
+}
+
+async function getUserIdsForOrgRoleIds(orgRoleIds = []) {
+  const ids = [...new Set((orgRoleIds || []).filter(Boolean))];
+  if (!ids.length) return [];
+
+  const { data, error } = await supabase
+    .from('users')
+    .select('id')
+    .in('org_role_id', ids)
+    .eq('is_active', true);
+
+  if (error) {
+    console.error('[record-visibility] users for role lookup failed:', error.message);
+    return [];
+  }
+  return (data || []).map(row => row.id).filter(Boolean);
+}
+
+async function getHierarchyVisibleOwnerIds(userId, orgRoleId) {
+  const ownerIds = new Set([userId].filter(Boolean));
+  if (!orgRoleId) return ownerIds;
+
+  const { data: viewerRole, error: viewerRoleError } = await supabase
+    .from('org_roles')
+    .select('path')
+    .eq('id', orgRoleId)
+    .eq('is_active', true)
+    .maybeSingle();
+
+  if (viewerRoleError || !viewerRole?.path) return ownerIds;
+
+  const { data: roleRows, error: roleError } = await supabase
+    .from('org_roles')
+    .select('id')
+    .like('path', `${viewerRole.path}/%`)
+    .eq('is_active', true);
+
+  if (roleError) {
+    console.error('[record-visibility] descendant role lookup failed:', roleError.message);
+    return ownerIds;
+  }
+
+  const descendantRoleIds = (roleRows || []).map(row => row.id).filter(Boolean);
+  (await getUserIdsForOrgRoleIds(descendantRoleIds)).forEach(id => ownerIds.add(id));
+  return ownerIds;
+}
+
+async function getViewerRecordShareIds(sfObject, userId, viewerGroupIds) {
+  const groupIds = [...viewerGroupIds];
+  const recordIds = new Set();
+  const orFilter = `shared_with.eq.${userId}${groupIds.length ? `,shared_with_group.in.(${groupIds.join(',')})` : ''}`;
+
+  const { data, error } = await supabase
+    .from('record_shares')
+    .select('record_id, expires_at')
+    .eq('sf_object', sfObject)
+    .or(orFilter);
+
+  if (error) {
+    console.error('[record-visibility] viewer record share id lookup failed:', error.message);
+    return recordIds;
+  }
+
+  const now = Date.now();
+  (data || [])
+    .filter(share => share.record_id && (!share.expires_at || new Date(share.expires_at).getTime() > now))
+    .forEach(share => recordIds.add(share.record_id));
+  return recordIds;
+}
+
+async function buildReadableRecordScopeFilter(sfObject, user, requestId = 'n/a') {
+  const startedAt = performance.now();
+  if (!user || isFullAccessUser(user)) return { clause: '', reason: 'admin' };
+  const availableFields = await getObjectFieldSet(sfObject);
+  if (!availableFields.has(PORTAL_OWNER_FIELD)) return { clause: '', reason: 'no_owner_field' };
+
+  const owdAccess = await getOrgWideDefaultAccess(sfObject);
+  if (['public_read', 'public_read_write'].includes(owdAccess)) {
+    return { clause: '', reason: owdAccess };
+  }
+
+  const context = await buildVisibilityContext(user.id, user.role, sfObject);
+  const ownerIds = await getHierarchyVisibleOwnerIds(user.id, context.viewer?.org_role_id);
+  const matchedOwnerRoleIds = new Set();
+  let unrestrictedBySharingRule = false;
+
+  (context.rules || []).forEach((rule) => {
+    const viewerMatches =
+      (rule.shared_with_group_id && context.viewerGroupIds.has(rule.shared_with_group_id)) ||
+      (rule.shared_with_org_role_id && context.viewer?.org_role_id === rule.shared_with_org_role_id) ||
+      (!rule.shared_with_org_role_id && !rule.shared_with_group_id && rule.shared_with_role && user.role === rule.shared_with_role);
+
+    if (!viewerMatches) return;
+    if (!rule.owner_org_role_id && !rule.owner_role) {
+      unrestrictedBySharingRule = true;
+      return;
+    }
+    if (rule.owner_org_role_id) matchedOwnerRoleIds.add(rule.owner_org_role_id);
+  });
+
+  if (unrestrictedBySharingRule) {
+    securityPerfLog(requestId, 'scopeFilter', { object: sfObject, reason: 'sharing_any_owner', ms: msSince(startedAt) });
+    return { clause: '', reason: 'sharing_any_owner' };
+  }
+
+  (await getUserIdsForOrgRoleIds([...matchedOwnerRoleIds])).forEach(id => ownerIds.add(id));
+  const sharedRecordIds = await getViewerRecordShareIds(sfObject, user.id, context.viewerGroupIds);
+
+  if (ownerIds.size > 900 || sharedRecordIds.size > 900) {
+    securityPerfLog(requestId, 'scopeFilter', {
+      object: sfObject,
+      reason: 'too_many_ids',
+      owners: ownerIds.size,
+      shares: sharedRecordIds.size,
+      ms: msSince(startedAt)
+    });
+    return { clause: '', reason: 'too_many_ids' };
+  }
+
+  const parts = [];
+  if (ownerIds.size) {
+    parts.push(`${PORTAL_OWNER_FIELD} IN (${[...ownerIds].map(id => `'${escapeSOQL(id)}'`).join(', ')})`);
+  }
+  if (sharedRecordIds.size) {
+    parts.push(`Id IN (${[...sharedRecordIds].map(id => `'${escapeSOQL(id)}'`).join(', ')})`);
+  }
+
+  const clause = parts.length ? `(${parts.join(' OR ')})` : `${PORTAL_OWNER_FIELD} = '${escapeSOQL(user.id)}'`;
+  securityPerfLog(requestId, 'scopeFilter', {
+    object: sfObject,
+    reason: 'owner_scope',
+    owners: ownerIds.size,
+    shares: sharedRecordIds.size,
+    ms: msSince(startedAt)
+  });
+  return { clause, reason: 'owner_scope' };
+}
+
+async function getSharingAccess(record, userId, userRole, sfObject, context = null) {
+  const ownerId = getRecordOwnerId(record);
+  const ctx = context || await buildVisibilityContext(userId, userRole, sfObject);
+  const { viewer, viewerGroupIds, rules } = ctx;
+  const owner =
+    ctx.ownerContextById?.get(ownerId) ||
+    (ownerId ? await getPortalUserRoleContext(ownerId) : null);
 
   let best = { allowed: false, accessLevel: 'none', via: 'sharing_rule' };
   (rules || []).forEach((rule) => {
@@ -607,7 +796,9 @@ async function getSharingAccess(record, userId, userRole, sfObject) {
     });
   });
 
-  const shares = await getRecordSharesForViewer(record?.Id, sfObject, userId, viewerGroupIds);
+  const shares =
+    ctx.recordSharesById?.get(record?.Id) ||
+    await getRecordSharesForViewer(record?.Id, sfObject, userId, viewerGroupIds);
 
   (shares || []).forEach((share) => {
     const matchedUser = share.shared_with === userId;
@@ -623,7 +814,7 @@ async function getSharingAccess(record, userId, userRole, sfObject) {
   return best;
 }
 
-async function evaluateRecordAccess(record, userId, userRole, sfObject, isSystemAdmin = false) {
+async function evaluateRecordAccess(record, userId, userRole, sfObject, isSystemAdmin = false, context = null) {
   if (isSystemAdmin) return { allowed: true, accessLevel: 'edit', via: 'admin' };
 
   const ownerId = getRecordOwnerId(record);
@@ -646,7 +837,7 @@ async function evaluateRecordAccess(record, userId, userRole, sfObject, isSystem
     access = { allowed: true, accessLevel: 'read', via: 'owd' };
   }
 
-  access = strongestRecordAccess(access, await getSharingAccess(record, userId, userRole, sfObject));
+  access = strongestRecordAccess(access, await getSharingAccess(record, userId, userRole, sfObject, context));
 
   if (!access.allowed && !ownerId) {
     return { allowed: false, accessLevel: 'none', via: 'missing_owner' };
@@ -660,15 +851,40 @@ async function canSeeRecord(record, userId, userRole, sfObject, isSystemAdmin = 
   return access.allowed;
 }
 
-async function applyRecordVisibility(records, userId, userRole, sfObject, isSystemAdmin = false) {
+async function applyRecordVisibility(records, userId, userRole, sfObject, isSystemAdmin = false, requestId = 'n/a') {
+  const startedAt = performance.now();
   if (isSystemAdmin) return records;
+  const rows = records || [];
+  const context = await buildVisibilityContext(userId, userRole, sfObject);
+  const ownerIds = [...new Set(rows.map(getRecordOwnerId).filter(Boolean))];
+  context.ownerContextById = new Map();
+  await Promise.all(ownerIds.map(async (ownerId) => {
+    context.ownerContextById.set(ownerId, await getPortalUserRoleContext(ownerId));
+  }));
+  context.recordSharesById = await getRecordSharesForViewerBatch(
+    rows.map(record => record?.Id).filter(Boolean),
+    sfObject,
+    userId,
+    context.viewerGroupIds
+  );
+
   const decisions = await Promise.all(
-    (records || []).map(async (record) => ({
+    rows.map(async (record) => ({
       record,
-      allowed: await canSeeRecord(record, userId, userRole, sfObject, isSystemAdmin)
+      allowed: (await evaluateRecordAccess(record, userId, userRole, sfObject, isSystemAdmin, context)).allowed
     }))
   );
-  return decisions.filter(item => item.allowed).map(item => item.record);
+  const visible = decisions.filter(item => item.allowed).map(item => item.record);
+  securityPerfLog(requestId, 'applyRecordVisibility', {
+    object: sfObject,
+    evaluated: rows.length,
+    visible: visible.length,
+    owners: ownerIds.length,
+    groups: context.viewerGroupIds.size,
+    rules: context.rules.length,
+    ms: msSince(startedAt)
+  });
+  return visible;
 }
 
 async function canEditRecord(record, userId, userRole, sfObject, isSystemAdmin = false) {
@@ -706,7 +922,7 @@ async function filterSearchRecordsByVisibility(searchRecords = [], req) {
   return searchRecords.filter(record => allowedByKey.has(`${record?.attributes?.type}:${record?.Id}`));
 }
 
-async function filterRelatedListsByVisibility(lists = [], req) {
+async function filterRelatedListsByVisibility(lists = [], req, requestId = 'related') {
   if (req.user?.isSystemAdmin) return lists;
 
   return Promise.all((lists || []).map(async (list) => {
@@ -723,7 +939,8 @@ async function filterRelatedListsByVisibility(lists = [], req) {
       req.user.id,
       req.user.role,
       list.objectName,
-      req.user.isSystemAdmin
+      req.user.isSystemAdmin,
+      requestId
     );
 
     return { ...list, records, totalSize: records.length };
@@ -905,13 +1122,68 @@ app.post('/api/portal/sharing-rules', checkAuth, checkRole('system_administrator
 
 // PATCH toggle sharing rule active/inactive
 app.patch('/api/portal/sharing-rules/:id', checkAuth, checkRole('system_administrator'), async (req, res) => {
+  const {
+    name,
+    sfObject,
+    ownerRole,
+    sharedWithRole,
+    ownerOrgRoleId,
+    sharedWithOrgRoleId,
+    sharedWithGroupId,
+    sharedWithType,
+    accessLevel,
+    description,
+    isActive
+  } = req.body || {};
+
+  const updates = {};
+  if (name !== undefined) updates.name = String(name || '').trim();
+  if (sfObject !== undefined) updates.sf_object = sfObject;
+  if (ownerRole !== undefined) updates.owner_role = ownerRole || null;
+  if (ownerOrgRoleId !== undefined) updates.owner_org_role_id = ownerOrgRoleId || null;
+  if (accessLevel !== undefined) updates.access_level = accessLevel;
+  if (description !== undefined) updates.description = description || null;
+  if (isActive !== undefined) updates.is_active = Boolean(isActive);
+
+  if (sharedWithType !== undefined || sharedWithOrgRoleId !== undefined || sharedWithGroupId !== undefined || sharedWithRole !== undefined) {
+    const targetType = sharedWithType === 'public_group' ? 'public_group' : 'role';
+    updates.shared_with_type = targetType;
+    updates.shared_with_role = targetType === 'role' ? (sharedWithRole || null) : null;
+    updates.shared_with_org_role_id = targetType === 'role' ? (sharedWithOrgRoleId || null) : null;
+    updates.shared_with_group_id = targetType === 'public_group' ? (sharedWithGroupId || null) : null;
+  }
+
+  if (updates.name !== undefined && !updates.name) {
+    return res.status(400).json({ error: 'Rule name is required' });
+  }
+  if (updates.access_level !== undefined && !['read', 'edit'].includes(updates.access_level)) {
+    return res.status(400).json({ error: 'Access level must be read or edit' });
+  }
+  if (updates.shared_with_type === 'public_group' && !updates.shared_with_group_id) {
+    return res.status(400).json({ error: 'Public group target is required' });
+  }
+  if (updates.shared_with_type === 'role' && !updates.shared_with_org_role_id && !updates.shared_with_role) {
+    return res.status(400).json({ error: 'Role target is required' });
+  }
+  if (!Object.keys(updates).length) {
+    return res.status(400).json({ error: 'No sharing rule changes provided' });
+  }
+
   try {
     const { error } = await supabase
       .from('sharing_rules')
-      .update({ is_active: req.body.isActive, ...(req.body.accessLevel ? { access_level: req.body.accessLevel } : {}) })
+      .update(updates)
       .eq('id', req.params.id);
     if (error) throw error;
     clearSharingAccessCaches();
+    await writeAuditLog({
+      userId: req.user.id,
+      userEmail: req.user.email,
+      userRole: req.user.role,
+      action: 'update',
+      payload: { type: 'sharing_rule', id: req.params.id, fields: Object.keys(updates) },
+      ipAddress: req.ip
+    });
     res.json({ success: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -2504,6 +2776,20 @@ function buildWhereClause(objectName, search, extraWhere, availableFields = null
 
   if (extraWhere) conditions.push(extraWhere);
   return conditions.length ? ` WHERE ${conditions.join(' AND ')}` : '';
+}
+
+function appendExtraWhereToSOQL(soql, extraWhere) {
+  if (!extraWhere) return soql;
+  const compact = String(soql || '').replace(/\s+/g, ' ').trim();
+  const orderMatch = compact.match(/\sORDER\s+BY\s/i);
+  const limitMatch = compact.match(/\sLIMIT\s/i);
+  const cutIndex = [orderMatch?.index, limitMatch?.index]
+    .filter(index => Number.isInteger(index))
+    .sort((a, b) => a - b)[0];
+  const head = cutIndex === undefined ? compact : compact.slice(0, cutIndex);
+  const tail = cutIndex === undefined ? '' : compact.slice(cutIndex);
+  const joiner = /\sWHERE\s/i.test(head) ? ' AND ' : ' WHERE ';
+  return `${head}${joiner}${extraWhere}${tail}`;
 }
 
 async function buildSOQL(objectName, search, extraWhere, limit = null, offset = 0) {
@@ -4879,6 +5165,8 @@ app.get('/oauth/callback', async (req, res) => {
 app.get('/api/lookup/:object', checkAuth, async (req, res) => {
   const { object } = req.params;
   const search = String(req.query.search || '').trim().replace(/'/g, "\\'");
+  const requestId = `lookup-${++securityPerfSeq}`;
+  const requestStartedAt = performance.now();
 
   if (!OBJECTS[object]) return res.status(400).json({ error: `Unknown object: ${object}` });
 
@@ -4906,21 +5194,32 @@ app.get('/api/lookup/:object', checkAuth, async (req, res) => {
       Opportunity: 'Id, Name, AccountId, Account.Name'
     }[object] || OBJECTS[object].fields;
     const selectFields = await fieldsCsvForObject(object, fields);
+    const sfStartedAt = performance.now();
     const data = await sfGet('/query', {
       q: `SELECT ${selectFields} FROM ${object} ${where === 'WHERE ' ? '' : where} ORDER BY ${OBJECTS[object].orderBy} LIMIT 25`
     });
+    const sfMs = msSince(sfStartedAt);
     const visibleRecords = await applyRecordVisibility(
       data.records || [],
       req.user.id,
       req.user.role,
       object,
-      req.user.isSystemAdmin
+      req.user.isSystemAdmin,
+      requestId
     );
     res.json({
       records: visibleRecords.map((record) => ({
         ...record,
         Name: record.Name || record.Subject || record.CaseNumber || record.Id
       }))
+    });
+    securityPerfLog(requestId, 'GET lookup', {
+      object,
+      sfRecords: data.records?.length || 0,
+      evaluated: data.records?.length || 0,
+      visible: visibleRecords.length,
+      sfMs,
+      totalMs: msSince(requestStartedAt)
     });
   } catch (err) {
     handleSFError(err, res, `Lookup ${object}`);
@@ -4997,21 +5296,37 @@ app.get('/api/:object/listviews/:id/results', checkAuth, async (req, res, next) 
 }, async (req, res) => {
   const { object, id } = req.params;
   if (!OBJECTS[object]) return res.status(400).json({ error: `Unknown object: ${object}` });
+  const requestId = `listview-${++securityPerfSeq}`;
+  const requestStartedAt = performance.now();
 
   try {
     if (req.query.cursor) {
+      const sfStartedAt = performance.now();
       const data = await sfGet(queryMoreEndpoint(req.query.cursor), {}, { headers: QUERY_BATCH_HEADERS });
+      const sfMs = msSince(sfStartedAt);
+      const ownerStartedAt = performance.now();
       const ownedRecords = await hydrateRecordOwners(data.records || [], object);
+      const ownerMs = msSince(ownerStartedAt);
       const visibleRecords = await applyRecordVisibility(
         ownedRecords,
         req.user.id,
         req.user.role,
         object,
-        req.user.isSystemAdmin
+        req.user.isSystemAdmin,
+        requestId
       );
       const records = visibleRecords.map(record => applyFieldSecurity(record, req.fieldPerms));
       const owdAccess = await getOrgWideDefaultAccess(object);
       const canUseSalesforceTotal = req.user.isSystemAdmin || ['public_read', 'public_read_write'].includes(owdAccess);
+      securityPerfLog(requestId, 'GET listview cursor', {
+        object,
+        sfRecords: data.records?.length || 0,
+        evaluated: ownedRecords.length,
+        visible: records.length,
+        sfMs,
+        ownerMs,
+        totalMs: msSince(requestStartedAt)
+      });
       return res.json({
         records,
         totalSize: canUseSalesforceTotal ? (data.totalSize || 0) : records.length,
@@ -5021,15 +5336,23 @@ app.get('/api/:object/listviews/:id/results', checkAuth, async (req, res, next) 
       });
     }
 
+    const describeStartedAt = performance.now();
     const detail = await sfGet(`/sobjects/${object}/listviews/${id}/describe`);
-    const data = await sfGet('/query', { q: detail.query }, { headers: QUERY_BATCH_HEADERS });
+    const scope = await buildReadableRecordScopeFilter(object, req.user, requestId);
+    const scopedQuery = appendExtraWhereToSOQL(detail.query, scope.clause);
+    const sfStartedAt = performance.now();
+    const data = await sfGet('/query', { q: scopedQuery }, { headers: QUERY_BATCH_HEADERS });
+    const sfMs = msSince(sfStartedAt);
+    const ownerStartedAt = performance.now();
     const ownedRecords = await hydrateRecordOwners(data.records || [], object);
+    const ownerMs = msSince(ownerStartedAt);
     const visibleRecords = await applyRecordVisibility(
       ownedRecords,
       req.user.id,
       req.user.role,
       object,
-      req.user.isSystemAdmin
+      req.user.isSystemAdmin,
+      requestId
     );
     const records = visibleRecords.map(record => applyFieldSecurity(record, req.fieldPerms));
     const hiddenFields = new Set(req.fieldPerms?.hiddenFields || []);
@@ -5044,6 +5367,17 @@ app.get('/api/:object/listviews/:id/results', checkAuth, async (req, res, next) 
       done: Boolean(data.done),
       nextRecordsUrl: data.nextRecordsUrl || null,
       hiddenFields: [...hiddenFields]
+    });
+    securityPerfLog(requestId, 'GET listview', {
+      object,
+      scope: scope.reason,
+      sfRecords: data.records?.length || 0,
+      evaluated: ownedRecords.length,
+      visible: records.length,
+      describeMs: msSince(describeStartedAt),
+      sfMs,
+      ownerMs,
+      totalMs: msSince(requestStartedAt)
     });
   } catch (err) {
     handleSFError(err, res, `List view results ${object}/${id}`);
@@ -5087,6 +5421,8 @@ app.get('/api/:object/fields', checkAuth, async (req, res, next) => {
 app.get('/api/search/global', checkAuth, async (req, res) => {
   const q = (req.query.q || '').trim();
   if (!q) return res.json({ searchRecords: [] });
+  const requestId = `search-${++securityPerfSeq}`;
+  const requestStartedAt = performance.now();
 
   const safe = q.replace(/['"\\{}[\]()^~*:!?&|+]/g, ' ').trim().replace(/\s+/g, ' ');
   if (!safe) return res.json({ searchRecords: [] });
@@ -5104,9 +5440,21 @@ app.get('/api/search/global', checkAuth, async (req, res) => {
   ].join(' ');
 
   try {
+    const sfStartedAt = performance.now();
     const data = await sfGet('/search', { q: sosl });
+    const sfMs = msSince(sfStartedAt);
+    const securityStartedAt = performance.now();
     const searchRecords = await filterSearchRecordsByVisibility(data.searchRecords || [], req);
+    const securityMs = msSince(securityStartedAt);
     res.json({ ...data, searchRecords });
+    securityPerfLog(requestId, 'GET global-search', {
+      sfRecords: data.searchRecords?.length || 0,
+      evaluated: data.searchRecords?.length || 0,
+      visible: searchRecords.length,
+      sfMs,
+      securityMs,
+      totalMs: msSince(requestStartedAt)
+    });
   } catch (err) {
     handleSFError(err, res, 'Global search');
   }
@@ -5232,10 +5580,14 @@ app.get('/api/:object/:id/related', checkAuth, async (req, res, next) => {
 }, async (req, res) => {
 
   const { object, id } = req.params;
+  const requestId = `related-${++securityPerfSeq}`;
+  const requestStartedAt = performance.now();
   if (!OBJECTS[object]) return res.status(400).json({ error: `Unknown object: ${object}` });
 
   try {
+    const sfStartedAt = performance.now();
     const record = await sfGet(`/sobjects/${object}/${id}?fields=${PORTAL_OWNER_FIELD}`);
+    const parentSfMs = msSince(sfStartedAt);
     if (!(await canSeeRecord(record, req.user.id, req.user.role, object, req.user.isSystemAdmin))) {
       return res.status(403).json({
         error: 'You do not have access to this record.',
@@ -5245,9 +5597,16 @@ app.get('/api/:object/:id/related', checkAuth, async (req, res, next) => {
 
     const lists = await filterRelatedListsByVisibility(
       await getRelatedListsForRecord(object, id),
-      req
+      req,
+      requestId
     );
     res.json({ object, id, lists });
+    securityPerfLog(requestId, 'GET related', {
+      object,
+      lists: lists.length,
+      parentSfMs,
+      totalMs: msSince(requestStartedAt)
+    });
   } catch (err) {
     handleSFError(err, res, `Related lists ${object}/${id}`);
   }
@@ -5821,6 +6180,8 @@ app.get('/api/:object', checkAuth,
 
   async (req, res) => {
     const { object } = req.params;
+    const requestId = `list-${++securityPerfSeq}`;
+    const requestStartedAt = performance.now();
 
     if (!OBJECTS[object]) {
       return res.status(400).json({
@@ -5832,19 +6193,24 @@ app.get('/api/:object', checkAuth,
 
       // Pagination (queryMore)
       if (req.query.cursor) {
+        const sfStartedAt = performance.now();
         const data = await sfGet(
           queryMoreEndpoint(req.query.cursor),
           {},
           { headers: QUERY_BATCH_HEADERS }
         );
+        const sfMs = msSince(sfStartedAt);
 
+        const ownerStartedAt = performance.now();
         const ownedRecords = await hydrateRecordOwners(data.records || [], object);
+        const ownerMs = msSince(ownerStartedAt);
         const visibleRecords = await applyRecordVisibility(
           ownedRecords,
           req.user.id,
           req.user.role,
           object,
-          req.user.isSystemAdmin
+          req.user.isSystemAdmin,
+          requestId
         );
         const records = visibleRecords.map(record =>
           applyFieldSecurity(record, req.fieldPerms)
@@ -5852,6 +6218,15 @@ app.get('/api/:object', checkAuth,
         const owdAccess = await getOrgWideDefaultAccess(object);
         const canUseSalesforceTotal = req.user.isSystemAdmin || ['public_read', 'public_read_write'].includes(owdAccess);
 
+        securityPerfLog(requestId, 'GET list cursor', {
+          object,
+          sfRecords: data.records?.length || 0,
+          evaluated: ownedRecords.length,
+          visible: records.length,
+          sfMs,
+          ownerMs,
+          totalMs: msSince(requestStartedAt)
+        });
         return res.json({
           records,
           totalSize: canUseSalesforceTotal ? (data.totalSize || 0) : records.length,
@@ -5862,19 +6237,24 @@ app.get('/api/:object', checkAuth,
       }
 
       // Initial query
+      const scope = await buildReadableRecordScopeFilter(object, req.user, requestId);
       const soql = await buildSOQL(
         object,
         req.query.search,
-        req.query.where
+        [req.query.where, scope.clause].filter(Boolean).join(' AND ')
       );
 
+      const sfStartedAt = performance.now();
       const data = await sfGet(
         '/query',
         { q: soql },
         { headers: QUERY_BATCH_HEADERS }
       );
+      const sfMs = msSince(sfStartedAt);
 
+      const ownerStartedAt = performance.now();
       const ownedRecords = await hydrateRecordOwners(data.records || [], object);
+      const ownerMs = msSince(ownerStartedAt);
 
       // Apply record visibility
       const visibleRecords = await applyRecordVisibility(
@@ -5882,7 +6262,8 @@ app.get('/api/:object', checkAuth,
         req.user.id,
         req.user.role,
         object,
-        req.user.isSystemAdmin
+        req.user.isSystemAdmin,
+        requestId
       );
       const records = visibleRecords.map(record =>
         applyFieldSecurity(record, req.fieldPerms)
@@ -5897,6 +6278,16 @@ app.get('/api/:object', checkAuth,
         done: Boolean(data.done),
         nextRecordsUrl: data.nextRecordsUrl || null,
         hiddenFields: [...(req.fieldPerms?.hiddenFields || [])]
+      });
+      securityPerfLog(requestId, 'GET list', {
+        object,
+        scope: scope.reason,
+        sfRecords: data.records?.length || 0,
+        evaluated: ownedRecords.length,
+        visible: records.length,
+        sfMs,
+        ownerMs,
+        totalMs: msSince(requestStartedAt)
       });
 
     } catch (err) {
@@ -5925,6 +6316,8 @@ app.get('/api/:object/:id', checkAuth,
 
   async (req, res) => {
     const { object, id } = req.params;
+    const requestId = `detail-${++securityPerfSeq}`;
+    const requestStartedAt = performance.now();
 
     if (!OBJECTS[object]) {
       return res.status(400).json({
@@ -5933,8 +6326,10 @@ app.get('/api/:object/:id', checkAuth,
     }
 
     try {
+      const sfStartedAt = performance.now();
       const record = await sfGet(`/sobjects/${object}/${id}`);
       const meta = await sfGet(`/sobjects/${object}/describe`);
+      const sfMs = msSince(sfStartedAt);
 
       const fields = meta.fields
         .filter(field => !field.deprecatedAndHidden)
@@ -5960,9 +6355,17 @@ app.get('/api/:object/:id', checkAuth,
         );
 
       const cleanRecord = applyFieldSecurity(record, req.fieldPerms);
-      // Check if user can see this specific record
-      const canSee = await canSeeRecord(record, req.user.id, req.user.role, object, req.user.isSystemAdmin);
-      if (!canSee) {
+      // Check if user can see this specific record and return record-level access to the UI.
+      const securityStartedAt = performance.now();
+      const recordAccess = await evaluateRecordAccess(
+        record,
+        req.user.id,
+        req.user.role,
+        object,
+        req.user.isSystemAdmin
+      );
+      const securityMs = msSince(securityStartedAt);
+      if (!recordAccess.allowed) {
         return res.status(403).json({
           error: 'You do not have access to this record.',
           code: 'RECORD_ACCESS_DENIED'
@@ -5977,7 +6380,19 @@ app.get('/api/:object/:id', checkAuth,
       res.json({
         record: cleanRecord,
         fields,
-        lookupLabels
+        lookupLabels,
+        recordAccess
+      });
+      securityPerfLog(requestId, 'GET detail', {
+        object,
+        sfRecords: 1,
+        evaluated: 1,
+        visible: 1,
+        access: recordAccess.accessLevel,
+        via: recordAccess.via,
+        sfMs,
+        securityMs,
+        totalMs: msSince(requestStartedAt)
       });
 
     } catch (err) {
@@ -6134,16 +6549,21 @@ app.patch('/api/:object/:id', checkAuth,
   // Record-level edit security
   async (req, res, next) => {
     const { object, id } = req.params;
+    req.securityPerfId = `patch-${++securityPerfSeq}`;
+    req.securityPerfStartedAt = performance.now();
 
     if (!OBJECTS[object]) return next();
     if (isFullAccessUser(req.user)) return next();
 
     try {
-      const startedAt = Date.now();
+      const sfStartedAt = performance.now();
       const record = await sfGet(
         `/sobjects/${object}/${id}?fields=Portal_Owner__c`
       );
+      record.Id = record.Id || id;
+      const sfMs = msSince(sfStartedAt);
 
+      const securityStartedAt = performance.now();
       const allowed = await canEditRecord(
         record,
         req.user.id,
@@ -6151,6 +6571,7 @@ app.patch('/api/:object/:id', checkAuth,
         object,
         req.user.isSystemAdmin
       );
+      const securityMs = msSince(securityStartedAt);
 
       if (!allowed) {
         return res.status(403).json({
@@ -6159,14 +6580,23 @@ app.patch('/api/:object/:id', checkAuth,
         });
       }
 
-      if (process.env.DEBUG_CRM_TIMING === 'true') {
-        console.log(`[timing] record-edit-check ${object}/${id}: ${Date.now() - startedAt}ms`);
-      }
+      securityPerfLog(req.securityPerfId, 'PATCH edit-check', {
+        object,
+        sfRecords: 1,
+        evaluated: 1,
+        visible: 1,
+        sfMs,
+        securityMs,
+        totalMs: msSince(req.securityPerfStartedAt)
+      });
       next();
 
     } catch (err) {
-      // If lookup fails, continue and let Salesforce handle it
-      next();
+      console.error(`[record-visibility] edit check failed for ${object}/${id}:`, err.message);
+      return res.status(403).json({
+        error: permissionDeniedMessage(),
+        code: 'RECORD_EDIT_CHECK_FAILED'
+      });
     }
   },
 
@@ -6186,22 +6616,28 @@ app.patch('/api/:object/:id', checkAuth,
     }
 
     try {
-      const startedAt = Date.now();
       const bodyWithModifier = {
         ...applyFieldWriteSecurity(req.body, req.fieldPerms),
         Portal_Last_Modified_By__c: req.user.id
       };
 
+      const sfStartedAt = performance.now();
       await sfPatch(
         `/sobjects/${object}/${id}`,
         bodyWithModifier
       );
+      const sfMs = msSince(sfStartedAt);
 
-      if (process.env.DEBUG_CRM_TIMING === 'true') {
-        console.log(`[timing] sf-patch ${object}/${id}: ${Date.now() - startedAt}ms`);
-      }
       res.json({
         success: true
+      });
+      securityPerfLog(req.securityPerfId || `patch-${++securityPerfSeq}`, 'PATCH sf-update', {
+        object,
+        sfRecords: 1,
+        evaluated: 1,
+        visible: 1,
+        sfMs,
+        totalMs: req.securityPerfStartedAt ? msSince(req.securityPerfStartedAt) : sfMs
       });
 
     } catch (err) {

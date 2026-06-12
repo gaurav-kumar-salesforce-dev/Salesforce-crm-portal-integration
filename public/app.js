@@ -574,6 +574,8 @@ const kanbanPicklistCache = {};
 let listContentHtml = "";
 let viewingDetail = false;
 let detailRecordState = null;
+let lastToastKey = "";
+let lastToastAt = 0;
 let activeCampaign = null;
 let campaignMembers = [];
 let recordActivities = [];
@@ -891,7 +893,9 @@ async function api(path, options = {}) {
     const data = await response.json().catch(() => ({}));
     const msg  = data.error || 'You do not have permission to perform this action.';
     toast(msg, 'err', 8000);
-    throw new Error(msg);
+    const err = new Error(msg);
+    err.alreadyToasted = true;
+    throw err;
   }
 
   // Handle 429 rate limit
@@ -1254,6 +1258,10 @@ function applyPermissionGuards(sfObject) {
   const canCreate = canDo(sfObject, "can_create");
   const canEdit = canDo(sfObject, "can_edit");
   const canDelete = canDo(sfObject, "can_delete");
+  const detailRecordCanEdit =
+    detailRecordState?.objectName === sfObject
+      ? detailRecordState?.recordAccess?.accessLevel === "edit"
+      : true;
 
   // New button in page header
   document.querySelectorAll('[onclick="openCreate()"]').forEach((btn) => {
@@ -1274,7 +1282,7 @@ function applyPermissionGuards(sfObject) {
   document
     .querySelectorAll('[onclick="editCurrentDetailRecord()"]')
     .forEach((btn) => {
-      btn.style.display = canEdit ? "" : "none";
+      btn.style.display = canEdit && detailRecordCanEdit ? "" : "none";
     });
 
   // Kanban edit buttons
@@ -1288,8 +1296,12 @@ function applyPermissionGuards(sfObject) {
 
   // Activity action buttons (New Task, Log Call, New Event, Email)
   document.querySelectorAll(".activity-action").forEach((btn) => {
-    btn.style.display = canCreate ? "" : "none";
+    btn.style.display = canCreate && detailRecordCanEdit ? "" : "none";
   });
+}
+
+function currentDetailCanEdit() {
+  return detailRecordState?.recordAccess?.accessLevel === "edit";
 }
 
 function formatValue(field, value, record = null) {
@@ -1328,8 +1340,8 @@ function formatValue(field, value, record = null) {
 
 async function checkConnection() {
   const status = $("connStatus");
-  const dot = status.querySelector(".conn-dot");
-  const text = status.querySelector(".conn-text");
+  const dot = status?.querySelector(".conn-dot");
+  const text = status?.querySelector(".conn-text");
   const authBtn = $("authBtn");
 
   try {
@@ -1338,14 +1350,14 @@ async function checkConnection() {
       orgSettings.activeOrgKey = data.org.key || orgSettings.activeOrgKey;
       updateActiveOrgLabel(data.org);
     }
-    dot.className = "conn-dot connected";
-    text.textContent = "Connected";
+    if (dot) dot.className = "conn-dot connected";
+    if (text) text.textContent = "Connected";
     if (authBtn) authBtn.style.display = "none";
     await loadProfile();
     return data;
   } catch (err) {
-    dot.className = "conn-dot error";
-    text.textContent = "Auth failed";
+    if (dot) dot.className = "conn-dot error";
+    if (text) text.textContent = "Auth failed";
     if (authBtn) authBtn.style.display = "inline-flex";
     showAuthRequired(err.message);
     return null;
@@ -1915,6 +1927,8 @@ async function handleListViewChange(value) {
 }
 
 async function loadData() {
+  const loadToken = Symbol("loadData");
+  loadData.latestToken = loadToken;
   const search = $("objSearch")?.value || "";
   const meta = OBJECT_META[currentObject];
   if (!meta || !canReadObject(currentObject)) {
@@ -1965,9 +1979,12 @@ async function loadData() {
       currentColumns = currentColumns.filter(field => !currentHiddenFields.has(field));
     }
 
+    if (viewingDetail || loadData.latestToken !== loadToken) return;
+
     visibleRecordCount = RENDER_CHUNK_SIZE;
     applySort();
     await renderCurrentView();
+    if (viewingDetail || loadData.latestToken !== loadToken) return;
     updatePagination();
     updateBadge(currentObject, totalRecords || currentRecords.length);
     updateRecordCounts();
@@ -2064,9 +2081,11 @@ function applyLocalView() {
 }
 
 function renderTable() {
+  if (viewingDetail) return;
   const recordsToRender = getRecordsToRender();
   const table = $("dataTable");
   const tableCard = $("tableCard");
+  if (!table || !tableCard) return;
   const objectClass = `object-table-${currentObject.toLowerCase()}`;
   const showActions = canDo(currentObject, "can_edit") || canDo(currentObject, "can_delete");
   const columnCount = currentColumns.length + (showActions ? 1 : 0);
@@ -2170,6 +2189,7 @@ function showActiveView() {
 }
 
 async function renderCurrentView() {
+  if (viewingDetail) return;
   updateViewToggle();
   if (currentViewMode === "kanban") {
     await renderKanban();
@@ -2547,10 +2567,14 @@ function loadedRangeText() {
 }
 
 function updateRecordCounts() {
+  if (viewingDetail) return;
   const shown = Math.min(visibleRecordCount, currentRecords.length);
   const totalLabel = totalRecords || currentRecords.length;
-  $("pageSub").textContent = `${totalLabel} records available`;
-  $("recCount").textContent =
+  const pageSub = $("pageSub");
+  const recCount = $("recCount");
+  if (!pageSub || !recCount) return;
+  pageSub.textContent = `${totalLabel} records available`;
+  recCount.textContent =
     currentViewMode === "kanban"
       ? `${currentRecords.length} loaded`
       : `${shown} shown`;
@@ -2794,6 +2818,11 @@ async function openEdit(id) {
 
   try {
     const data = await api(`/api/${objectName}/${id}`);
+    if (data.recordAccess?.accessLevel !== "edit") {
+      closeModal();
+      toast("You do not have the level of access necessary to perform the operation you requested.", "err");
+      return;
+    }
     editingRecord = data.record || editingRecord;
     await openRecordModal(
       `Edit ${objectName}`,
@@ -3302,7 +3331,13 @@ async function openRecordDetail(objectName, id) {
       .slice(0, 80);
 
     currentObject = objectName;
-    detailRecordState = { objectName, id, record, fields };
+    detailRecordState = {
+      objectName,
+      id,
+      record,
+      fields,
+      recordAccess: data.recordAccess || { allowed: true, accessLevel: "read" },
+    };
     document.querySelectorAll(".nav-item").forEach((item) => {
       item.classList.toggle("active", item.dataset.obj === objectName);
     });
@@ -3349,6 +3384,7 @@ function renderRecordDetailPage(
   const summaryFields = getSummaryFields(objectName)
     .filter((field) => getValue(record, field) !== undefined)
     .slice(0, 4);
+  const canEditThisRecord = currentDetailCanEdit();
   $("content").innerHTML = `
     <div class="record-page">
       <div class="record-hero">
@@ -3362,7 +3398,9 @@ function renderRecordDetailPage(
           </div>
           <div class="page-actions">
             <button class="btn btn-ghost" onclick="restoreListContent()">Back</button>
-            <button class="btn btn-primary" onclick="editCurrentDetailRecord()">Edit</button>
+            ${canDo(objectName, "can_edit") && canEditThisRecord
+              ? '<button class="btn btn-primary" onclick="editCurrentDetailRecord()">Edit</button>'
+              : ""}
           </div>
         </div>
         <div class="record-summary">
@@ -3568,6 +3606,7 @@ function getRelatedListConfigs(objectName) {
 }
 
 function renderRelatedListShell(config, noMargin = false) {
+  const canCreateRelated = canDo(config.objectName, "can_create") && currentDetailCanEdit();
   return `
     <div class="related-panel ${noMargin ? "no-margin" : ""}" id="relatedPanel-${escapeHtml(config.key)}">
       <div class="related-head">
@@ -3576,7 +3615,7 @@ function renderRelatedListShell(config, noMargin = false) {
           <p>${escapeHtml(relatedListSubtitle(config.objectName))}</p>
         </div>
         <div class="related-actions">
-          <button class="btn btn-primary btn-related-new" style="${canDo(config.objectName, "can_create") ? "" : "display:none"}" onclick="openRelatedCreate('${escapeJs(config.key)}')">
+          <button class="btn btn-primary btn-related-new" style="${canCreateRelated ? "" : "display:none"}" onclick="openRelatedCreate('${escapeJs(config.key)}')">
             <span aria-hidden="true">+</span>
             New
           </button>
@@ -4174,6 +4213,10 @@ function showRecordTab(name) {
 
 function editCurrentDetailRecord() {
   if (!detailRecordState) return;
+  if (detailRecordState.recordAccess?.accessLevel !== "edit") {
+    toast("You do not have the level of access necessary to perform the operation you requested.", "err");
+    return;
+  }
   currentObject = detailRecordState.objectName;
   editingRecord = detailRecordState.record;
   openRecordModal(
@@ -4599,6 +4642,10 @@ function defaultEmailRecipient() {
 
 function openRelatedCreate(configKey) {
   if (!detailRecordState) return;
+  if (!currentDetailCanEdit()) {
+    toast("You do not have the level of access necessary to perform the operation you requested.", "err");
+    return;
+  }
   const config = getRelatedListConfigs(detailRecordState.objectName).find(
     (item) => item.key === configKey,
   );
@@ -5241,11 +5288,19 @@ function ensureActivityModal() {
 
 function openActivityModal(type) {
   if (!detailRecordState?.id) return;
+  if (detailRecordState.recordAccess?.accessLevel !== "edit") {
+    toast("You do not have the level of access necessary to perform the operation you requested.", "err");
+    return;
+  }
   const overlay = ensureActivityModal();
   const titleEl = overlay.querySelector("#activityModalTitle");
   const iconEl = overlay.querySelector("#activityModalIcon");
   const saveBtn = overlay.querySelector("#activitySaveBtn");
   const bodyEl = overlay.querySelector("#activityModalBody");
+  if (!titleEl || !iconEl || !saveBtn || !bodyEl) {
+    toast("Activity panel is still loading. Please try again.", "err");
+    return;
+  }
   overlay.dataset.type = type;
   initializeActivityLookups();
   if (type === "email") initializeEmailComposer();
@@ -5535,8 +5590,10 @@ function renderRecordActivity(warnings = []) {
 }
 
 function renderActivityToolbar() {
+  const canCreateActivity =
+    currentDetailCanEdit() && canDo(detailRecordState?.objectName || currentObject, "can_create");
   return `
-    <div class="activity-actions">
+    <div class="activity-actions" style="${canCreateActivity ? "" : "display:none"}">
       <div class="activity-action-group activity-action-task" title="New Task">
         <button class="activity-action" aria-label="New Task" onclick="openActivityModal('task')">${activityIconImage("task")}</button>
       </div>
@@ -6128,7 +6185,9 @@ async function saveRecord() {
     refreshAfterSave(objectName, wasEditing ? savedRecord : body, wasEditing)
       .catch((err) => toast(err.message || "Saved, but refresh failed", "err", 8000));
   } catch (err) {
-    toast(err.message || 'Could not save record. Please try again.', 'err', 10000);
+    if (!err.alreadyToasted) {
+      toast(err.message || 'Could not save record. Please try again.', 'err', 10000);
+    }
   } finally {
     setRecordSaveState(false, objectName);
   }
@@ -6157,7 +6216,9 @@ async function confirmDelete() {
     closeDeleteModal();
     await loadData();
   } catch (err) {
-    toast(err.message || 'Could not delete record. Please try again.', 'err', 10000);
+    if (!err.alreadyToasted) {
+      toast(err.message || 'Could not delete record. Please try again.', 'err', 10000);
+    }
   } finally {
     $("confirmDelBtn").disabled = false;
   }
@@ -6236,6 +6297,11 @@ function toast(message, type = 'info', duration = 6000) {
 
   // Map raw error messages to human-friendly ones
   const friendlyMessage = friendlyError(message);
+  const toastKey = `${type}:${friendlyMessage}`;
+  const now = Date.now();
+  if (toastKey === lastToastKey && now - lastToastAt < 1200) return;
+  lastToastKey = toastKey;
+  lastToastAt = now;
 
   const item = document.createElement('div');
   item.className = `toast toast-${type}`;
