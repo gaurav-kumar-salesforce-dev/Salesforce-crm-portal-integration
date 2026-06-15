@@ -14,6 +14,56 @@ const supabase = createClient(
 
 module.exports.supabase = supabase;
 
+async function getEffectivePermissionSetIds(userId) {
+  const [
+    { data: directAssignments, error: directError },
+    { data: groupAssignments, error: groupError }
+  ] = await Promise.all([
+    supabase
+      .from('user_permission_set_assignments')
+      .select('perm_set_id')
+      .eq('user_id', userId),
+    supabase
+      .from('user_permission_set_group_assignments')
+      .select('group_id')
+      .eq('user_id', userId)
+  ]);
+
+  if (directError) throw directError;
+  if (groupError) throw groupError;
+
+  const ids = new Set();
+  (directAssignments || []).forEach((row) => {
+    if (row.perm_set_id) ids.add(row.perm_set_id);
+  });
+
+  const groupIds = [...new Set((groupAssignments || []).map((row) => row.group_id).filter(Boolean))];
+  if (groupIds.length) {
+    const { data: groupMembers, error: groupMembersError } = await supabase
+      .from('permission_set_groups')
+      .select(`
+        id,
+        permission_set_group_members (
+          perm_set_id
+        )
+      `)
+      .in('id', groupIds)
+      .eq('is_active', true);
+
+    if (groupMembersError) throw groupMembersError;
+
+    (groupMembers || []).forEach((group) => {
+      (group.permission_set_group_members || []).forEach((member) => {
+        if (member.perm_set_id) ids.add(member.perm_set_id);
+      });
+    });
+  }
+
+  return [...ids];
+}
+
+module.exports.getEffectivePermissionSetIds = getEffectivePermissionSetIds;
+
 
 // =============================================================================
 // getEffectivePermissions
@@ -55,17 +105,14 @@ async function getEffectivePermissions(userId, sfObject) {
     return deny;
   }
 
-  const { data: assignments, error: assignmentPermSetError } = await supabase
-    .from('user_permission_set_assignments')
-    .select('perm_set_id')
-    .eq('user_id', userId);
-
-  if (assignmentPermSetError) {
-    console.error('[getEffectivePermissions] Permission set assignment lookup error:', assignmentPermSetError);
+  let permissionSetIds = [];
+  try {
+    permissionSetIds = await getEffectivePermissionSetIds(userId);
+  } catch (error) {
+    console.error('[getEffectivePermissions] Permission set lookup error:', error);
     return profilePermission || deny;
   }
 
-  const permissionSetIds = [...new Set((assignments || []).map((row) => row.perm_set_id).filter(Boolean))];
   let permissionSetPermissions = [];
   if (permissionSetIds.length) {
     const { data, error } = await supabase

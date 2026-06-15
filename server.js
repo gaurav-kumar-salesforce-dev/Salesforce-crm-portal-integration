@@ -7,7 +7,13 @@ const crypto = require('crypto');
 
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
-const { supabase, getEffectivePermissions, getUserWithPermissions, writeAuditLog } = require('./db');
+const {
+  supabase,
+  getEffectivePermissions,
+  getEffectivePermissionSetIds,
+  getUserWithPermissions,
+  writeAuditLog
+} = require('./db');
 
 const JWT_SECRET = process.env.JWT_SECRET;
 const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '8h';
@@ -210,14 +216,7 @@ async function getEffectiveFieldPerms(userId, sfObject, userRole, isSystemAdmin 
     profilePerms = data || [];
   }
 
-  const { data: permSetAssignments, error: permSetAssignmentError } = await supabase
-    .from('user_permission_set_assignments')
-    .select('perm_set_id')
-    .eq('user_id', userId);
-
-  if (permSetAssignmentError) throw permSetAssignmentError;
-
-  const permSetIds = [...new Set((permSetAssignments || []).map(row => row.perm_set_id).filter(Boolean))];
+  const permSetIds = await getEffectivePermissionSetIds(userId);
   let permSetPerms = [];
   if (permSetIds.length) {
     const { data, error } = await supabase
@@ -1280,6 +1279,7 @@ app.post('/api/portal/permission-set-groups', checkAuth, checkRole('admin'), asy
       ipAddress: req.ip
     });
 
+    clearAllFieldPermCache();
     res.status(201).json({ success: true, id: group.id });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -1322,6 +1322,7 @@ app.patch('/api/portal/permission-set-groups/:id', checkAuth, checkRole('admin')
       }
     }
 
+    clearAllFieldPermCache();
     res.json({ success: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -1333,6 +1334,7 @@ app.delete('/api/portal/permission-set-groups/:id', checkAuth, checkRole('admin'
     await supabase.from('permission_set_group_members').delete().eq('group_id', req.params.id);
     await supabase.from('permission_set_group_muting').delete().eq('group_id', req.params.id);
     await supabase.from('permission_set_groups').delete().eq('id', req.params.id);
+    clearAllFieldPermCache();
     res.json({ success: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -4128,7 +4130,17 @@ app.patch('/api/portal/profile', checkAuth, async (req, res) => {
 
 // POST /api/portal/users — create new portal user (admin+ only)
 app.post('/api/portal/users', checkAuth, checkRole('admin'), async (req, res) => {
-  const { email, name, password, role, profileId, orgRoleId, profileImage, permissionSetIds } = req.body || {};
+  const {
+    email,
+    name,
+    password,
+    role,
+    profileId,
+    orgRoleId,
+    profileImage,
+    permissionSetIds,
+    permissionSetGroupIds
+  } = req.body || {};
 
   if (!email || !name || !password) {
     return res.status(400).json({ error: 'Email, name, and password are required' });
@@ -4182,6 +4194,16 @@ app.post('/api/portal/users', checkAuth, checkRole('admin'), async (req, res) =>
         permissionSetIds.map(psId => ({
           user_id: newUser.id,
           perm_set_id: psId,
+          assigned_by: req.user.id
+        }))
+      );
+    }
+
+    if (Array.isArray(permissionSetGroupIds) && permissionSetGroupIds.length) {
+      await supabase.from('user_permission_set_group_assignments').insert(
+        permissionSetGroupIds.map(groupId => ({
+          user_id: newUser.id,
+          group_id: groupId,
           assigned_by: req.user.id
         }))
       );
@@ -4498,6 +4520,7 @@ app.patch('/api/portal/permission-sets/:id', checkAuth, checkRole('admin'), asyn
       }
     }
     await writeAuditLog({ userId: req.user.id, userEmail: req.user.email, userRole: req.user.role, action: 'update_perm_set', payload: { id: req.params.id }, ipAddress: req.ip });
+    clearAllFieldPermCache();
     res.json({ success: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -4506,8 +4529,10 @@ app.patch('/api/portal/permission-sets/:id', checkAuth, checkRole('admin'), asyn
 app.delete('/api/portal/permission-sets/:id', checkAuth, checkRole('admin'), async (req, res) => {
   try {
     await supabase.from('user_permission_set_assignments').delete().eq('perm_set_id', req.params.id);
+    await supabase.from('permission_set_group_members').delete().eq('perm_set_id', req.params.id);
     await supabase.from('permission_set_object_perms').delete().eq('perm_set_id', req.params.id);
     await supabase.from('permission_sets').delete().eq('id', req.params.id);
+    clearAllFieldPermCache();
     res.json({ success: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });

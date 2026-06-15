@@ -434,18 +434,34 @@ ALTER FUNCTION "public"."get_all_teams"() OWNER TO "postgres";
 
 
 CREATE OR REPLACE FUNCTION "public"."get_effective_field_permissions"("p_user_id" "uuid", "p_sf_object" "text") RETURNS TABLE("field_name" "text", "can_view" boolean, "can_edit" boolean)
-    LANGUAGE "plpgsql"
+    LANGUAGE "plpgsql" SECURITY DEFINER
     AS $$
 BEGIN
   RETURN QUERY
+  WITH effective_permission_sets AS (
+    SELECT upsa.perm_set_id
+    FROM public.user_permission_set_assignments upsa
+    WHERE upsa.user_id = p_user_id
+
+    UNION
+
+    SELECT psgm.perm_set_id
+    FROM public.user_permission_set_group_assignments upsga
+    JOIN public.permission_set_groups psg
+      ON psg.id = upsga.group_id
+     AND COALESCE(psg.is_active, TRUE) = TRUE
+    JOIN public.permission_set_group_members psgm
+      ON psgm.group_id = psg.id
+    WHERE upsga.user_id = p_user_id
+  )
   SELECT
     f.field_name,
     COALESCE(BOOL_OR(f.can_view), FALSE) AS can_view,
     COALESCE(BOOL_OR(f.can_edit), FALSE) AS can_edit
   FROM (
     SELECT fp.field_name, fp.can_view, fp.can_edit
-    FROM user_profile_assignments upa
-    JOIN field_permissions fp
+    FROM public.user_profile_assignments upa
+    JOIN public.field_permissions fp
       ON fp.profile_id = upa.profile_id
      AND fp.sf_object  = p_sf_object
     WHERE upa.user_id = p_user_id
@@ -453,11 +469,10 @@ BEGIN
     UNION ALL
 
     SELECT fp.field_name, fp.can_view, fp.can_edit
-    FROM user_permission_set_assignments upsa
-    JOIN field_permissions fp
-      ON fp.permission_set_id = upsa.perm_set_id
+    FROM effective_permission_sets eps
+    JOIN public.field_permissions fp
+      ON fp.permission_set_id = eps.perm_set_id
      AND fp.sf_object         = p_sf_object
-    WHERE upsa.user_id = p_user_id
   ) f
   GROUP BY f.field_name;
 END;
@@ -492,7 +507,23 @@ BEGIN
   END IF;
 
   RETURN QUERY
-  WITH profile_perms AS (
+  WITH effective_permission_sets AS (
+    SELECT upsa.perm_set_id
+    FROM public.user_permission_set_assignments upsa
+    WHERE upsa.user_id = p_user_id
+
+    UNION
+
+    SELECT psgm.perm_set_id
+    FROM public.user_permission_set_group_assignments upsga
+    JOIN public.permission_set_groups psg
+      ON psg.id = upsga.group_id
+     AND COALESCE(psg.is_active, TRUE) = TRUE
+    JOIN public.permission_set_group_members psgm
+      ON psgm.group_id = psg.id
+    WHERE upsga.user_id = p_user_id
+  ),
+  profile_perms AS (
     SELECT
       COALESCE(pop.can_read, FALSE) AS can_read,
       COALESCE(pop.can_create, FALSE) AS can_create,
@@ -508,11 +539,10 @@ BEGIN
       COALESCE(psop.can_create, FALSE) AS can_create,
       COALESCE(psop.can_edit, FALSE) AS can_edit,
       COALESCE(psop.can_delete, FALSE) AS can_delete
-    FROM public.user_permission_set_assignments upsa
+    FROM effective_permission_sets eps
     JOIN public.permission_set_object_perms psop
-      ON psop.perm_set_id = upsa.perm_set_id
+      ON psop.perm_set_id = eps.perm_set_id
      AND psop.sf_object = p_sf_object
-    WHERE upsa.user_id = p_user_id
   ),
   all_perms AS (
     SELECT * FROM profile_perms
@@ -532,7 +562,7 @@ $$;
 ALTER FUNCTION "public"."get_effective_permissions"("p_user_id" "uuid", "p_sf_object" "text") OWNER TO "postgres";
 
 
-COMMENT ON FUNCTION "public"."get_effective_permissions"("p_user_id" "uuid", "p_sf_object" "text") IS 'Returns the effective CRUD permissions for a user on a SF object. Merges profile + all permission sets using OR logic. Super admins always get TRUE. Call this from Node.js permission middleware.';
+COMMENT ON FUNCTION "public"."get_effective_permissions"("p_user_id" "uuid", "p_sf_object" "text") IS 'Returns effective object CRUD permissions. Merges profile + direct permission sets + active permission set groups using OR logic.';
 
 
 

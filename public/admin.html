@@ -2155,31 +2155,6 @@
             <div id="psg-permsets-list" style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:16px">
               <div class="spinner"></div>
             </div>
-
-            <div class="form-divider">Muting (Optional)</div>
-            <p style="font-size:12px;color:var(--text-muted);margin-bottom:12px">
-              Suppress specific permissions that would otherwise be granted by member sets.
-            </p>
-            <div id="psg-mutings">
-              <div style="display:flex;gap:8px;margin-bottom:8px">
-                <select class="filter-select" id="mute-object" style="flex:1">
-                  <option value="Account">Account</option>
-                  <option value="Contact">Contact</option>
-                  <option value="Opportunity">Opportunity</option>
-                  <option value="Lead">Lead</option>
-                  <option value="Case">Case</option>
-                  <option value="Campaign">Campaign</option>
-                </select>
-                <select class="filter-select" id="mute-perm" style="flex:1">
-                  <option value="can_read">Read</option>
-                  <option value="can_create">Create</option>
-                  <option value="can_edit">Edit</option>
-                  <option value="can_delete">Delete</option>
-                </select>
-                <button class="btn btn-ghost btn-sm" onclick="addMuting()">+ Add Muting</button>
-              </div>
-              <div id="psg-muting-tags" class="perm-tags"></div>
-            </div>
           </div>
           <div class="modal-foot">
             <button class="btn btn-ghost" onclick="closePSGroupModal()">Cancel</button>
@@ -3542,7 +3517,8 @@
               profileId,
               orgRoleId,
               profileImage: userProfileImageDraft,
-              permissionSetIds: userPermSetsSelected.map(p => p.id)
+              permissionSetIds: userPermSetsSelected.map(p => p.id),
+              permissionSetGroupIds: userPSGroupsSelected.map(g => g.id)
             })
           });
           toast('User created — they can now log in', 'ok');
@@ -5527,8 +5503,6 @@ function deletePublicGroup(id, name) {
 
     // ── PERMISSION SET GROUPS ─────────────────────────────────────
     let editingPSGroupId = null;
-    let currentMutings = [];
-
     async function loadPSGroups() {
       $('psgroupsBody').innerHTML = '<div class="spinner"></div>';
       try {
@@ -5548,7 +5522,7 @@ function deletePublicGroup(id, name) {
       <table style="width:100%;border-collapse:collapse">
         <thead>
           <tr>
-            ${['Group Name', 'Description', 'Permission Sets', 'Mutings', 'Status', 'Actions']
+            ${['Group Name', 'Description', 'Permission Sets', 'Status', 'Actions']
             .map(h => `<th style="text-align:left;padding:10px 16px;font-size:11px;
                 font-weight:700;color:var(--text-muted);text-transform:uppercase;
                 background:var(--bg-secondary);border-bottom:1px solid var(--border)">${h}</th>`)
@@ -5558,7 +5532,6 @@ function deletePublicGroup(id, name) {
         <tbody>
           ${groups.map(g => {
               const members = g.permission_set_group_members || [];
-              const mutings = g.permission_set_group_muting || [];
               return `
             <tr style="border-bottom:1px solid var(--border)">
               <td style="padding:12px 16px;font-weight:700">${esc(g.name)}</td>
@@ -5571,11 +5544,6 @@ function deletePublicGroup(id, name) {
                 `<span class="perm-tag">${esc(m.permission_sets?.name || '?')}</span>`
               ).join('') || '<span style="font-size:12px;color:var(--text-muted)">None</span>'}
                 </div>
-              </td>
-              <td style="padding:12px 16px">
-                ${mutings.length
-                  ? `<span style="font-size:12px;color:var(--warning)">${mutings.length} muted</span>`
-                  : '<span style="font-size:12px;color:var(--text-muted)">None</span>'}
               </td>
               <td style="padding:12px 16px">
                 <span class="badge ${g.is_active ? 'badge-active' : 'badge-inactive'}">
@@ -5601,11 +5569,9 @@ function deletePublicGroup(id, name) {
 
     async function openCreatePSGroup() {
       editingPSGroupId = null;
-      currentMutings = [];
       $('psgroupModalTitle').textContent = 'New Permission Set Group';
       $('psgSaveBtn').textContent = 'Create Group';
       $('psg-name').value = $('psg-desc').value = '';
-      $('psg-muting-tags').innerHTML = '';
       await loadPSGroupPermSetList([]);
       $('psgroupModal').classList.add('open');
     }
@@ -5616,11 +5582,6 @@ function deletePublicGroup(id, name) {
       if (!group) return;
 
       editingPSGroupId = id;
-      currentMutings = (group.permission_set_group_muting || []).map(m => ({
-        sfObject: m.sf_object,
-        fieldName: m.field_name || null,
-        mutedPerm: m.muted_perm
-      }));
 
       $('psgroupModalTitle').textContent = `Edit — ${group.name}`;
       $('psgSaveBtn').textContent = 'Save Changes';
@@ -5629,14 +5590,12 @@ function deletePublicGroup(id, name) {
 
       const selectedIds = (group.permission_set_group_members || []).map(m => m.perm_set_id);
       await loadPSGroupPermSetList(selectedIds);
-      renderMutingTags();
       $('psgroupModal').classList.add('open');
     }
 
     function closePSGroupModal() {
       $('psgroupModal').classList.remove('open');
       editingPSGroupId = null;
-      currentMutings = [];
     }
 
     async function loadPSGroupPermSetList(selectedIds = []) {
@@ -5662,38 +5621,6 @@ function deletePublicGroup(id, name) {
   `).join('') || '<p style="color:var(--text-muted);font-size:13px">No permission sets found.</p>';
     }
 
-    function addMuting() {
-      const sfObject = $('mute-object').value;
-      const mutedPerm = $('mute-perm').value;
-      const key = `${sfObject}:${mutedPerm}`;
-
-      if (currentMutings.find(m => `${m.sfObject}:${m.mutedPerm}` === key)) {
-        toast('This muting already exists', 'info'); return;
-      }
-      currentMutings.push({ sfObject, fieldName: null, mutedPerm });
-      renderMutingTags();
-    }
-
-    function removeMuting(index) {
-      currentMutings.splice(index, 1);
-      renderMutingTags();
-    }
-
-    function renderMutingTags() {
-      const permLabels = {
-        can_read: 'Read', can_create: 'Create',
-        can_edit: 'Edit', can_delete: 'Delete'
-      };
-      $('psg-muting-tags').innerHTML = currentMutings.length
-        ? currentMutings.map((m, i) => `
-        <span class="perm-tag" style="background:var(--warning-soft);color:var(--warning);
-              border-color:rgba(245,158,11,.3)">
-          Mute ${esc(m.sfObject)} ${permLabels[m.mutedPerm] || m.mutedPerm}
-          <button onclick="removeMuting(${i})">&times;</button>
-        </span>`).join('')
-        : '<span style="font-size:12px;color:var(--text-muted)">No mutings configured</span>';
-    }
-
     async function savePSGroup() {
       const name = $('psg-name').value.trim();
       if (!name) return toast('Group name is required', 'err');
@@ -5706,8 +5633,7 @@ function deletePublicGroup(id, name) {
         const body = {
           name,
           description: $('psg-desc').value.trim(),
-          permSetIds,
-          mutings: currentMutings
+          permSetIds
         };
 
         if (editingPSGroupId) {
