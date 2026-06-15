@@ -135,14 +135,10 @@ function bulkOperationAction(operation) {
 function checkPermission(sfObject, action) {
   return async (req, res, next) => {
     try {
-      const startedAt = Date.now();
       const role = req.user.role;
 
       // System Administrator profile, system_administrator role, and admin role bypass object permission checks
       if (isFullAccessUser(req.user)) {
-        if (process.env.DEBUG_CRM_TIMING === 'true') {
-          console.log(`[timing] permission ${action} ${sfObject}: bypass ${Date.now() - startedAt}ms`);
-        }
         return next();
       }
 
@@ -162,9 +158,6 @@ function checkPermission(sfObject, action) {
         });
       }
 
-      if (process.env.DEBUG_CRM_TIMING === 'true') {
-        console.log(`[timing] permission ${action} ${sfObject}: ${Date.now() - startedAt}ms`);
-      }
       next();
     } catch (err) {
       console.error('Permission check error:', err.message);
@@ -349,10 +342,6 @@ function msSince(startedAt) {
 }
 
 function securityPerfLog(requestId, label, data = {}) {
-  const suffix = Object.entries(data)
-    .map(([key, value]) => `${key}=${value}`)
-    .join(' ');
-  console.log(`[security-perf:${requestId}] ${label}${suffix ? ` ${suffix}` : ''}`);
 }
 
 function clearSharingAccessCaches() {
@@ -1759,258 +1748,7 @@ app.delete('/api/portal/public-groups/:id', checkAuth, checkRole('admin'), async
 
 // ══ TEAMS ════════════════════════════════════════════════════
 
-// GET all teams
-app.get('/api/portal/teams', checkAuth, checkRole('admin'), async (req, res) => {
-  try {
-    const { data, error } = await supabase.rpc('get_all_teams');
-    if (error) throw error;
-    res.json({ teams: data || [] });
-  } catch(e) { res.status(500).json({ error: e.message }); }
-});
-
-// POST create team
-app.post('/api/portal/teams', checkAuth, checkRole('admin'), async (req, res) => {
-  const { name, description, members = [] } = req.body || {};
-  if (!name) return res.status(400).json({ error: 'Team name is required' });
-  try {
-    const { data: team, error } = await supabase
-      .from('teams')
-      .insert({ name: name.trim(), description: description?.trim() || null, created_by: req.user.id })
-      .select('id').single();
-    if (error) throw error;
-
-    if (members.length) {
-      await supabase.from('team_members').insert(
-        members.map(m => ({
-          team_id: team.id,
-          user_id: m.userId,
-          team_role: m.teamRole || 'member',
-          access_level: m.accessLevel || 'read',
-          added_by: req.user.id
-        }))
-      );
-    }
-
-    await writeAuditLog({
-      userId: req.user.id, userEmail: req.user.email,
-      userRole: req.user.role, action: 'create',
-      payload: { type: 'team', name }, ipAddress: req.ip
-    });
-    res.status(201).json({ success: true, id: team.id });
-  } catch (e) { res.status(500).json({ error: e.message }); }
-});
-
-// PATCH update team
-app.patch('/api/portal/teams/:id', checkAuth, checkRole('admin'), async (req, res) => {
-  const { name, description, isActive, members } = req.body || {};
-  try {
-    const updates = {};
-    if (name !== undefined) updates.name = name;
-    if (description !== undefined) updates.description = description;
-    if (isActive !== undefined) updates.is_active = isActive;
-    if (Object.keys(updates).length) {
-      updates.updated_at = new Date().toISOString();
-      await supabase.from('teams').update(updates).eq('id', req.params.id);
-    }
-
-    if (Array.isArray(members)) {
-      await supabase.from('team_members').delete().eq('team_id', req.params.id);
-      if (members.length) {
-        await supabase.from('team_members').insert(
-          members.map(m => ({
-            team_id: req.params.id,
-            user_id: m.userId,
-            team_role: m.teamRole || 'member',
-            access_level: m.accessLevel || 'read',
-            added_by: req.user.id
-          }))
-        );
-      }
-    }
-    res.json({ success: true });
-  } catch (e) { res.status(500).json({ error: e.message }); }
-});
-
-// DELETE team
-app.delete('/api/portal/teams/:id', checkAuth, checkRole('admin'), async (req, res) => {
-  try {
-    await supabase.from('team_members').delete().eq('team_id', req.params.id);
-    await supabase.from('record_team_assignments').delete().eq('team_id', req.params.id);
-    await supabase.from('teams').delete().eq('id', req.params.id);
-    res.json({ success: true });
-  } catch (e) { res.status(500).json({ error: e.message }); }
-});
-
-// POST assign team to a record
-app.post('/api/:object/:id/teams', checkAuth, async (req, res) => {
-  const { object, id } = req.params;
-  const { teamId } = req.body || {};
-  if (!teamId) return res.status(400).json({ error: 'teamId required' });
-  try {
-    await supabase.from('record_team_assignments').upsert({
-      team_id: teamId,
-      sf_object: object,
-      record_id: id,
-      assigned_by: req.user.id
-    }, { onConflict: 'team_id,sf_object,record_id' });
-    res.json({ success: true });
-  } catch (e) { res.status(500).json({ error: e.message }); }
-});
-
-// GET teams for a record
-app.get('/api/:object/:id/teams', checkAuth, async (req, res) => {
-  const { object, id } = req.params;
-  try {
-    const { data, error } = await supabase
-      .from('record_team_assignments')
-      .select(`
-        team_id,
-        teams ( id, name, description,
-          team_members ( team_role, access_level,
-            users ( id, name, email )
-          )
-        )
-      `)
-      .eq('sf_object', object)
-      .eq('record_id', id);
-    if (error) throw error;
-    res.json({ teams: (data || []).map(r => r.teams).filter(Boolean) });
-  } catch (e) { res.status(500).json({ error: e.message }); }
-});
-
-// DELETE remove team from record
-app.delete('/api/:object/:id/teams/:teamId', checkAuth, async (req, res) => {
-  try {
-    await supabase.from('record_team_assignments')
-      .delete()
-      .eq('team_id', req.params.teamId)
-      .eq('sf_object', req.params.object)
-      .eq('record_id', req.params.id);
-    res.json({ success: true });
-  } catch (e) { res.status(500).json({ error: e.message }); }
-});
-
 // ══ QUEUES ═══════════════════════════════════════════════════
-
-app.get('/api/portal/queues', checkAuth, checkRole('admin'), async (req, res) => {
-  try {
-    const { data, error } = await supabase.rpc('get_all_queues');
-    if (error) throw error;
-    res.json({ queues: data || [] });
-  } catch(e) { res.status(500).json({ error: e.message }); }
-});
-
-// POST create queue
-app.post('/api/portal/queues', checkAuth, checkRole('admin'), async (req, res) => {
-  const { name, description, sfObject, memberIds = [] } = req.body || {};
-  if (!name || !sfObject) return res.status(400).json({ error: 'name and sfObject required' });
-  try {
-    const { data: queue, error } = await supabase
-      .from('queues')
-      .insert({ name: name.trim(), description: description?.trim() || null, sf_object: sfObject, created_by: req.user.id })
-      .select('id').single();
-    if (error) throw error;
-
-    if (memberIds.length) {
-      await supabase.from('queue_members').insert(
-        memberIds.map(uid => ({ queue_id: queue.id, user_id: uid, added_by: req.user.id }))
-      );
-    }
-    res.status(201).json({ success: true, id: queue.id });
-  } catch (e) { res.status(500).json({ error: e.message }); }
-});
-
-// PATCH update queue
-app.patch('/api/portal/queues/:id', checkAuth, checkRole('admin'), async (req, res) => {
-  const { name, description, isActive, memberIds } = req.body || {};
-  try {
-    const updates = {};
-    if (name !== undefined) updates.name = name;
-    if (description !== undefined) updates.description = description;
-    if (isActive !== undefined) updates.is_active = isActive;
-    if (Object.keys(updates).length) {
-      updates.updated_at = new Date().toISOString();
-      await supabase.from('queues').update(updates).eq('id', req.params.id);
-    }
-    if (Array.isArray(memberIds)) {
-      await supabase.from('queue_members').delete().eq('queue_id', req.params.id);
-      if (memberIds.length) {
-        await supabase.from('queue_members').insert(
-          memberIds.map(uid => ({ queue_id: req.params.id, user_id: uid, added_by: req.user.id }))
-        );
-      }
-    }
-    res.json({ success: true });
-  } catch (e) { res.status(500).json({ error: e.message }); }
-});
-
-// DELETE queue
-app.delete('/api/portal/queues/:id', checkAuth, checkRole('admin'), async (req, res) => {
-  try {
-    await supabase.from('queue_members').delete().eq('queue_id', req.params.id);
-    await supabase.from('queue_items').delete().eq('queue_id', req.params.id);
-    await supabase.from('queues').delete().eq('id', req.params.id);
-    res.json({ success: true });
-  } catch (e) { res.status(500).json({ error: e.message }); }
-});
-
-// POST add record to queue
-app.post('/api/portal/queues/:id/items', checkAuth, async (req, res) => {
-  const { sfObject, recordId, recordName, priority = 0 } = req.body || {};
-  if (!sfObject || !recordId) return res.status(400).json({ error: 'sfObject and recordId required' });
-  try {
-    await supabase.from('queue_items').upsert({
-      queue_id: req.params.id,
-      sf_object: sfObject,
-      record_id: recordId,
-      record_name: recordName || recordId,
-      priority,
-      added_by: req.user.id
-    }, { onConflict: 'queue_id,record_id' });
-    res.json({ success: true });
-  } catch (e) { res.status(500).json({ error: e.message }); }
-});
-
-// POST pick up (assign) a queue item to yourself
-app.post('/api/portal/queues/:id/items/:itemId/pickup', checkAuth, async (req, res) => {
-  try {
-    // Verify user is a queue member
-    const { data: member } = await supabase
-      .from('queue_members')
-      .select('user_id')
-      .eq('queue_id', req.params.id)
-      .eq('user_id', req.user.id)
-      .single();
-
-    if (!member && !req.user.isSystemAdmin) {
-      return res.status(403).json({ error: 'You are not a member of this queue' });
-    }
-
-    const { error } = await supabase
-      .from('queue_items')
-      .update({
-        assigned_to: req.user.id,
-        assigned_at: new Date().toISOString()
-      })
-      .eq('id', req.params.itemId)
-      .eq('queue_id', req.params.id)
-      .is('assigned_to', null); // Only pick up unassigned items
-
-    if (error) throw error;
-    res.json({ success: true });
-  } catch (e) { res.status(500).json({ error: e.message }); }
-});
-
-// DELETE remove item from queue
-app.delete('/api/portal/queues/:id/items/:itemId', checkAuth, checkRole('admin'), async (req, res) => {
-  try {
-    await supabase.from('queue_items')
-      .delete()
-      .eq('id', req.params.itemId)
-      .eq('queue_id', req.params.id);
-    res.json({ success: true });
-  } catch (e) { res.status(500).json({ error: e.message }); }
-});
 
 
 
@@ -2289,7 +2027,6 @@ async function getAccessToken() {
     _cachedToken = res.data.access_token;
     SF.instanceUrl = normalizeUrl(res.data.instance_url || SF.instanceUrl);
     _tokenExpires = Date.now() + 55 * 60 * 1000; // 55 min cache
-    console.log('✅ New access token obtained');
     return _cachedToken;
   } catch (err) {
     const detail = err.response?.data;
@@ -4380,21 +4117,16 @@ app.delete('/api/portal/users/:id', checkAuth, checkRole('admin'), async (req, r
     await supabase.from('user_profile_assignments').delete().eq('user_id', id);
     await supabase.from('password_reset_tokens').delete().eq('user_id', id);
     await supabase.from('public_group_members').delete().eq('user_id', id);
-    await supabase.from('team_members').delete().eq('user_id', id);
-    await supabase.from('queue_members').delete().eq('user_id', id);
 
     await supabase.from('profiles').update({ created_by: req.user.id }).eq('created_by', id);
     await supabase.from('permission_sets').update({ created_by: req.user.id }).eq('created_by', id);
     await supabase.from('permission_set_groups').update({ created_by: req.user.id }).eq('created_by', id);
     await supabase.from('org_roles').update({ created_by: req.user.id }).eq('created_by', id);
     await supabase.from('public_groups').update({ created_by: req.user.id }).eq('created_by', id);
-    await supabase.from('teams').update({ created_by: req.user.id }).eq('created_by', id);
-    await supabase.from('queues').update({ created_by: req.user.id }).eq('created_by', id);
     await supabase.from('sharing_rules').update({ created_by: req.user.id }).eq('created_by', id);
     await supabase.from('user_permission_set_assignments').update({ assigned_by: req.user.id }).eq('assigned_by', id);
     await supabase.from('user_permission_set_group_assignments').update({ assigned_by: req.user.id }).eq('assigned_by', id);
     await supabase.from('user_profile_assignments').update({ assigned_by: req.user.id }).eq('assigned_by', id);
-    await supabase.from('queue_members').update({ added_by: req.user.id }).eq('added_by', id);
 
     const { error: auditUpdateError } = await supabase
       .from('audit_log')
@@ -6540,11 +6272,7 @@ app.post('/api/:object', checkAuth, async (req, res, next) => {
       Portal_Created_By__c: req.user.id,
       Portal_Last_Modified_By__c: req.user.id,
     };
-    const startedAt = Date.now();
     const result = await sfPost(`/sobjects/${object}`, bodyWithOwner);
-    if (process.env.DEBUG_CRM_TIMING === 'true') {
-      console.log(`[timing] sf-create ${object}: ${Date.now() - startedAt}ms`);
-    }
     res.json(result);
   } catch (err) {
     handleSFError(err, res, `POST ${object}`);
@@ -6883,14 +6611,8 @@ app.use((req, res) => {
 
 // ─── Start ────────────────────────────────────────────────────
 app.listen(PORT, async () => {
-  console.log(`\n╔══════════════════════════════════════════╗`);
-  console.log(`║   SF Manager  →  http://localhost:${PORT}   ║`);
-  console.log(`╚══════════════════════════════════════════╝`);
-  console.log(`\n📡 Instance : ${SF.instanceUrl}`);
-  console.log(`🔑 Testing auth...`);
   try {
     await getAccessToken();
-    console.log(`✅ Salesforce connection established!\n`);
   } catch (e) {
     console.error(`❌ Auth failed: ${e.message}\n`);
   }
