@@ -1,0 +1,939 @@
+const state = {
+  reports: [],
+  folders: [],
+  objects: [],
+  fields: [],
+  selectedFields: [],
+  filters: [],
+  activeReport: null,
+  isDirty: false,
+  autoPreviewTimer: null,
+  lastPreviewSignature: '',
+  isResizingSidebar: false,
+  isResizingBuilderPanel: false,
+  builderTab: 'outline',
+  wasSidebarCollapsedBeforeBuilder: false,
+  expandedGroups: new Set()
+};
+
+const $ = (id) => document.getElementById(id);
+
+document.addEventListener('DOMContentLoaded', async () => {
+  initTheme();
+  bindEvents();
+  try {
+    await Promise.all([loadFolders(), loadObjects()]);
+    await loadReports();
+    const reportId = reportIdFromHash();
+    if (reportId) await openReport(reportId, { pushState: false });
+  } catch (err) {
+    toast(err.message || 'Could not load reports', 'err');
+  }
+});
+
+function bindEvents() {
+  $('appSidebarToggle')?.addEventListener('click', toggleAppSidebar);
+  $('newReportBtn').addEventListener('click', newReport);
+  $('refreshReportsBtn').addEventListener('click', loadReports);
+  $('reportSearch').addEventListener('input', debounce(syncReportSearchAndLoad, 250));
+  $('reportListSearch')?.addEventListener('input', debounce(syncReportSearchAndLoad, 250));
+  $('toggleReportSidebarBtn')?.addEventListener('click', toggleReportSidebar);
+  $('reportSidebarResizer')?.addEventListener('mousedown', startSidebarResize);
+  $('toggleBuilderPanelBtn').addEventListener('click', toggleBuilderPanel);
+  $('builderLeftResizer').addEventListener('mousedown', startBuilderPanelResize);
+  document.addEventListener('mousemove', resizeReportSidebar);
+  document.addEventListener('mousemove', resizeBuilderPanel);
+  document.addEventListener('mouseup', stopSidebarResize);
+  document.addEventListener('mouseup', stopBuilderPanelResize);
+  $('autoPreviewToggle').addEventListener('change', () => {
+    sessionStorage.setItem('reports_auto_preview', $('autoPreviewToggle').checked ? '1' : '0');
+    scheduleAutoPreview();
+  });
+  $('reportType').addEventListener('change', () => {
+    markDirty();
+    syncReportTypeUi();
+    clearResults();
+    scheduleAutoPreview();
+  });
+  $('reportObject').addEventListener('change', async () => {
+    markDirty();
+    updateObjectChip();
+    state.selectedFields = [];
+    await loadFields($('reportObject').value);
+    renderSelectedFields();
+    scheduleAutoPreview();
+  });
+  ['reportName', 'reportDescription', 'reportLimit', 'summaryGroupOne', 'summaryGroupTwo', 'matrixColumnGroup', 'summaryAggregateFn', 'summaryAggregateField']
+    .forEach((id) => {
+      $(id).addEventListener('input', () => {
+        markDirty();
+        if (id.startsWith('summary')) renderGroupChips();
+        if (id === 'matrixColumnGroup') renderColumnGroupChips();
+        if (id.startsWith('summary') || id === 'matrixColumnGroup' || id === 'reportLimit') scheduleAutoPreview();
+      });
+      $(id).addEventListener('change', () => {
+        markDirty();
+        if (id.startsWith('summary')) renderGroupChips();
+        if (id === 'matrixColumnGroup') renderColumnGroupChips();
+        if (id.startsWith('summary') || id === 'matrixColumnGroup' || id === 'reportLimit') scheduleAutoPreview();
+      });
+    });
+  $('fieldSearch').addEventListener('input', renderFieldList);
+  $('summaryAggregateFn').addEventListener('change', syncAggregateFieldState);
+  $('filterOperator').addEventListener('change', syncFilterValueState);
+  $('addFilterBtn').addEventListener('click', addFilter);
+  $('runReportBtn').addEventListener('click', runPreview);
+  $('runFullReportBtn').addEventListener('click', runFullReport);
+  $('saveReportBtn').addEventListener('click', saveReport);
+  $('saveRunReportBtn').addEventListener('click', saveAndRunReport);
+  $('closeBuilderBtn').addEventListener('click', closeBuilder);
+  $('cloneReportBtn').addEventListener('click', cloneReport);
+  $('favoriteReportBtn').addEventListener('click', toggleFavorite);
+  $('exportReportBtn').addEventListener('click', exportReport);
+  $('deleteReportBtn').addEventListener('click', deleteReport);
+  restoreBuilderUiState();
+}
+
+async function api(path, options = {}) {
+  const token = localStorage.getItem('saasray_token');
+  if (!token) {
+    window.location.href = '/';
+    throw new Error('Login required');
+  }
+  const res = await fetch(path, {
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`,
+      ...(options.headers || {})
+    }
+  });
+  const text = await res.text();
+  const data = text ? JSON.parse(text) : {};
+  if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
+  return data;
+}
+
+async function loadFolders() {
+  const data = await api('/api/reports/folders');
+  state.folders = data.folders || [];
+}
+
+async function loadObjects() {
+  const data = await api('/api/reports/metadata/objects');
+  state.objects = data.objects || [];
+  $('reportObject').innerHTML = state.objects
+    .map((obj) => `<option value="${esc(obj.apiName)}">${esc(obj.label)}</option>`)
+    .join('');
+}
+
+async function loadReports() {
+  const q = ($('reportListSearch')?.value || $('reportSearch')?.value || '').trim();
+  const data = await api(`/api/reports${q ? `?search=${encodeURIComponent(q)}` : ''}`);
+  state.reports = data.reports || [];
+  $('reportCount').textContent = `${state.reports.length} ${state.reports.length === 1 ? 'item' : 'items'}`;
+  renderReports();
+}
+
+function syncReportSearchAndLoad(event) {
+  const value = event?.target?.value || '';
+  if ($('reportSearch') && $('reportSearch') !== event?.target) $('reportSearch').value = value;
+  if ($('reportListSearch') && $('reportListSearch') !== event?.target) $('reportListSearch').value = value;
+  loadReports();
+}
+
+function renderReports() {
+  if (!state.reports.length) {
+    $('reportsList').innerHTML = '<tr><td colspan="6" class="reports-empty-row">No reports found.</td></tr>';
+    return;
+  }
+  $('reportsList').innerHTML = state.reports.map((report) => `
+    <tr class="${state.activeReport?.id === report.id ? 'active' : ''}">
+      <td>
+        <button class="report-name-link" onclick="openReport('${esc(report.id)}')">${report.is_favorite ? '* ' : ''}${esc(report.name)}</button>
+      </td>
+      <td>${esc(report.description || '-')}</td>
+      <td>${esc(report.folder_name || 'Private Reports')}</td>
+      <td>${esc(titleCase(report.report_type))}</td>
+      <td>${new Date(report.updated_at).toLocaleString()}</td>
+      <td><button class="row-action-btn" onclick="openReport('${esc(report.id)}')" title="Open report">v</button></td>
+    </tr>
+  `).join('');
+}
+
+async function openReport(id, options = {}) {
+  const data = await api(`/api/reports/${id}`);
+  state.activeReport = data.report;
+  if (options.pushState !== false) window.history.replaceState(null, '', `#report/${id}`);
+  const definition = state.activeReport.definition || {};
+  showBuilderMode();
+  $('reportName').value = state.activeReport.name || '';
+  $('reportDescription').value = state.activeReport.description || '';
+  $('reportType').value = definition.reportType || state.activeReport.report_type || 'tabular';
+  $('reportObject').value = definition.primaryObject || state.activeReport.primary_object;
+  updateObjectChip();
+  $('reportLimit').value = definition.rowLimit || 200;
+  state.selectedFields = [...(definition.fields || [])];
+  await loadFields($('reportObject').value);
+  $('summaryGroupOne').value = definition.groupBy?.[0] || '';
+  $('summaryGroupTwo').value = definition.groupBy?.[1] || '';
+  $('matrixColumnGroup').value = definition.groupColumns?.[0] || '';
+  const firstAggregate = (definition.aggregates || []).find((aggregate) => aggregate.function !== 'count') || (definition.aggregates || [])[0] || {};
+  $('summaryAggregateFn').value = firstAggregate.function || 'count';
+  $('summaryAggregateField').value = firstAggregate.field || '';
+  state.filters = [...(definition.filters || [])];
+  syncReportTypeUi();
+  markSaved();
+  renderReports();
+  renderSelectedFields();
+  renderFilters();
+  renderGroupChips();
+  clearResults();
+}
+
+async function newReport() {
+  state.activeReport = null;
+  showBuilderMode();
+  $('reportName').value = 'New Tabular Report';
+  $('reportDescription').value = '';
+  $('reportType').value = 'tabular';
+  $('reportObject').value = state.objects[0]?.apiName || 'Account';
+  updateObjectChip();
+  $('reportLimit').value = 200;
+  state.selectedFields = [];
+  state.filters = [];
+  await loadFields($('reportObject').value);
+  syncReportTypeUi();
+  markDirty();
+  renderReports();
+  renderSelectedFields();
+  renderFilters();
+  renderGroupChips();
+  clearResults();
+}
+
+function showBuilderMode() {
+  state.wasSidebarCollapsedBeforeBuilder = document.body.classList.contains('sidebar-collapsed');
+  $('reportsListView').style.display = 'none';
+  $('reportBuilderView').style.display = '';
+  $('reportsSubtitle').textContent = 'Report Builder';
+  document.body.classList.add('reports-builder-mode', 'sidebar-collapsed');
+}
+
+function closeBuilder() {
+  state.activeReport = null;
+  window.history.replaceState(null, '', window.location.pathname);
+  $('reportBuilderView').style.display = 'none';
+  $('reportsListView').style.display = '';
+  $('reportsSubtitle').textContent = 'Recent reports';
+  document.body.classList.remove('reports-builder-mode');
+  document.body.classList.toggle('sidebar-collapsed', state.wasSidebarCollapsedBeforeBuilder);
+  renderReports();
+}
+
+function reportIdFromHash() {
+  const match = window.location.hash.match(/^#report\/([A-Za-z0-9-]+)$/);
+  return match ? match[1] : '';
+}
+
+async function loadFields(objectName) {
+  if (!objectName) return;
+  const data = await api(`/api/reports/metadata/${encodeURIComponent(objectName)}/fields`);
+  state.fields = data.fields || [];
+  if (!state.selectedFields.length) {
+    const preferred = ['Name', 'Account.Name', 'Email', 'Phone', 'Status', 'StageName', 'Amount', 'CloseDate'];
+    state.selectedFields = state.fields
+      .filter((field) => preferred.includes(field.name))
+      .slice(0, 6)
+      .map((field) => field.name);
+  }
+  renderFieldList();
+  renderSummaryFieldOptions();
+  renderFilterFieldOptions();
+}
+
+function renderFieldList() {
+  const q = ($('fieldSearch').value || '').toLowerCase();
+  $('fieldList').innerHTML = state.fields
+    .filter((field) => !q || field.label.toLowerCase().includes(q) || field.name.toLowerCase().includes(q))
+    .map((field) => `
+      <label class="field-option">
+        <input type="checkbox" value="${esc(field.name)}" ${state.selectedFields.includes(field.name) ? 'checked' : ''} onchange="toggleField('${esc(field.name)}', this.checked)">
+        <span>${esc(field.label)}</span>
+      </label>
+    `).join('');
+}
+
+function toggleField(field, checked) {
+  if (checked && !state.selectedFields.includes(field)) state.selectedFields.push(field);
+  if (!checked) state.selectedFields = state.selectedFields.filter((item) => item !== field);
+  markDirty();
+  renderSelectedFields();
+  scheduleAutoPreview();
+}
+
+function renderSelectedFields() {
+  $('selectedFieldCount').textContent = `${state.selectedFields.length} selected`;
+  $('selectedFields').innerHTML = state.selectedFields.length
+    ? state.selectedFields.map((field) => `
+      <span class="field-pill">${esc(labelForField(field))}<button onclick="removeField('${esc(field)}')">x</button></span>
+    `).join('')
+    : '<span class="muted">Select fields to build the report.</span>';
+  renderFieldList();
+}
+
+function removeField(field) {
+  state.selectedFields = state.selectedFields.filter((item) => item !== field);
+  markDirty();
+  renderSelectedFields();
+  scheduleAutoPreview();
+}
+
+function definitionFromForm() {
+  const reportType = $('reportType').value || 'tabular';
+  const groupBySource = reportType === 'matrix'
+    ? [$('summaryGroupOne').value]
+    : [$('summaryGroupOne').value, $('summaryGroupTwo').value];
+  const groupBy = groupBySource
+    .filter(Boolean)
+    .filter((value, index, arr) => arr.indexOf(value) === index);
+  const groupColumns = [$('matrixColumnGroup').value].filter(Boolean);
+  const aggregateFn = $('summaryAggregateFn').value || 'count';
+  const aggregateField = $('summaryAggregateField').value || '';
+  const aggregates = [{ function: 'count', field: '', label: 'Record Count' }];
+  if ((reportType === 'summary' || reportType === 'matrix') && aggregateFn !== 'count') {
+    aggregates.push({
+      function: aggregateFn,
+      field: aggregateField,
+      label: `${aggregateFn.replace('_', ' ').toUpperCase()} ${labelForField(aggregateField)}`
+    });
+  }
+
+  return {
+    reportType,
+    primaryObject: $('reportObject').value,
+    fields: state.selectedFields,
+    groupBy: reportType === 'summary' || reportType === 'matrix' ? groupBy : [],
+    groupColumns: reportType === 'matrix' ? groupColumns : [],
+    aggregates: reportType === 'summary' || reportType === 'matrix' ? aggregates : [],
+    filters: state.filters,
+    sort: [],
+    rowLimit: Number($('reportLimit').value || 200)
+  };
+}
+
+async function saveReport(options = {}) {
+  if (!state.selectedFields.length && $('reportType').value === 'tabular') {
+    if (!options.silent) toast('Select at least one field', 'err');
+    return null;
+  }
+  if ($('reportType').value === 'summary' && !$('summaryGroupOne').value) {
+    if (!options.silent) toast('Select a grouping field for summary reports', 'err');
+    return null;
+  }
+  if ($('reportType').value === 'matrix' && (!$('summaryGroupOne').value || !$('matrixColumnGroup').value)) {
+    if (!options.silent) toast('Select row and column grouping fields for matrix reports', 'err');
+    return null;
+  }
+  const payload = {
+    name: $('reportName').value.trim(),
+    description: $('reportDescription').value.trim(),
+    definition: definitionFromForm(),
+    visibility: 'private'
+  };
+  const button = $('saveReportBtn');
+  if (!options.silent) setBusy(button, true, 'Saving...');
+  try {
+    const data = state.activeReport
+      ? await api(`/api/reports/${state.activeReport.id}`, { method: 'PATCH', body: JSON.stringify(payload) })
+      : await api('/api/reports', { method: 'POST', body: JSON.stringify(payload) });
+    state.activeReport = data.report;
+    await loadReports();
+    markSaved();
+    if (!options.silent) toast('Report saved', 'ok');
+    return data.report;
+  } catch (err) {
+    if (!options.silent) toast(err.message, 'err');
+    return null;
+  } finally {
+    if (!options.silent) setBusy(button, false, 'Save');
+  }
+}
+
+async function saveAndRunReport() {
+  const button = $('saveRunReportBtn');
+  setBusy(button, true, 'Saving...');
+  try {
+    const saved = await saveReport({ silent: true });
+    if (!saved) return;
+    setBusy(button, true, 'Running...');
+    await runFullReport({ silentBusy: true });
+    toast('Report saved and run completed', 'ok');
+  } finally {
+    setBusy(button, false, 'Save & Run');
+  }
+}
+
+async function runPreview(options = {}) {
+  if (!state.selectedFields.length && $('reportType').value === 'tabular') return toast('Select at least one field', 'err');
+  if ($('reportType').value === 'summary' && !$('summaryGroupOne').value) {
+    return toast('Select a grouping field for summary reports', 'err');
+  }
+  if ($('reportType').value === 'matrix' && (!$('summaryGroupOne').value || !$('matrixColumnGroup').value)) {
+    return toast('Select row and column grouping fields for matrix reports', 'err');
+  }
+  const button = $('runReportBtn');
+  if (!options.silentBusy) setBusy(button, true, 'Running...');
+  try {
+    const definition = definitionFromForm();
+    const signature = JSON.stringify(definition);
+    const result = await api('/api/reports/preview', {
+      method: 'POST',
+      body: JSON.stringify({ definition })
+    });
+    state.lastPreviewSignature = signature;
+    renderResults(result, { previewMode: true });
+  } catch (err) {
+    toast(err.message, 'err');
+  } finally {
+    if (!options.silentBusy) setBusy(button, false, reportRunLabel());
+  }
+}
+
+async function runFullReport(options = {}) {
+  if (!state.selectedFields.length && $('reportType').value === 'tabular') return toast('Select at least one field', 'err');
+  if ($('reportType').value === 'summary' && !$('summaryGroupOne').value) {
+    return toast('Select a grouping field for summary reports', 'err');
+  }
+  if ($('reportType').value === 'matrix' && (!$('summaryGroupOne').value || !$('matrixColumnGroup').value)) {
+    return toast('Select row and column grouping fields for matrix reports', 'err');
+  }
+  const button = $('runFullReportBtn');
+  if (!options.silentBusy) setBusy(button, true, 'Running...');
+  try {
+    const result = await api('/api/reports/run', {
+      method: 'POST',
+      body: JSON.stringify({ definition: definitionFromForm() })
+    });
+    renderResults(result, { previewMode: false });
+  } catch (err) {
+    toast(err.message, 'err');
+  } finally {
+    if (!options.silentBusy) setBusy(button, false, 'Run');
+  }
+}
+
+async function cloneReport() {
+  if (!state.activeReport) return toast('Save the report before cloning', 'info');
+  const data = await api(`/api/reports/${state.activeReport.id}/clone`, { method: 'POST', body: '{}' });
+  await loadReports();
+  await openReport(data.report.id);
+  toast('Report cloned', 'ok');
+}
+
+async function toggleFavorite() {
+  if (!state.activeReport) return toast('Save the report first', 'info');
+  const report = state.reports.find((item) => item.id === state.activeReport.id);
+  const favorite = !report?.is_favorite;
+  await api(`/api/reports/${state.activeReport.id}/favorite`, { method: favorite ? 'POST' : 'DELETE', body: favorite ? '{}' : undefined });
+  await loadReports();
+}
+
+async function deleteReport() {
+  if (!state.activeReport) return toast('Save the report first', 'info');
+  if (!confirm(`Delete "${state.activeReport.name}"?`)) return;
+  await api(`/api/reports/${state.activeReport.id}`, { method: 'DELETE' });
+  state.activeReport = null;
+  closeBuilder();
+  await loadReports();
+  toast('Report deleted', 'ok');
+}
+
+async function exportReport() {
+  if (!state.activeReport) return toast('Save the report before exporting', 'info');
+  const token = localStorage.getItem('saasray_token');
+  const res = await fetch(`/api/reports/${state.activeReport.id}/export.csv`, {
+    headers: { Authorization: `Bearer ${token}` }
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    return toast(data.error || 'Could not export report', 'err');
+  }
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = `${($('reportName').value || 'report').replace(/[^a-z0-9_-]+/gi, '_')}.csv`;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
+function renderResults(result, options = { previewMode: true }) {
+  state.expandedGroups.clear();
+  if (result.reportType === 'summary' && result.groups?.length) {
+    result.groups.forEach((_, index) => state.expandedGroups.add(String(index)));
+  }
+  renderResultTable(result, options);
+}
+
+function reportRunLabel() {
+  const type = $('reportType')?.value;
+  if (type === 'summary') return 'Run Summary';
+  if (type === 'matrix') return 'Run Matrix';
+  return 'Run Preview';
+}
+
+function renderResultTable(result, options = { previewMode: true }) {
+  window.currentReportResult = result;
+  window.currentReportResultOptions = options;
+  const columns = result.columns || [];
+  $('reportResultsHead').innerHTML = `<tr>${columns.map((column) => `<th>${esc(column.label)}</th>`).join('')}</tr>`;
+  $('reportResultsFoot').innerHTML = '';
+  if (result.reportType === 'matrix') {
+    renderMatrixTable(result, columns);
+  } else if (result.reportType === 'summary') {
+    renderSummaryTable(result, columns);
+  } else {
+    $('reportResultsBody').innerHTML = (result.rows || []).map((row) => `
+      <tr>${columns.map((column) => `<td>${esc(readPath(row, column.field) ?? '')}</td>`).join('')}</tr>
+    `).join('') || `<tr><td colspan="${Math.max(columns.length, 1)}" class="muted">No rows found</td></tr>`;
+  }
+  const isPreview = options.previewMode !== false;
+  $('previewMessage').textContent = isPreview
+    ? 'Preview Mode: Showing first 20 records only. Run Report to see complete results.'
+    : 'Run Mode: Showing records returned by the report run.';
+  $('previewMessage').classList.toggle('full-run', !isPreview);
+  $('reportResultMeta').textContent = result.reportType === 'matrix'
+    ? `${result.totalSize || 0} row groups x ${result.columnGroups?.length || 0} column groups from ${result.sourceRowCount || 0} visible records${result.cached ? ' - cached' : ''}`
+    : result.reportType === 'summary'
+    ? `${result.totalSize || 0} groups from ${result.sourceRowCount || 0} visible records${result.cached ? ' - cached' : ''}`
+    : `${result.totalSize || 0} rows shown${result.cached ? ' - cached' : ''}`;
+}
+
+function renderMatrixTable(result, columns) {
+  const rowGroupColumns = columns.filter((column) => column.group);
+  const matrixColumns = columns.filter((column) => column.matrixColumnKey);
+  const totalColumn = columns.find((column) => column.total);
+
+  $('reportResultsHead').innerHTML = `
+    <tr>
+      ${rowGroupColumns.map((column) => `<th>${esc(column.label)}</th>`).join('')}
+      ${matrixColumns.map((column) => `<th class="matrix-column-header">${esc(column.label)}</th>`).join('')}
+      ${totalColumn ? `<th>${esc(totalColumn.label)}</th>` : ''}
+    </tr>
+  `;
+
+  $('reportResultsBody').innerHTML = (result.rows || []).map((row) => `
+    <tr>
+      ${rowGroupColumns.map((column) => `<td class="matrix-row-header">${esc(readPath(row, column.field) ?? '')}</td>`).join('')}
+      ${matrixColumns.map((column) => `<td class="matrix-value-cell">${esc(readPath(row, column.field) ?? 0)}</td>`).join('')}
+      ${totalColumn ? `<td class="matrix-total-cell">${esc(readPath(row, totalColumn.field) ?? 0)}</td>` : ''}
+    </tr>
+  `).join('') || `<tr><td colspan="${Math.max(columns.length, 1)}" class="muted">No rows found</td></tr>`;
+
+  $('reportResultsFoot').innerHTML = `
+    <tr>
+      <td colspan="${Math.max(rowGroupColumns.length, 1)}">Grand Total</td>
+      ${matrixColumns.map((column) => `<td class="matrix-total-cell">${esc(result.columnTotals?.[column.field] ?? 0)}</td>`).join('')}
+      ${totalColumn ? `<td class="matrix-grand-total">${esc(result.columnTotals?.[totalColumn.field] ?? 0)}</td>` : ''}
+    </tr>
+  `;
+}
+
+function renderSummaryTable(result, columns) {
+  const detailColumns = result.detailColumns || [];
+  const aggregateColumns = columns.filter((column) => column.aggregate);
+  const groupCount = (result.groupBy || []).length || 1;
+  const bodyRows = [];
+
+  (result.groups || []).forEach((group, groupIndex) => {
+    const key = String(groupIndex);
+    const expanded = state.expandedGroups.has(key);
+    const groupLabel = (group.keys || []).join(' / ') || '(Blank)';
+    const summary = (result.rows || [])[groupIndex] || {};
+    bodyRows.push(`
+      <tr class="summary-group-row">
+        <td colspan="${Math.max(groupCount, 1)}">
+          <button class="group-toggle" onclick="toggleSummaryGroup('${key}')">${expanded ? '-' : '+'}</button>
+          ${esc(groupLabel)}
+        </td>
+        ${aggregateColumns.map((column) => `<td>${esc(summary[column.field] ?? '')}</td>`).join('')}
+      </tr>
+    `);
+    if (expanded) {
+      (group.rows || []).forEach((detailRow) => {
+        bodyRows.push(`
+          <tr class="summary-detail-row">
+            <td colspan="${Math.max(groupCount, 1)}">${esc(detailColumns.map((column) => readPath(detailRow, column.field)).filter(Boolean).join(' | ') || 'Detail row')}</td>
+            ${aggregateColumns.map(() => '<td></td>').join('')}
+          </tr>
+        `);
+      });
+      bodyRows.push(`
+        <tr class="summary-total-row">
+          <td colspan="${Math.max(groupCount, 1)}">Subtotal</td>
+          ${aggregateColumns.map((column) => `<td>${esc(summary[column.field] ?? '')}</td>`).join('')}
+        </tr>
+      `);
+    }
+  });
+
+  $('reportResultsBody').innerHTML = bodyRows.join('') || `<tr><td colspan="${Math.max(columns.length, 1)}" class="muted">No rows found</td></tr>`;
+  $('reportResultsFoot').innerHTML = `
+    <tr>
+      <td colspan="${Math.max(groupCount, 1)}">Grand Total</td>
+      ${aggregateColumns.map((column) => `<td>${esc(result.grandTotals?.[column.field] ?? '')}</td>`).join('')}
+    </tr>
+  `;
+}
+
+function toggleSummaryGroup(key) {
+  if (state.expandedGroups.has(key)) state.expandedGroups.delete(key);
+  else state.expandedGroups.add(key);
+  renderResultTable(window.currentReportResult || {}, window.currentReportResultOptions || { previewMode: true });
+}
+
+function renderSummaryFieldOptions() {
+  const options = ['<option value="">None</option>']
+    .concat(state.fields.map((field) => `<option value="${esc(field.name)}">${esc(field.label)}</option>`))
+    .join('');
+  $('summaryGroupOne').innerHTML = options;
+  $('summaryGroupTwo').innerHTML = options;
+  $('matrixColumnGroup').innerHTML = options;
+  $('summaryAggregateField').innerHTML = options;
+  syncAggregateFieldState();
+  renderGroupChips();
+  renderColumnGroupChips();
+}
+
+function syncReportTypeUi() {
+  const isSummary = $('reportType').value === 'summary';
+  const isMatrix = $('reportType').value === 'matrix';
+  $('summaryConfig').style.display = isSummary || isMatrix ? '' : 'none';
+  $('matrixColumnConfig').style.display = isMatrix ? '' : 'none';
+  $('summaryGroupTwo').style.display = isMatrix ? 'none' : '';
+  $('runReportBtn').textContent = reportRunLabel();
+  $('reportName').placeholder = isMatrix ? 'New Matrix Report' : isSummary ? 'New Summary Report' : 'New Tabular Report';
+  renderGroupChips();
+  renderColumnGroupChips();
+}
+
+function syncAggregateFieldState() {
+  const requiresField = $('summaryAggregateFn').value !== 'count';
+  $('summaryAggregateField').disabled = !requiresField;
+  if (!requiresField) $('summaryAggregateField').value = '';
+}
+
+function renderFilterFieldOptions() {
+  const options = state.fields
+    .map((field) => `<option value="${esc(field.name)}">${esc(field.label)}</option>`)
+    .join('');
+  $('filterField').innerHTML = options;
+}
+
+function addFilter() {
+  const field = $('filterField').value;
+  const operator = $('filterOperator').value;
+  const value = $('filterValue').value;
+  if (!field) return toast('Select a filter field', 'err');
+  if (!['is_null', 'is_not_null'].includes(operator) && !String(value || '').trim()) {
+    return toast('Enter a filter value', 'err');
+  }
+  state.filters.push({ field, operator, value });
+  $('filterValue').value = '';
+  markDirty();
+  renderFilters();
+  scheduleAutoPreview();
+}
+
+function removeFilter(index) {
+  state.filters.splice(index, 1);
+  markDirty();
+  renderFilters();
+  scheduleAutoPreview();
+}
+
+function renderFilters() {
+  syncFilterValueState();
+  $('activeFilters').innerHTML = state.filters.length
+    ? state.filters.map((filter, index) => `
+      <span class="field-pill">
+        ${esc(labelForField(filter.field))} ${esc(operatorLabel(filter.operator))}${filter.value ? ` ${esc(filter.value)}` : ''}
+        <button onclick="removeFilter(${index})">x</button>
+      </span>
+    `).join('')
+    : '<span class="muted">No filters. All records allowed by security are included in preview.</span>';
+}
+
+function renderGroupChips() {
+  const fields = [$('summaryGroupOne')?.value, $('summaryGroupTwo')?.value].filter(Boolean);
+  const target = $('groupRowChips');
+  if (!target) return;
+  target.innerHTML = fields.length
+    ? fields.map((field, index) => `
+      <span class="field-pill">
+        ${esc(labelForField(field))}
+        <button onclick="clearGroupField(${index})">x</button>
+      </span>
+    `).join('')
+    : '<span class="muted">No row groups. Add a row group for summary or matrix reports.</span>';
+}
+
+function clearGroupField(index) {
+  if (index === 0) $('summaryGroupOne').value = '';
+  if (index === 1) $('summaryGroupTwo').value = '';
+  markDirty();
+  renderGroupChips();
+  scheduleAutoPreview();
+}
+
+function renderColumnGroupChips() {
+  const target = $('groupColumnChips');
+  if (!target) return;
+  const field = $('matrixColumnGroup')?.value;
+  target.innerHTML = field
+    ? `<span class="field-pill">${esc(labelForField(field))}<button onclick="clearColumnGroupField()">x</button></span>`
+    : '<span class="muted">No column group. Matrix reports require one column group.</span>';
+}
+
+function clearColumnGroupField() {
+  $('matrixColumnGroup').value = '';
+  markDirty();
+  renderColumnGroupChips();
+  scheduleAutoPreview();
+}
+
+function syncFilterValueState() {
+  const noValue = ['is_null', 'is_not_null'].includes($('filterOperator').value);
+  $('filterValue').disabled = noValue;
+  if (noValue) $('filterValue').value = '';
+}
+
+function operatorLabel(operator) {
+  return ({
+    eq: '=',
+    neq: '!=',
+    contains: 'contains',
+    starts_with: 'starts with',
+    gt: '>',
+    gte: '>=',
+    lt: '<',
+    lte: '<=',
+    is_null: 'is blank',
+    is_not_null: 'is not blank'
+  })[operator] || operator;
+}
+
+function markDirty() {
+  state.isDirty = true;
+  const indicator = $('draftIndicator');
+  if (indicator) {
+    indicator.textContent = 'Unsaved changes';
+    indicator.classList.add('dirty');
+  }
+}
+
+function markSaved() {
+  state.isDirty = false;
+  const indicator = $('draftIndicator');
+  if (indicator) {
+    indicator.textContent = 'Saved';
+    indicator.classList.remove('dirty');
+  }
+}
+
+function scheduleAutoPreview() {
+  clearTimeout(state.autoPreviewTimer);
+  if (!$('autoPreviewToggle')?.checked) return;
+  if (!state.selectedFields.length && $('reportType').value === 'tabular') return;
+  if ($('reportType').value === 'summary' && !$('summaryGroupOne').value) return;
+  if ($('reportType').value === 'matrix' && (!$('summaryGroupOne').value || !$('matrixColumnGroup').value)) return;
+  state.autoPreviewTimer = setTimeout(() => {
+    const signature = JSON.stringify(definitionFromForm());
+    if (signature === state.lastPreviewSignature) return;
+    runPreview().catch(() => {});
+  }, 2500);
+}
+
+function restoreBuilderUiState() {
+  const appSidebarCollapsed = sessionStorage.getItem('reports_app_sidebar_collapsed') === '1';
+  document.body.classList.toggle('sidebar-collapsed', appSidebarCollapsed);
+  const grid = $('reportsGrid');
+  const collapsed = sessionStorage.getItem('reports_sidebar_collapsed') === '1';
+  if (collapsed) grid?.classList.add('sidebar-collapsed');
+  const width = Number(sessionStorage.getItem('reports_sidebar_width') || 0);
+  if (width) grid?.style.setProperty('--reports-sidebar-w', `${Math.min(Math.max(width, 220), 420)}px`);
+  $('autoPreviewToggle').checked = false;
+  const builderCollapsed = sessionStorage.getItem('reports_builder_panel_collapsed') === '1';
+  if (builderCollapsed) $('builderWorkspace')?.classList.add('builder-panel-collapsed');
+  const builderWidth = Number(sessionStorage.getItem('reports_builder_panel_width') || 0);
+  if (builderWidth) $('builderWorkspace')?.style.setProperty('--builder-panel-w', `${Math.min(Math.max(builderWidth, 240), 440)}px`);
+  updateSidebarToggleText();
+  updateBuilderPanelToggleText();
+}
+
+function toggleAppSidebar() {
+  document.body.classList.toggle('sidebar-collapsed');
+  sessionStorage.setItem('reports_app_sidebar_collapsed', document.body.classList.contains('sidebar-collapsed') ? '1' : '0');
+}
+
+function toggleReportSidebar() {
+  const grid = $('reportsGrid');
+  if (!grid) return;
+  grid.classList.toggle('sidebar-collapsed');
+  sessionStorage.setItem('reports_sidebar_collapsed', grid.classList.contains('sidebar-collapsed') ? '1' : '0');
+  updateSidebarToggleText();
+}
+
+function updateSidebarToggleText() {
+  const collapsed = $('reportsGrid')?.classList.contains('sidebar-collapsed');
+  if ($('toggleReportSidebarBtn')) $('toggleReportSidebarBtn').textContent = collapsed ? 'Expand Reports' : 'Saved Reports';
+}
+
+function startSidebarResize(event) {
+  if (!$('reportsGrid') || !$('reportSidebarResizer')) return;
+  if ($('reportsGrid').classList.contains('sidebar-collapsed')) return;
+  state.isResizingSidebar = true;
+  $('reportSidebarResizer').classList.add('dragging');
+  event.preventDefault();
+}
+
+function resizeReportSidebar(event) {
+  if (!state.isResizingSidebar) return;
+  if (!$('reportsGrid')) return;
+  const gridLeft = $('reportsGrid').getBoundingClientRect().left;
+  const width = Math.min(Math.max(event.clientX - gridLeft, 220), 420);
+  $('reportsGrid').style.setProperty('--reports-sidebar-w', `${width}px`);
+  sessionStorage.setItem('reports_sidebar_width', String(Math.round(width)));
+}
+
+function stopSidebarResize() {
+  state.isResizingSidebar = false;
+  $('reportSidebarResizer')?.classList.remove('dragging');
+}
+
+function toggleBuilderPanel() {
+  const workspace = $('builderWorkspace');
+  workspace.classList.toggle('builder-panel-collapsed');
+  sessionStorage.setItem('reports_builder_panel_collapsed', workspace.classList.contains('builder-panel-collapsed') ? '1' : '0');
+  updateBuilderPanelToggleText();
+}
+
+function updateBuilderPanelToggleText() {
+  const collapsed = $('builderWorkspace')?.classList.contains('builder-panel-collapsed');
+  if ($('toggleBuilderPanelBtn')) $('toggleBuilderPanelBtn').textContent = collapsed ? '>' : '<';
+}
+
+function startBuilderPanelResize(event) {
+  if ($('builderWorkspace').classList.contains('builder-panel-collapsed')) return;
+  state.isResizingBuilderPanel = true;
+  $('builderLeftResizer').classList.add('dragging');
+  event.preventDefault();
+}
+
+function resizeBuilderPanel(event) {
+  if (!state.isResizingBuilderPanel) return;
+  const left = $('builderWorkspace').getBoundingClientRect().left;
+  const width = Math.min(Math.max(event.clientX - left, 240), 440);
+  $('builderWorkspace').style.setProperty('--builder-panel-w', `${width}px`);
+  sessionStorage.setItem('reports_builder_panel_width', String(Math.round(width)));
+}
+
+function stopBuilderPanelResize() {
+  state.isResizingBuilderPanel = false;
+  $('builderLeftResizer')?.classList.remove('dragging');
+}
+
+function setBuilderTab(tab) {
+  state.builderTab = tab === 'filters' ? 'filters' : 'outline';
+  $('outlineTabBtn').classList.toggle('active', state.builderTab === 'outline');
+  $('filtersTabBtn').classList.toggle('active', state.builderTab === 'filters');
+  $('outlinePanel').style.display = state.builderTab === 'outline' ? '' : 'none';
+  $('filtersPanel').style.display = state.builderTab === 'filters' ? '' : 'none';
+}
+
+function clearResults() {
+  $('reportResultsHead').innerHTML = '';
+  $('reportResultsBody').innerHTML = '';
+  $('reportResultsFoot').innerHTML = '';
+  $('reportResultMeta').textContent = '';
+  $('previewMessage').textContent = 'Preview Mode: Showing first 20 records only. Run Report to see complete results.';
+  $('previewMessage').classList.remove('full-run');
+}
+
+function labelForField(fieldName) {
+  return state.fields.find((field) => field.name === fieldName)?.label || fieldName;
+}
+
+function readPath(row, path) {
+  if (Object.prototype.hasOwnProperty.call(row || {}, path)) return row[path];
+  return String(path || '').split('.').reduce((value, key) => value?.[key], row);
+}
+
+function setBusy(button, busy, label) {
+  button.disabled = busy;
+  button.textContent = label;
+}
+
+function updateObjectChip() {
+  const objectName = $('reportObject')?.value || 'Object';
+  if ($('objectChip')) $('objectChip').textContent = objectName;
+}
+
+function toast(message, type = 'info') {
+  const stack = $('toastStack');
+  if (!stack) return;
+  const item = document.createElement('div');
+  item.className = `toast toast-${type === 'err' ? 'err' : type === 'ok' ? 'ok' : 'info'} in`;
+  item.innerHTML = `
+    <div class="toast-inner">
+      <span class="toast-icon">${type === 'ok' ? 'OK' : type === 'err' ? '!' : 'i'}</span>
+      <div class="toast-content">
+        <div class="toast-label">${type === 'ok' ? 'Success' : type === 'err' ? 'Error' : 'Info'}</div>
+        <div class="toast-msg">${esc(message)}</div>
+      </div>
+      <button class="toast-close" onclick="this.closest('.toast').remove()">x</button>
+    </div>`;
+  stack.appendChild(item);
+  setTimeout(() => item.remove(), 5000);
+}
+
+function initTheme() {
+  const saved = localStorage.getItem('saasray_theme');
+  if (saved === 'dark') document.documentElement.setAttribute('data-theme', 'dark');
+}
+
+function toggleTheme() {
+  const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+  if (isDark) {
+    document.documentElement.removeAttribute('data-theme');
+    localStorage.setItem('saasray_theme', 'light');
+  } else {
+    document.documentElement.setAttribute('data-theme', 'dark');
+    localStorage.setItem('saasray_theme', 'dark');
+  }
+}
+
+function debounce(fn, wait) {
+  let timer;
+  return (...args) => {
+    clearTimeout(timer);
+    timer = setTimeout(() => fn(...args), wait);
+  };
+}
+
+function titleCase(value) {
+  return String(value || '').replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
+function esc(value) {
+  return String(value ?? '').replace(/[&<>"']/g, (char) => ({
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    '"': '&quot;',
+    "'": '&#39;'
+  }[char]));
+}

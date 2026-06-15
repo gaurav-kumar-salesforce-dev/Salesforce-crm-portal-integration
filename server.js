@@ -14,6 +14,7 @@ const {
   getUserWithPermissions,
   writeAuditLog
 } = require('./db');
+const { createReportsRouter } = require('./src/reports/report.routes');
 
 const JWT_SECRET = process.env.JWT_SECRET;
 const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '8h';
@@ -76,6 +77,7 @@ const RESERVED_API_OBJECT_NAMES = new Set([
   'bulk',
   'lookup',
   'debug',
+  'reports',
   'search',
   'meta',
   'campaigns',
@@ -4920,6 +4922,24 @@ app.get('/auth/salesforce', (req, res) => {
 
   res.redirect(`${SF.loginUrl}/services/oauth2/authorize?${params.toString()}`);
 });
+
+app.use('/api/reports', createReportsRouter({
+  checkAuth,
+  deps: {
+    objects: OBJECTS,
+    sfGet,
+    escapeSOQL,
+    getObjectFieldSet,
+    getEffectivePermissions,
+    getEffectiveFieldPerms,
+    buildReadableRecordScopeFilter,
+    hydrateRecordOwners,
+    applyRecordVisibility,
+    applyFieldSecurity,
+    permissionDeniedMessage,
+    queryBatchHeaders: QUERY_BATCH_HEADERS
+  }
+}));
 
 // Salesforce redirects here after login
 app.get('/oauth/callback', async (req, res) => {
