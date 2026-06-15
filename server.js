@@ -6611,6 +6611,7 @@ app.use((req, res) => {
 
 // ─── Start ────────────────────────────────────────────────────
 app.listen(PORT, async () => {
+  console.log(`SaaSRAY CRM server running at http://localhost:${PORT}`);
   try {
     await getAccessToken();
   } catch (e) {

@@ -5,6 +5,7 @@ function initTheme() {
     document.documentElement.setAttribute('data-theme', 'dark');
   } else {
     document.documentElement.removeAttribute('data-theme');
+  }
 }
 function toggleTheme() {
   const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
@@ -6133,7 +6134,6 @@ async function refreshAfterSave(objectName, savedRecord, wasEditing) {
     loadData().catch((err) => console.warn("Background refresh failed:", err.message));
   } else {
     loadData().catch((err) => console.warn("Background refresh failed:", err.message));
-  }
   }
 }
 
