@@ -15,6 +15,7 @@ const {
   writeAuditLog
 } = require('./db');
 const { createReportsRouter } = require('./src/reports/report.routes');
+const { createDashboardsRouter } = require('./src/dashboards/dashboard.routes');
 
 const JWT_SECRET = process.env.JWT_SECRET;
 const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '8h';
@@ -4924,6 +4925,24 @@ app.get('/auth/salesforce', (req, res) => {
 });
 
 app.use('/api/reports', createReportsRouter({
+  checkAuth,
+  deps: {
+    objects: OBJECTS,
+    sfGet,
+    escapeSOQL,
+    getObjectFieldSet,
+    getEffectivePermissions,
+    getEffectiveFieldPerms,
+    buildReadableRecordScopeFilter,
+    hydrateRecordOwners,
+    applyRecordVisibility,
+    applyFieldSecurity,
+    permissionDeniedMessage,
+    queryBatchHeaders: QUERY_BATCH_HEADERS
+  }
+}));
+
+app.use('/api/dashboards', createDashboardsRouter({
   checkAuth,
   deps: {
     objects: OBJECTS,

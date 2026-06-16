@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="style.css?v=6">
-  <link rel="stylesheet" href="reports.css?v=8">
+  <link rel="stylesheet" href="reports.css?v=10">
 </head>
 <body>
   <aside class="sidebar" id="sidebar">
@@ -17,19 +17,23 @@
         <span class="brand-name">SaaSRAY CRM</span>
       </div>
       <button class="sidebar-collapse-btn" id="appSidebarToggle" title="Collapse navigation" type="button">
-        <span class="reports-collapse-mark">&lt;</span>
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
       </button>
     </div>
 
     <div class="sidebar-section-label">CRM</div>
     <nav class="sidebar-nav">
       <a class="nav-item" href="/">
-        <span class="nav-icon">[]</span>
+        <span class="nav-icon">O</span>
         <span class="nav-label">Objects</span>
       </a>
       <a class="nav-item active" href="/reports.html">
         <span class="nav-icon">R</span>
         <span class="nav-label">Reports</span>
+      </a>
+      <a class="nav-item" href="/dashboards.html">
+        <span class="nav-icon">D</span>
+        <span class="nav-label">Dashboards</span>
       </a>
     </nav>
 
@@ -147,8 +151,8 @@
                 </button>
                 <!-- Separator -->
                 <span style="width:1px;height:20px;background:var(--border-dark);margin:0 4px"></span>
-                <!-- Add Chart (future) -->
-                <button class="btn btn-ghost btn-add-chart" id="addChartBtn" title="Add Chart" disabled>
+                <!-- Add Chart -->
+                <button class="btn btn-ghost btn-add-chart" id="addChartBtn" title="Add Chart">
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="12" width="4" height="9" rx="1"/><rect x="10" y="7" width="4" height="14" rx="1"/><rect x="17" y="3" width="4" height="18" rx="1"/></svg>
                   Add Chart
                 </button>
@@ -191,6 +195,30 @@
                 <span>Update Preview Automatically</span>
                 <input type="checkbox" id="autoPreviewToggle">
               </label>
+            </div>
+
+            <div class="chart-config-strip" id="chartConfigStrip" style="display:none">
+              <div class="chart-config-title">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="12" width="4" height="9" rx="1"/><rect x="10" y="7" width="4" height="14" rx="1"/><rect x="17" y="3" width="4" height="18" rx="1"/></svg>
+                Chart
+              </div>
+              <label>
+                <span>Type</span>
+                <select id="chartType">
+                  <option value="bar">Bar</option>
+                  <option value="line">Line</option>
+                  <option value="donut">Donut</option>
+                </select>
+              </label>
+              <label>
+                <span>Label</span>
+                <select id="chartLabelField"></select>
+              </label>
+              <label>
+                <span>Value</span>
+                <select id="chartValueField"></select>
+              </label>
+              <button class="btn btn-ghost" id="removeChartBtn">Remove Chart</button>
             </div>
 
             <!-- ── Builder Workspace ── -->
@@ -298,6 +326,15 @@
                   <span class="preview-icon">✓</span>
                   <span>Preview Mode: Showing first 20 records only. Run Report to see complete results.</span>
                 </div>
+                <div class="report-chart-panel" id="reportChartPanel" style="display:none">
+                  <div class="report-chart-header">
+                    <div>
+                      <div class="report-chart-title" id="reportChartTitle">Report Chart</div>
+                      <div class="report-chart-subtitle" id="reportChartSubtitle">Uses current preview or run results</div>
+                    </div>
+                  </div>
+                  <div class="report-chart-canvas" id="reportChartCanvas"></div>
+                </div>
                 <div class="canvas-actions">
                   <button class="btn btn-ghost" id="runReportBtn">Run Preview</button>
                 </div>
@@ -337,6 +374,6 @@
   </div>
 
   <div id="toastStack" class="toast-stack"></div>
-  <script src="reports.js?v=8"></script>
+  <script src="reports.js?v=9"></script>
 </body>
 </html>

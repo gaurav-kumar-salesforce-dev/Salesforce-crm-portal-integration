@@ -67,9 +67,23 @@ function normalizeReportDefinition(input = {}) {
     groupBy,
     groupColumns: reportType === 'matrix' ? groupColumns : [],
     aggregates: reportType === 'summary' || reportType === 'matrix' ? aggregates : [],
+    chart: normalizeChart(definition.chart || {}),
     filters: normalizeFilters(definition.filters || []),
     sort: normalizeSort(definition.sort || []),
     rowLimit: clampInt(definition.rowLimit || definition.row_limit || 200, 1, 2000)
+  };
+}
+
+function normalizeChart(chart) {
+  const enabled = Boolean(chart.enabled);
+  const type = ['bar', 'line', 'donut'].includes(chart.type) ? chart.type : 'bar';
+  const labelField = String(chart.labelField || '').trim();
+  const valueField = String(chart.valueField || '').trim();
+  return {
+    enabled,
+    type,
+    labelField: isValidFieldName(labelField) || labelField === '__count' ? labelField : '',
+    valueField: isValidFieldName(valueField) || valueField === '__count' ? valueField : ''
   };
 }
 

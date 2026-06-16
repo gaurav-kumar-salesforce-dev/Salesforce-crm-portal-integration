@@ -14,6 +14,12 @@ const state = {
   builderTab: 'outline',
   wasSidebarCollapsedBeforeBuilder: false,
   expandedGroups: new Set(),
+  chart: {
+    enabled: false,
+    type: 'bar',
+    labelField: '',
+    valueField: ''
+  },
   // Footer toggle state
   showRowCounts: true,
   showDetailRows: true,
@@ -89,6 +95,15 @@ function bindEvents() {
   $('addFilterBtn').addEventListener('click', addFilter);
   $('runReportBtn').addEventListener('click', runPreview);
   $('runFullReportBtn').addEventListener('click', runFullReport);
+  $('addChartBtn')?.addEventListener('click', enableChart);
+  $('removeChartBtn')?.addEventListener('click', removeChart);
+  ['chartType', 'chartLabelField', 'chartValueField'].forEach((id) => {
+    $(id)?.addEventListener('change', () => {
+      syncChartFromControls();
+      markDirty();
+      renderChartForCurrentResult();
+    });
+  });
   $('saveReportBtn').addEventListener('click', saveReport);
   $('saveRunReportBtn').addEventListener('click', saveAndRunReport);
   $('closeBuilderBtn').addEventListener('click', closeBuilder);
@@ -131,6 +146,7 @@ function bindEvents() {
 function reRenderIfPossible() {
   if (window.currentReportResult) {
     renderResultTable(window.currentReportResult, window.currentReportResultOptions || { previewMode: true });
+    renderChartForCurrentResult();
   }
 }
 
@@ -200,7 +216,7 @@ function renderReports() {
         <span style="display:inline-flex;align-items:center;gap:4px;background:var(--surface-2);border:1px solid var(--border);border-radius:4px;padding:2px 8px;font-size:11px;font-weight:700;color:var(--text-2)">${esc(titleCase(report.report_type))}</span>
       </td>
       <td style="color:var(--text-2)">${new Date(report.updated_at).toLocaleString()}</td>
-      <td><button class="row-action-btn" onclick="openReport('${esc(report.id)}')" title="Open report">⌄</button></td>
+      <td><button class="row-action-btn" onclick="openReport('${esc(report.id)}')" title="Open report"><svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="12" cy="19" r="2"/></svg></button></td>
     </tr>
   `).join('');
 }
@@ -226,7 +242,9 @@ async function openReport(id, options = {}) {
   $('summaryAggregateFn').value = firstAggregate.function || 'count';
   $('summaryAggregateField').value = firstAggregate.field || '';
   state.filters = [...(definition.filters || [])];
+  state.chart = normalizeChartConfig(definition.chart);
   syncReportTypeUi();
+  syncChartControls();
   markSaved();
   renderReports();
   renderSelectedFields();
@@ -246,8 +264,10 @@ async function newReport() {
   $('reportLimit').value = 200;
   state.selectedFields = [];
   state.filters = [];
+  state.chart = normalizeChartConfig();
   await loadFields($('reportObject').value);
   syncReportTypeUi();
+  syncChartControls();
   markDirty();
   renderReports();
   renderSelectedFields();
@@ -261,7 +281,7 @@ function showBuilderMode() {
   $('reportsListView').style.display = 'none';
   $('reportsHeader').style.display = 'none';
   $('reportBuilderView').style.display = '';
-  // CSS handles hiding sidebar via body.reports-builder-mode .sidebar { display: none }
+  // CSS handles collapsing sidebar via body.reports-builder-mode rules
   document.body.classList.add('reports-builder-mode');
 }
 
@@ -362,6 +382,7 @@ function definitionFromForm() {
     groupBy: reportType === 'summary' || reportType === 'matrix' ? groupBy : [],
     groupColumns: reportType === 'matrix' ? groupColumns : [],
     aggregates: reportType === 'summary' || reportType === 'matrix' ? aggregates : [],
+    chart: normalizeChartConfig(state.chart),
     filters: state.filters,
     sort: [],
     rowLimit: Number($('reportLimit').value || 200)
@@ -522,6 +543,7 @@ function renderResults(result, options = { previewMode: true }) {
     result.groups.forEach((_, index) => state.expandedGroups.add(String(index)));
   }
   renderResultTable(result, options);
+  renderChartForCurrentResult();
 }
 
 function reportRunLabel() {
@@ -572,6 +594,219 @@ function renderResultTable(result, options = { previewMode: true }) {
     : result.reportType === 'summary'
     ? `${result.totalSize || 0} groups from ${result.sourceRowCount || 0} visible records${result.cached ? ' — cached' : ''}`
     : `${result.totalSize || 0} rows shown${result.cached ? ' — cached' : ''}`;
+}
+
+function normalizeChartConfig(chart = {}) {
+  return {
+    enabled: Boolean(chart.enabled),
+    type: ['bar', 'line', 'donut'].includes(chart.type) ? chart.type : 'bar',
+    labelField: chart.labelField || '',
+    valueField: chart.valueField || ''
+  };
+}
+
+function enableChart() {
+  state.chart = normalizeChartConfig({ ...state.chart, enabled: true });
+  syncChartControls();
+  markDirty();
+  renderChartForCurrentResult();
+}
+
+function removeChart() {
+  state.chart = normalizeChartConfig({ enabled: false });
+  syncChartControls();
+  markDirty();
+  renderChartForCurrentResult();
+}
+
+function syncChartFromControls() {
+  state.chart = normalizeChartConfig({
+    enabled: true,
+    type: $('chartType')?.value || state.chart.type,
+    labelField: $('chartLabelField')?.value || state.chart.labelField,
+    valueField: $('chartValueField')?.value || state.chart.valueField
+  });
+}
+
+function syncChartControls() {
+  const chart = normalizeChartConfig(state.chart);
+  state.chart = chart;
+  if ($('chartConfigStrip')) $('chartConfigStrip').style.display = chart.enabled ? '' : 'none';
+  if ($('chartType')) $('chartType').value = chart.type;
+  refreshChartFieldOptions(window.currentReportResult);
+}
+
+function refreshChartFieldOptions(result) {
+  if (!$('chartLabelField') || !$('chartValueField')) return;
+  const fields = chartFieldOptions(result);
+  $('chartLabelField').innerHTML = fields.labels.map((field) => `<option value="${esc(field.field)}">${esc(field.label)}</option>`).join('') || '<option value="">Label</option>';
+  $('chartValueField').innerHTML = fields.values.map((field) => `<option value="${esc(field.field)}">${esc(field.label)}</option>`).join('') || '<option value="">Value</option>';
+  if (!fields.labels.some((field) => field.field === state.chart.labelField)) state.chart.labelField = fields.labels[0]?.field || '';
+  if (!fields.values.some((field) => field.field === state.chart.valueField)) state.chart.valueField = fields.values[0]?.field || '';
+  $('chartLabelField').value = state.chart.labelField;
+  $('chartValueField').value = state.chart.valueField;
+}
+
+function chartFieldOptions(result) {
+  const columns = result?.columns || [];
+  const labelColumns = columns.filter((column) => column.group || (!column.aggregate && !column.total && !column.matrixColumnKey));
+  const valueColumns = columns.filter((column) => column.aggregate || column.total || column.matrixColumnKey);
+  if (result?.reportType === 'tabular') {
+    return {
+      labels: labelColumns.map(toChartOption),
+      values: [{ field: '__count', label: 'Record Count' }]
+    };
+  }
+  return {
+    labels: (labelColumns.length ? labelColumns : columns.slice(0, 1)).map(toChartOption),
+    values: (valueColumns.length ? valueColumns : [{ field: '__count', label: 'Record Count' }]).map(toChartOption)
+  };
+}
+
+function toChartOption(column) {
+  return {
+    field: column.field || column.matrixColumnKey || column.fieldName || '',
+    label: column.label || column.field || 'Value'
+  };
+}
+
+function renderChartForCurrentResult() {
+  const panel = $('reportChartPanel');
+  const canvas = $('reportChartCanvas');
+  if (!panel || !canvas) return;
+  if (!state.chart?.enabled) {
+    panel.style.display = 'none';
+    canvas.innerHTML = '';
+    return;
+  }
+  panel.style.display = '';
+  refreshChartFieldOptions(window.currentReportResult);
+  const points = buildChartPoints(window.currentReportResult);
+  if ($('reportChartTitle')) $('reportChartTitle').textContent = `${titleCase(state.chart.type)} Chart`;
+  if ($('reportChartSubtitle')) {
+    $('reportChartSubtitle').textContent = points.length
+      ? `${labelForChartField(state.chart.valueField)} by ${labelForChartField(state.chart.labelField)}`
+      : 'Run Preview or Run Report to populate the chart';
+  }
+  canvas.innerHTML = points.length
+    ? renderChartSvg(points, state.chart.type)
+    : '<div class="chart-empty">Run Preview or Run Report to populate the chart.</div>';
+}
+
+function labelForChartField(field) {
+  const options = chartFieldOptions(window.currentReportResult);
+  return options.labels.concat(options.values).find((option) => option.field === field)?.label || field || 'Value';
+}
+
+function buildChartPoints(result) {
+  if (!result?.rows?.length) return [];
+  const labelField = state.chart.labelField || chartFieldOptions(result).labels[0]?.field;
+  const valueField = state.chart.valueField || chartFieldOptions(result).values[0]?.field;
+
+  if (result.reportType === 'tabular') {
+    const grouped = new Map();
+    result.rows.forEach((row) => {
+      const label = String(readPath(row, labelField) ?? '(Blank)');
+      const increment = valueField === '__count' ? 1 : Number(readPath(row, valueField) || 0);
+      grouped.set(label, (grouped.get(label) || 0) + increment);
+    });
+    return Array.from(grouped.entries()).map(([label, value]) => ({ label, value })).slice(0, 12);
+  }
+
+  return result.rows.map((row) => ({
+    label: String(readPath(row, labelField) ?? '(Blank)'),
+    value: Number(valueField === '__count' ? 1 : readPath(row, valueField) || 0)
+  })).filter((point) => Number.isFinite(point.value)).slice(0, 12);
+}
+
+function renderChartSvg(points, type) {
+  if (type === 'donut') return renderDonutChart(points);
+  if (type === 'line') return renderLineChart(points);
+  return renderBarChart(points);
+}
+
+function renderBarChart(points) {
+  const width = 820;
+  const height = 260;
+  const top = 20;
+  const left = 46;
+  const chartHeight = 170;
+  const max = Math.max(...points.map((point) => point.value), 1);
+  const slot = (width - left - 24) / points.length;
+  const bars = points.map((point, index) => {
+    const barHeight = Math.max((point.value / max) * chartHeight, 2);
+    const x = left + index * slot + slot * 0.2;
+    const y = top + chartHeight - barHeight;
+    const w = Math.max(slot * 0.55, 10);
+    return `
+      <rect class="chart-bar" x="${x}" y="${y}" width="${w}" height="${barHeight}" rx="3"></rect>
+      <text class="chart-value" x="${x + w / 2}" y="${y - 6}" text-anchor="middle">${esc(formatChartNumber(point.value))}</text>
+      <text class="chart-label" x="${x + w / 2}" y="${top + chartHeight + 28}" text-anchor="middle">${esc(shortLabel(point.label))}</text>
+    `;
+  }).join('');
+  return `<svg class="chart-svg" viewBox="0 0 ${width} ${height}" role="img">
+    <line class="chart-axis" x1="${left}" y1="${top + chartHeight}" x2="${width - 20}" y2="${top + chartHeight}"></line>
+    ${bars}
+  </svg>`;
+}
+
+function renderLineChart(points) {
+  const width = 820;
+  const height = 260;
+  const top = 24;
+  const left = 46;
+  const chartHeight = 168;
+  const max = Math.max(...points.map((point) => point.value), 1);
+  const step = points.length > 1 ? (width - left - 40) / (points.length - 1) : 0;
+  const coords = points.map((point, index) => ({
+    x: left + index * step,
+    y: top + chartHeight - (point.value / max) * chartHeight,
+    point
+  }));
+  const path = coords.map((coord, index) => `${index ? 'L' : 'M'} ${coord.x} ${coord.y}`).join(' ');
+  return `<svg class="chart-svg" viewBox="0 0 ${width} ${height}" role="img">
+    <line class="chart-axis" x1="${left}" y1="${top + chartHeight}" x2="${width - 20}" y2="${top + chartHeight}"></line>
+    <path class="chart-line" d="${path}"></path>
+    ${coords.map((coord) => `
+      <circle class="chart-point" cx="${coord.x}" cy="${coord.y}" r="4"></circle>
+      <text class="chart-value" x="${coord.x}" y="${coord.y - 9}" text-anchor="middle">${esc(formatChartNumber(coord.point.value))}</text>
+      <text class="chart-label" x="${coord.x}" y="${top + chartHeight + 28}" text-anchor="middle">${esc(shortLabel(coord.point.label))}</text>
+    `).join('')}
+  </svg>`;
+}
+
+function renderDonutChart(points) {
+  const total = points.reduce((sum, point) => sum + Math.max(point.value, 0), 0) || 1;
+  let offset = 0;
+  const colors = ['#0176d3', '#2e844a', '#ba0517', '#dd7a01', '#747474', '#706eec', '#06a59a', '#8e44ad', '#e67e22', '#1b96ff', '#45c65a', '#ffb75d'];
+  const segments = points.map((point, index) => {
+    const pct = Math.max(point.value, 0) / total;
+    const dash = `${pct * 100} ${100 - pct * 100}`;
+    const segment = `<circle class="donut-segment" r="52" cx="90" cy="90" stroke="${colors[index % colors.length]}" stroke-dasharray="${dash}" stroke-dashoffset="${-offset}"></circle>`;
+    offset += pct * 100;
+    return segment;
+  }).join('');
+  const legend = points.map((point, index) => `
+    <div class="chart-legend-item"><span style="background:${colors[index % colors.length]}"></span>${esc(shortLabel(point.label, 22))} <strong>${esc(formatChartNumber(point.value))}</strong></div>
+  `).join('');
+  return `<div class="donut-chart">
+    <svg class="donut-svg" viewBox="0 0 180 180" role="img">
+      <circle class="donut-track" r="52" cx="90" cy="90"></circle>
+      ${segments}
+      <text class="donut-total" x="90" y="86" text-anchor="middle">${esc(formatChartNumber(total))}</text>
+      <text class="donut-caption" x="90" y="105" text-anchor="middle">Total</text>
+    </svg>
+    <div class="chart-legend">${legend}</div>
+  </div>`;
+}
+
+function shortLabel(value, max = 14) {
+  const label = String(value || '(Blank)');
+  return label.length > max ? `${label.slice(0, max - 1)}...` : label;
+}
+
+function formatChartNumber(value) {
+  return Number(value || 0).toLocaleString(undefined, { maximumFractionDigits: 1 });
 }
 
 function renderMatrixTable(result, columns) {
@@ -673,6 +908,7 @@ function toggleSummaryGroup(key) {
   if (state.expandedGroups.has(key)) state.expandedGroups.delete(key);
   else state.expandedGroups.add(key);
   renderResultTable(window.currentReportResult || {}, window.currentReportResultOptions || { previewMode: true });
+  renderChartForCurrentResult();
 }
 
 function renderSummaryFieldOptions() {
@@ -951,6 +1187,9 @@ function clearResults() {
     previewMsg.innerHTML = '<span class="preview-icon">✓</span><span>Preview Mode: Showing first 20 records only. Run Report to see complete results.</span>';
     previewMsg.classList.remove('full-run');
   }
+  window.currentReportResult = null;
+  window.currentReportResultOptions = null;
+  renderChartForCurrentResult();
 }
 
 function labelForField(fieldName) {
