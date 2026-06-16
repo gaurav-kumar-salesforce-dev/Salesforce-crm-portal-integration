@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="style.css?v=6">
-  <link rel="stylesheet" href="reports.css?v=7">
+  <link rel="stylesheet" href="reports.css?v=8">
 </head>
 <body>
   <aside class="sidebar" id="sidebar">
@@ -59,17 +59,28 @@
     </header>
 
     <main class="content reports-content">
-      <section class="reports-header">
-        <div>
-          <h1>Reports</h1>
-          <p id="reportsSubtitle">Recent reports</p>
+      <!-- ═══ REPORTS HEADER ═══ -->
+      <section class="reports-header" id="reportsHeader">
+        <div class="reports-header-left">
+          <div class="reports-header-breadcrumb">
+            <a href="/reports.html">Reports</a>
+          </div>
+          <h1 id="reportsTitle">Recent</h1>
+          <div class="reports-header-item-count" id="reportsSubtitle">0 items</div>
         </div>
         <div class="reports-actions">
-          <button class="btn btn-ghost" id="refreshReportsBtn">Refresh</button>
-          <button class="btn btn-primary" id="newReportBtn">+ New Report</button>
+          <button class="btn btn-ghost" id="refreshReportsBtn">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="vertical-align:-2px;margin-right:4px"><path d="M23 4v6h-6"/><path d="M1 20v-6h6"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+            Refresh
+          </button>
+          <button class="btn btn-primary" id="newReportBtn">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" style="vertical-align:-1px;margin-right:4px"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+            New Report
+          </button>
         </div>
       </section>
 
+      <!-- ═══ REPORTS LIST VIEW ═══ -->
       <section class="reports-home" id="reportsListView">
         <aside class="reports-home-nav">
           <div class="home-nav-title">Reports</div>
@@ -88,20 +99,20 @@
         <div class="reports-home-main">
           <div class="reports-list-toolbar">
             <div class="reports-list-search">
-              <span>S</span>
+              <svg class="search-icon-svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
               <input id="reportListSearch" type="text" placeholder="Search recent reports..." autocomplete="off">
             </div>
-            <span class="muted" id="reportCount">0 items</span>
+            <span class="reports-list-item-count" id="reportCount">0 items</span>
           </div>
           <div class="reports-list-table-wrap">
             <table class="reports-list-table">
               <thead>
                 <tr>
-                  <th>Report Name</th>
-                  <th>Description</th>
-                  <th>Folder</th>
-                  <th>Type</th>
-                  <th>Updated On</th>
+                  <th>Report Name <span class="sf-sort-icon">▼</span></th>
+                  <th>Description <span class="sf-sort-icon">▼</span></th>
+                  <th>Folder <span class="sf-sort-icon">▼</span></th>
+                  <th>Type <span class="sf-sort-icon">▼</span></th>
+                  <th>Updated On <span class="sf-sort-icon">▼</span></th>
                   <th></th>
                 </tr>
               </thead>
@@ -111,33 +122,56 @@
         </div>
       </section>
 
+      <!-- ═══ REPORT BUILDER VIEW ═══ -->
       <section class="report-builder-view" id="reportBuilderView" style="display:none">
         <div class="report-builder-panel">
           <div id="builderShell" class="lightning-builder">
+
+            <!-- ── Lightning Toolbar ── -->
             <div class="lightning-toolbar">
               <div class="report-identity">
-                <span class="eyebrow">Report</span>
                 <div class="report-title-row">
                   <input id="reportName" class="report-title-input" placeholder="Untitled Report">
                   <span class="object-chip" id="objectChip">Object</span>
                   <span class="draft-indicator" id="draftIndicator">Saved</span>
                 </div>
-                <textarea id="reportDescription" class="report-desc-input" placeholder="Optional description"></textarea>
+                <textarea id="reportDescription" class="report-desc-input" placeholder="Optional description" rows="1"></textarea>
               </div>
               <div class="builder-buttons">
+                <!-- Undo/Redo icon buttons -->
+                <button class="btn btn-ghost btn-icon" id="undoBtn" title="Undo" disabled>
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M3 10h13a4 4 0 0 1 0 8H7"/><polyline points="7 6 3 10 7 14"/></svg>
+                </button>
+                <button class="btn btn-ghost btn-icon" id="redoBtn" title="Redo" disabled>
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 10H8a4 4 0 0 0 0 8h9"/><polyline points="17 6 21 10 17 14"/></svg>
+                </button>
+                <!-- Separator -->
+                <span style="width:1px;height:20px;background:var(--border-dark);margin:0 4px"></span>
+                <!-- Add Chart (future) -->
+                <button class="btn btn-ghost btn-add-chart" id="addChartBtn" title="Add Chart" disabled>
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="12" width="4" height="9" rx="1"/><rect x="10" y="7" width="4" height="14" rx="1"/><rect x="17" y="3" width="4" height="18" rx="1"/></svg>
+                  Add Chart
+                </button>
+                <span style="width:1px;height:20px;background:var(--border-dark);margin:0 4px"></span>
+                <!-- Action buttons -->
                 <button class="btn btn-ghost" id="cloneReportBtn">Clone</button>
                 <button class="btn btn-ghost" id="favoriteReportBtn">Favorite</button>
                 <button class="btn btn-ghost" id="exportReportBtn">Export CSV</button>
                 <button class="btn btn-ghost" id="deleteReportBtn">Delete</button>
                 <button class="btn btn-ghost" id="saveRunReportBtn">Save & Run</button>
-                <button class="btn btn-ghost" id="saveReportBtn">Save</button>
+                <!-- Split Save Button -->
+                <div class="btn-group">
+                  <button class="btn btn-ghost" id="saveReportBtn">Save</button>
+                  <button class="btn btn-ghost" id="saveDropdownBtn" title="Save options">▾</button>
+                </div>
                 <button class="btn btn-ghost" id="closeBuilderBtn">Close</button>
                 <button class="btn btn-primary" id="runFullReportBtn">Run</button>
               </div>
             </div>
 
+            <!-- ── Meta Strip ── -->
             <div class="builder-meta-strip">
-              <label>
+              <label class="meta-type">
                 <span>Type</span>
                 <select id="reportType">
                   <option value="tabular">Tabular</option>
@@ -145,20 +179,21 @@
                   <option value="matrix">Matrix</option>
                 </select>
               </label>
-              <label>
+              <label class="meta-object">
                 <span>Object</span>
                 <select id="reportObject"></select>
               </label>
-              <label>
+              <label class="meta-limit">
                 <span>Run Limit</span>
                 <input id="reportLimit" type="number" min="1" max="2000" value="200">
               </label>
               <label class="auto-preview-toggle">
-                <input type="checkbox" id="autoPreviewToggle">
                 <span>Update Preview Automatically</span>
+                <input type="checkbox" id="autoPreviewToggle">
               </label>
             </div>
 
+            <!-- ── Builder Workspace ── -->
             <div class="report-builder-workspace" id="builderWorkspace">
               <aside class="builder-left-panel" id="builderLeftPanel">
                 <div class="builder-left-tabs">
@@ -167,26 +202,39 @@
                   <button class="builder-panel-collapse" id="toggleBuilderPanelBtn" title="Collapse builder panel">&lt;</button>
                 </div>
                 <div class="builder-left-scroll">
+                  <!-- Outline Tab -->
                   <section class="builder-tab-panel" id="outlinePanel">
                     <div class="builder-section">
-                      <div class="builder-section-title">Group Rows</div>
+                      <div class="builder-section-title">
+                        <svg class="sf-section-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>
+                        Group Rows
+                      </div>
                       <select id="summaryGroupOne"></select>
                       <select id="summaryGroupTwo"></select>
                       <div id="groupRowChips" class="active-filters"></div>
                     </div>
                     <div class="builder-section" id="matrixColumnConfig">
-                      <div class="builder-section-title">Group Columns</div>
+                      <div class="builder-section-title">
+                        <svg class="sf-section-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="9" y1="3" x2="9" y2="21"/></svg>
+                        Group Columns
+                      </div>
                       <select id="matrixColumnGroup"></select>
                       <div id="groupColumnChips" class="active-filters"></div>
                     </div>
                     <div class="builder-section">
-                      <div class="builder-section-title">Columns <span id="selectedFieldCount" class="muted">0 selected</span></div>
+                      <div class="builder-section-title">
+                        <svg class="sf-section-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="1"/><path d="M12 2a10 10 0 0 1 0 20 10 10 0 0 1 0-20"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="M12 2v2"/><path d="M12 20v2"/></svg>
+                        Columns <span id="selectedFieldCount" class="muted">0 selected</span>
+                      </div>
                       <input id="fieldSearch" class="field-search" placeholder="Search all fields...">
                       <div id="fieldList" class="field-list"></div>
                       <div id="selectedFields" class="selected-fields"></div>
                     </div>
                     <div class="builder-section" id="summaryConfig">
-                      <div class="builder-section-title">Aggregations</div>
+                      <div class="builder-section-title">
+                        <svg class="sf-section-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 20V10"/><path d="M12 20V4"/><path d="M6 20v-6"/></svg>
+                        Aggregations
+                      </div>
                       <select id="summaryAggregateFn">
                         <option value="count">Count</option>
                         <option value="sum">Sum</option>
@@ -198,14 +246,21 @@
                       <select id="summaryAggregateField"></select>
                     </div>
                     <div class="builder-section future-section">
-                      <div class="builder-section-title">Formulas</div>
+                      <div class="builder-section-title">
+                        <svg class="sf-section-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/><line x1="4" y1="22" x2="4" y2="15"/></svg>
+                        Formulas
+                      </div>
                       <button class="placeholder-action" disabled>Row-Level and Summary Formulas</button>
                     </div>
                   </section>
 
+                  <!-- Filters Tab -->
                   <section class="builder-tab-panel" id="filtersPanel" style="display:none">
                     <div class="builder-section">
-                      <div class="builder-section-title">Report Filters</div>
+                      <div class="builder-section-title">
+                        <svg class="sf-section-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/></svg>
+                        Report Filters
+                      </div>
                       <select id="filterField"></select>
                       <select id="filterOperator">
                         <option value="contains">Contains</option>
@@ -225,7 +280,10 @@
                       <div id="activeFilters" class="active-filters"></div>
                     </div>
                     <div class="builder-section future-section">
-                      <div class="builder-section-title">Advanced Logic</div>
+                      <div class="builder-section-title">
+                        <svg class="sf-section-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+                        Advanced Logic
+                      </div>
                       <button class="placeholder-action" disabled>AND / OR and Nested Filters</button>
                       <button class="placeholder-action" disabled>Relative Date Filters</button>
                     </div>
@@ -234,9 +292,11 @@
               </aside>
               <div class="builder-left-resizer" id="builderLeftResizer"></div>
 
+              <!-- ── Report Canvas ── -->
               <section class="report-canvas">
                 <div class="preview-message" id="previewMessage">
-                  Preview Mode: Showing first 20 records only. Run Report to see complete results.
+                  <span class="preview-icon">✓</span>
+                  <span>Preview Mode: Showing first 20 records only. Run Report to see complete results.</span>
                 </div>
                 <div class="canvas-actions">
                   <button class="btn btn-ghost" id="runReportBtn">Run Preview</button>
@@ -249,6 +309,25 @@
                   </table>
                 </div>
                 <div class="report-result-meta" id="reportResultMeta"></div>
+                <!-- Salesforce-style footer toggles -->
+                <div class="report-footer-bar" id="reportFooterBar">
+                  <label class="report-footer-toggle">
+                    <span class="footer-toggle-label">Row Counts</span>
+                    <input type="checkbox" class="footer-toggle-switch" id="toggleRowCounts" checked>
+                  </label>
+                  <label class="report-footer-toggle">
+                    <span class="footer-toggle-label">Detail Rows</span>
+                    <input type="checkbox" class="footer-toggle-switch" id="toggleDetailRows" checked>
+                  </label>
+                  <label class="report-footer-toggle">
+                    <span class="footer-toggle-label">Subtotals</span>
+                    <input type="checkbox" class="footer-toggle-switch" id="toggleSubtotals" checked>
+                  </label>
+                  <label class="report-footer-toggle">
+                    <span class="footer-toggle-label">Grand Total</span>
+                    <input type="checkbox" class="footer-toggle-switch" id="toggleGrandTotal" checked>
+                  </label>
+                </div>
               </section>
             </div>
           </div>
@@ -258,6 +337,6 @@
   </div>
 
   <div id="toastStack" class="toast-stack"></div>
-  <script src="reports.js?v=7"></script>
+  <script src="reports.js?v=8"></script>
 </body>
 </html>

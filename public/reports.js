@@ -13,7 +13,12 @@ const state = {
   isResizingBuilderPanel: false,
   builderTab: 'outline',
   wasSidebarCollapsedBeforeBuilder: false,
-  expandedGroups: new Set()
+  expandedGroups: new Set(),
+  // Footer toggle state
+  showRowCounts: true,
+  showDetailRows: true,
+  showSubtotals: true,
+  showGrandTotal: true
 };
 
 const $ = (id) => document.getElementById(id);
@@ -91,7 +96,42 @@ function bindEvents() {
   $('favoriteReportBtn').addEventListener('click', toggleFavorite);
   $('exportReportBtn').addEventListener('click', exportReport);
   $('deleteReportBtn').addEventListener('click', deleteReport);
+
+  // Footer toggle events
+  $('toggleRowCounts')?.addEventListener('change', (e) => {
+    state.showRowCounts = e.target.checked;
+    reRenderIfPossible();
+  });
+  $('toggleDetailRows')?.addEventListener('change', (e) => {
+    state.showDetailRows = e.target.checked;
+    reRenderIfPossible();
+  });
+  $('toggleSubtotals')?.addEventListener('change', (e) => {
+    state.showSubtotals = e.target.checked;
+    reRenderIfPossible();
+  });
+  $('toggleGrandTotal')?.addEventListener('change', (e) => {
+    state.showGrandTotal = e.target.checked;
+    reRenderIfPossible();
+  });
+
+  // Left nav items
+  document.querySelectorAll('.home-nav-item').forEach((item) => {
+    item.addEventListener('click', function () {
+      document.querySelectorAll('.home-nav-item').forEach((el) => el.classList.remove('active'));
+      this.classList.add('active');
+      const label = this.textContent.trim();
+      if ($('reportsTitle')) $('reportsTitle').textContent = label;
+    });
+  });
+
   restoreBuilderUiState();
+}
+
+function reRenderIfPossible() {
+  if (window.currentReportResult) {
+    renderResultTable(window.currentReportResult, window.currentReportResultOptions || { previewMode: true });
+  }
 }
 
 async function api(path, options = {}) {
@@ -131,7 +171,9 @@ async function loadReports() {
   const q = ($('reportListSearch')?.value || $('reportSearch')?.value || '').trim();
   const data = await api(`/api/reports${q ? `?search=${encodeURIComponent(q)}` : ''}`);
   state.reports = data.reports || [];
-  $('reportCount').textContent = `${state.reports.length} ${state.reports.length === 1 ? 'item' : 'items'}`;
+  const count = state.reports.length;
+  if ($('reportCount')) $('reportCount').textContent = `${count} ${count === 1 ? 'item' : 'items'}`;
+  if ($('reportsSubtitle')) $('reportsSubtitle').textContent = `${count} ${count === 1 ? 'item' : 'items'}`;
   renderReports();
 }
 
@@ -144,19 +186,21 @@ function syncReportSearchAndLoad(event) {
 
 function renderReports() {
   if (!state.reports.length) {
-    $('reportsList').innerHTML = '<tr><td colspan="6" class="reports-empty-row">No reports found.</td></tr>';
+    $('reportsList').innerHTML = '<tr><td colspan="6" class="reports-empty-row">No reports found. Click <strong>New Report</strong> to create one.</td></tr>';
     return;
   }
   $('reportsList').innerHTML = state.reports.map((report) => `
     <tr class="${state.activeReport?.id === report.id ? 'active' : ''}">
       <td>
-        <button class="report-name-link" onclick="openReport('${esc(report.id)}')">${report.is_favorite ? '* ' : ''}${esc(report.name)}</button>
+        <button class="report-name-link" onclick="openReport('${esc(report.id)}')">${report.is_favorite ? '<svg width="12" height="12" viewBox="0 0 24 24" fill="var(--warning)" stroke="var(--warning)" stroke-width="2" style="vertical-align:-1px;margin-right:4px"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>' : ''}${esc(report.name)}</button>
       </td>
-      <td>${esc(report.description || '-')}</td>
+      <td style="color:var(--text-2)">${esc(report.description || '—')}</td>
       <td>${esc(report.folder_name || 'Private Reports')}</td>
-      <td>${esc(titleCase(report.report_type))}</td>
-      <td>${new Date(report.updated_at).toLocaleString()}</td>
-      <td><button class="row-action-btn" onclick="openReport('${esc(report.id)}')" title="Open report">v</button></td>
+      <td>
+        <span style="display:inline-flex;align-items:center;gap:4px;background:var(--surface-2);border:1px solid var(--border);border-radius:4px;padding:2px 8px;font-size:11px;font-weight:700;color:var(--text-2)">${esc(titleCase(report.report_type))}</span>
+      </td>
+      <td style="color:var(--text-2)">${new Date(report.updated_at).toLocaleString()}</td>
+      <td><button class="row-action-btn" onclick="openReport('${esc(report.id)}')" title="Open report">⌄</button></td>
     </tr>
   `).join('');
 }
@@ -215,9 +259,10 @@ async function newReport() {
 function showBuilderMode() {
   state.wasSidebarCollapsedBeforeBuilder = document.body.classList.contains('sidebar-collapsed');
   $('reportsListView').style.display = 'none';
+  $('reportsHeader').style.display = 'none';
   $('reportBuilderView').style.display = '';
-  $('reportsSubtitle').textContent = 'Report Builder';
-  document.body.classList.add('reports-builder-mode', 'sidebar-collapsed');
+  // CSS handles hiding sidebar via body.reports-builder-mode .sidebar { display: none }
+  document.body.classList.add('reports-builder-mode');
 }
 
 function closeBuilder() {
@@ -225,8 +270,9 @@ function closeBuilder() {
   window.history.replaceState(null, '', window.location.pathname);
   $('reportBuilderView').style.display = 'none';
   $('reportsListView').style.display = '';
-  $('reportsSubtitle').textContent = 'Recent reports';
+  $('reportsHeader').style.display = '';
   document.body.classList.remove('reports-builder-mode');
+  // Restore sidebar state from before entering builder
   document.body.classList.toggle('sidebar-collapsed', state.wasSidebarCollapsedBeforeBuilder);
   renderReports();
 }
@@ -276,7 +322,7 @@ function renderSelectedFields() {
   $('selectedFieldCount').textContent = `${state.selectedFields.length} selected`;
   $('selectedFields').innerHTML = state.selectedFields.length
     ? state.selectedFields.map((field) => `
-      <span class="field-pill">${esc(labelForField(field))}<button onclick="removeField('${esc(field)}')">x</button></span>
+      <span class="field-pill">${esc(labelForField(field))}<button onclick="removeField('${esc(field)}')">&times;</button></span>
     `).join('')
     : '<span class="muted">Select fields to build the report.</span>';
   renderFieldList();
@@ -489,8 +535,11 @@ function renderResultTable(result, options = { previewMode: true }) {
   window.currentReportResult = result;
   window.currentReportResultOptions = options;
   const columns = result.columns || [];
-  $('reportResultsHead').innerHTML = `<tr>${columns.map((column) => `<th>${esc(column.label)}</th>`).join('')}</tr>`;
+
+  // Column headers with sort indicators
+  $('reportResultsHead').innerHTML = `<tr>${columns.map((column) => `<th>${esc(column.label)} <span class="col-sort-indicator">↕</span></th>`).join('')}</tr>`;
   $('reportResultsFoot').innerHTML = '';
+
   if (result.reportType === 'matrix') {
     renderMatrixTable(result, columns);
   } else if (result.reportType === 'summary') {
@@ -498,18 +547,31 @@ function renderResultTable(result, options = { previewMode: true }) {
   } else {
     $('reportResultsBody').innerHTML = (result.rows || []).map((row) => `
       <tr>${columns.map((column) => `<td>${esc(readPath(row, column.field) ?? '')}</td>`).join('')}</tr>
-    `).join('') || `<tr><td colspan="${Math.max(columns.length, 1)}" class="muted">No rows found</td></tr>`;
+    `).join('') || `<tr><td colspan="${Math.max(columns.length, 1)}" class="muted" style="text-align:center;padding:32px">No rows found</td></tr>`;
   }
+
   const isPreview = options.previewMode !== false;
-  $('previewMessage').textContent = isPreview
-    ? 'Preview Mode: Showing first 20 records only. Run Report to see complete results.'
-    : 'Run Mode: Showing records returned by the report run.';
-  $('previewMessage').classList.toggle('full-run', !isPreview);
+  const previewMsg = $('previewMessage');
+  if (previewMsg) {
+    const iconSpan = previewMsg.querySelector('.preview-icon');
+    const textSpan = previewMsg.querySelector('span:last-child') || previewMsg;
+    if (isPreview) {
+      if (iconSpan) iconSpan.textContent = '✓';
+      if (textSpan !== previewMsg) textSpan.textContent = 'Previewing a limited number of records. Run the report to see everything.';
+      else previewMsg.innerHTML = '<span class="preview-icon">✓</span><span>Previewing a limited number of records. Run the report to see everything.</span>';
+    } else {
+      if (iconSpan) iconSpan.textContent = 'ℹ';
+      if (textSpan !== previewMsg) textSpan.textContent = 'Run Mode: Showing records returned by the report run.';
+      else previewMsg.innerHTML = '<span class="preview-icon">ℹ</span><span>Run Mode: Showing records returned by the report run.</span>';
+    }
+    previewMsg.classList.toggle('full-run', !isPreview);
+  }
+
   $('reportResultMeta').textContent = result.reportType === 'matrix'
-    ? `${result.totalSize || 0} row groups x ${result.columnGroups?.length || 0} column groups from ${result.sourceRowCount || 0} visible records${result.cached ? ' - cached' : ''}`
+    ? `${result.totalSize || 0} row groups × ${result.columnGroups?.length || 0} column groups from ${result.sourceRowCount || 0} visible records${result.cached ? ' — cached' : ''}`
     : result.reportType === 'summary'
-    ? `${result.totalSize || 0} groups from ${result.sourceRowCount || 0} visible records${result.cached ? ' - cached' : ''}`
-    : `${result.totalSize || 0} rows shown${result.cached ? ' - cached' : ''}`;
+    ? `${result.totalSize || 0} groups from ${result.sourceRowCount || 0} visible records${result.cached ? ' — cached' : ''}`
+    : `${result.totalSize || 0} rows shown${result.cached ? ' — cached' : ''}`;
 }
 
 function renderMatrixTable(result, columns) {
@@ -519,8 +581,8 @@ function renderMatrixTable(result, columns) {
 
   $('reportResultsHead').innerHTML = `
     <tr>
-      ${rowGroupColumns.map((column) => `<th>${esc(column.label)}</th>`).join('')}
-      ${matrixColumns.map((column) => `<th class="matrix-column-header">${esc(column.label)}</th>`).join('')}
+      ${rowGroupColumns.map((column) => `<th>${esc(column.label)} <span class="col-sort-indicator">↕</span></th>`).join('')}
+      ${matrixColumns.map((column) => `<th class="matrix-column-header">${esc(column.label)} <span class="col-sort-indicator">↕</span></th>`).join('')}
       ${totalColumn ? `<th>${esc(totalColumn.label)}</th>` : ''}
     </tr>
   `;
@@ -531,15 +593,20 @@ function renderMatrixTable(result, columns) {
       ${matrixColumns.map((column) => `<td class="matrix-value-cell">${esc(readPath(row, column.field) ?? 0)}</td>`).join('')}
       ${totalColumn ? `<td class="matrix-total-cell">${esc(readPath(row, totalColumn.field) ?? 0)}</td>` : ''}
     </tr>
-  `).join('') || `<tr><td colspan="${Math.max(columns.length, 1)}" class="muted">No rows found</td></tr>`;
+  `).join('') || `<tr><td colspan="${Math.max(columns.length, 1)}" class="muted" style="text-align:center;padding:32px">No rows found</td></tr>`;
 
-  $('reportResultsFoot').innerHTML = `
-    <tr>
-      <td colspan="${Math.max(rowGroupColumns.length, 1)}">Grand Total</td>
-      ${matrixColumns.map((column) => `<td class="matrix-total-cell">${esc(result.columnTotals?.[column.field] ?? 0)}</td>`).join('')}
-      ${totalColumn ? `<td class="matrix-grand-total">${esc(result.columnTotals?.[totalColumn.field] ?? 0)}</td>` : ''}
-    </tr>
-  `;
+  // Grand Total row — respect footer toggle
+  if (state.showGrandTotal) {
+    $('reportResultsFoot').innerHTML = `
+      <tr>
+        <td colspan="${Math.max(rowGroupColumns.length, 1)}">Grand Total</td>
+        ${matrixColumns.map((column) => `<td class="matrix-total-cell">${esc(result.columnTotals?.[column.field] ?? 0)}</td>`).join('')}
+        ${totalColumn ? `<td class="matrix-grand-total">${esc(result.columnTotals?.[totalColumn.field] ?? 0)}</td>` : ''}
+      </tr>
+    `;
+  } else {
+    $('reportResultsFoot').innerHTML = '';
+  }
 }
 
 function renderSummaryTable(result, columns) {
@@ -553,16 +620,21 @@ function renderSummaryTable(result, columns) {
     const expanded = state.expandedGroups.has(key);
     const groupLabel = (group.keys || []).join(' / ') || '(Blank)';
     const summary = (result.rows || [])[groupIndex] || {};
+
+    // Row count display
+    const rowCountDisplay = state.showRowCounts ? ` (${(group.rows || []).length})` : '';
+
     bodyRows.push(`
       <tr class="summary-group-row">
         <td colspan="${Math.max(groupCount, 1)}">
-          <button class="group-toggle" onclick="toggleSummaryGroup('${key}')">${expanded ? '-' : '+'}</button>
-          ${esc(groupLabel)}
+          <button class="group-toggle" onclick="toggleSummaryGroup('${key}')">${expanded ? '−' : '+'}</button>
+          ${esc(groupLabel)}${rowCountDisplay}
         </td>
         ${aggregateColumns.map((column) => `<td>${esc(summary[column.field] ?? '')}</td>`).join('')}
       </tr>
     `);
-    if (expanded) {
+
+    if (expanded && state.showDetailRows) {
       (group.rows || []).forEach((detailRow) => {
         bodyRows.push(`
           <tr class="summary-detail-row">
@@ -571,22 +643,30 @@ function renderSummaryTable(result, columns) {
           </tr>
         `);
       });
-      bodyRows.push(`
-        <tr class="summary-total-row">
-          <td colspan="${Math.max(groupCount, 1)}">Subtotal</td>
-          ${aggregateColumns.map((column) => `<td>${esc(summary[column.field] ?? '')}</td>`).join('')}
-        </tr>
-      `);
+
+      if (state.showSubtotals) {
+        bodyRows.push(`
+          <tr class="summary-total-row">
+            <td colspan="${Math.max(groupCount, 1)}">Subtotal</td>
+            ${aggregateColumns.map((column) => `<td>${esc(summary[column.field] ?? '')}</td>`).join('')}
+          </tr>
+        `);
+      }
     }
   });
 
-  $('reportResultsBody').innerHTML = bodyRows.join('') || `<tr><td colspan="${Math.max(columns.length, 1)}" class="muted">No rows found</td></tr>`;
-  $('reportResultsFoot').innerHTML = `
-    <tr>
-      <td colspan="${Math.max(groupCount, 1)}">Grand Total</td>
-      ${aggregateColumns.map((column) => `<td>${esc(result.grandTotals?.[column.field] ?? '')}</td>`).join('')}
-    </tr>
-  `;
+  $('reportResultsBody').innerHTML = bodyRows.join('') || `<tr><td colspan="${Math.max(columns.length, 1)}" class="muted" style="text-align:center;padding:32px">No rows found</td></tr>`;
+
+  if (state.showGrandTotal) {
+    $('reportResultsFoot').innerHTML = `
+      <tr>
+        <td colspan="${Math.max(groupCount, 1)}">Grand Total</td>
+        ${aggregateColumns.map((column) => `<td>${esc(result.grandTotals?.[column.field] ?? '')}</td>`).join('')}
+      </tr>
+    `;
+  } else {
+    $('reportResultsFoot').innerHTML = '';
+  }
 }
 
 function toggleSummaryGroup(key) {
@@ -661,7 +741,7 @@ function renderFilters() {
     ? state.filters.map((filter, index) => `
       <span class="field-pill">
         ${esc(labelForField(filter.field))} ${esc(operatorLabel(filter.operator))}${filter.value ? ` ${esc(filter.value)}` : ''}
-        <button onclick="removeFilter(${index})">x</button>
+        <button onclick="removeFilter(${index})">&times;</button>
       </span>
     `).join('')
     : '<span class="muted">No filters. All records allowed by security are included in preview.</span>';
@@ -675,7 +755,7 @@ function renderGroupChips() {
     ? fields.map((field, index) => `
       <span class="field-pill">
         ${esc(labelForField(field))}
-        <button onclick="clearGroupField(${index})">x</button>
+        <button onclick="clearGroupField(${index})">&times;</button>
       </span>
     `).join('')
     : '<span class="muted">No row groups. Add a row group for summary or matrix reports.</span>';
@@ -694,7 +774,7 @@ function renderColumnGroupChips() {
   if (!target) return;
   const field = $('matrixColumnGroup')?.value;
   target.innerHTML = field
-    ? `<span class="field-pill">${esc(labelForField(field))}<button onclick="clearColumnGroupField()">x</button></span>`
+    ? `<span class="field-pill">${esc(labelForField(field))}<button onclick="clearColumnGroupField()">&times;</button></span>`
     : '<span class="muted">No column group. Matrix reports require one column group.</span>';
 }
 
@@ -714,13 +794,13 @@ function syncFilterValueState() {
 function operatorLabel(operator) {
   return ({
     eq: '=',
-    neq: '!=',
+    neq: '≠',
     contains: 'contains',
     starts_with: 'starts with',
     gt: '>',
-    gte: '>=',
+    gte: '≥',
     lt: '<',
-    lte: '<=',
+    lte: '≤',
     is_null: 'is blank',
     is_not_null: 'is not blank'
   })[operator] || operator;
@@ -852,6 +932,13 @@ function setBuilderTab(tab) {
   $('filtersTabBtn').classList.toggle('active', state.builderTab === 'filters');
   $('outlinePanel').style.display = state.builderTab === 'outline' ? '' : 'none';
   $('filtersPanel').style.display = state.builderTab === 'filters' ? '' : 'none';
+  // If panel is collapsed, clicking a tab should expand it
+  const workspace = $('builderWorkspace');
+  if (workspace?.classList.contains('builder-panel-collapsed')) {
+    workspace.classList.remove('builder-panel-collapsed');
+    sessionStorage.setItem('reports_builder_panel_collapsed', '0');
+    updateBuilderPanelToggleText();
+  }
 }
 
 function clearResults() {
@@ -859,8 +946,11 @@ function clearResults() {
   $('reportResultsBody').innerHTML = '';
   $('reportResultsFoot').innerHTML = '';
   $('reportResultMeta').textContent = '';
-  $('previewMessage').textContent = 'Preview Mode: Showing first 20 records only. Run Report to see complete results.';
-  $('previewMessage').classList.remove('full-run');
+  const previewMsg = $('previewMessage');
+  if (previewMsg) {
+    previewMsg.innerHTML = '<span class="preview-icon">✓</span><span>Preview Mode: Showing first 20 records only. Run Report to see complete results.</span>';
+    previewMsg.classList.remove('full-run');
+  }
 }
 
 function labelForField(fieldName) {
@@ -889,12 +979,12 @@ function toast(message, type = 'info') {
   item.className = `toast toast-${type === 'err' ? 'err' : type === 'ok' ? 'ok' : 'info'} in`;
   item.innerHTML = `
     <div class="toast-inner">
-      <span class="toast-icon">${type === 'ok' ? 'OK' : type === 'err' ? '!' : 'i'}</span>
+      <span class="toast-icon">${type === 'ok' ? '✓' : type === 'err' ? '✕' : 'ℹ'}</span>
       <div class="toast-content">
         <div class="toast-label">${type === 'ok' ? 'Success' : type === 'err' ? 'Error' : 'Info'}</div>
         <div class="toast-msg">${esc(message)}</div>
       </div>
-      <button class="toast-close" onclick="this.closest('.toast').remove()">x</button>
+      <button class="toast-close" onclick="this.closest('.toast').remove()">×</button>
     </div>`;
   stack.appendChild(item);
   setTimeout(() => item.remove(), 5000);
