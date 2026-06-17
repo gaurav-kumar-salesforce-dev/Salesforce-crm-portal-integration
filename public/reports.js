@@ -1,10 +1,19 @@
 const state = {
   reports: [],
   folders: [],
+  selectedFolderId: '',
+  reportView: 'recent',
+  reportActionMenuId: '',
   objects: [],
+  reportTypes: [],
   fields: [],
   selectedFields: [],
   filters: [],
+  crossFilters: [],
+  bucketFields: [],
+  rowFormulas: [],
+  summaryFormulas: [],
+  conditionalFormatting: [],
   activeReport: null,
   isDirty: false,
   autoPreviewTimer: null,
@@ -18,7 +27,17 @@ const state = {
     enabled: false,
     type: 'bar',
     labelField: '',
-    valueField: ''
+    valueField: '',
+    title: '',
+    subtitle: '',
+    legendPosition: 'right',
+    xAxisLabel: '',
+    yAxisLabel: '',
+    sortOrder: 'none',
+    colors: [],
+    showDataLabels: true,
+    nullHandling: 'zero',
+    stacked: false
   },
   // Footer toggle state
   showRowCounts: true,
@@ -33,7 +52,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   initTheme();
   bindEvents();
   try {
-    await Promise.all([loadFolders(), loadObjects()]);
+    await Promise.all([loadFolders(), loadObjects(), loadReportTypes()]);
     await loadReports();
     const reportId = reportIdFromHash();
     if (reportId) await openReport(reportId, { pushState: false });
@@ -45,33 +64,78 @@ document.addEventListener('DOMContentLoaded', async () => {
 function bindEvents() {
   $('appSidebarToggle')?.addEventListener('click', toggleAppSidebar);
   $('newReportBtn').addEventListener('click', newReport);
+  $('newFolderBtn')?.addEventListener('click', () => openFolderModal());
+  $('newReportTypeBtn')?.addEventListener('click', openReportTypeModal);
   $('refreshReportsBtn').addEventListener('click', loadReports);
   $('reportSearch').addEventListener('input', debounce(syncReportSearchAndLoad, 250));
   $('reportListSearch')?.addEventListener('input', debounce(syncReportSearchAndLoad, 250));
   $('toggleReportSidebarBtn')?.addEventListener('click', toggleReportSidebar);
   $('reportSidebarResizer')?.addEventListener('mousedown', startSidebarResize);
-  $('toggleBuilderPanelBtn').addEventListener('click', toggleBuilderPanel);
+  $('toggleBuilderPanelBtn').addEventListener('click', (event) => {
+    event.stopPropagation();
+    toggleBuilderPanel();
+  });
+  $('expandChartBtn')?.addEventListener('click', openChartZoomModal);
+  $('closeChartZoomBtn')?.addEventListener('click', closeChartZoomModal);
+  $('chartZoomModal')?.addEventListener('click', (event) => {
+    if (event.target?.id === 'chartZoomModal') closeChartZoomModal();
+  });
   $('builderLeftResizer').addEventListener('mousedown', startBuilderPanelResize);
+  $('builderLeftPanel')?.addEventListener('click', (event) => {
+    const workspace = $('builderWorkspace');
+    if (!workspace?.classList.contains('builder-panel-collapsed')) return;
+    if (event.target.closest('#toggleBuilderPanelBtn') || event.currentTarget === event.target) {
+      workspace.classList.remove('builder-panel-collapsed');
+      sessionStorage.setItem('reports_builder_panel_collapsed', '0');
+      updateBuilderPanelToggleText();
+    }
+  });
   document.addEventListener('mousemove', resizeReportSidebar);
   document.addEventListener('mousemove', resizeBuilderPanel);
   document.addEventListener('mouseup', stopSidebarResize);
   document.addEventListener('mouseup', stopBuilderPanelResize);
+  document.addEventListener('click', (event) => {
+    if (!event.target.closest('.report-action-menu') && !event.target.closest('.row-action-btn')) {
+      closeReportActionMenu();
+    }
+  });
   $('autoPreviewToggle').addEventListener('change', () => {
     sessionStorage.setItem('reports_auto_preview', $('autoPreviewToggle').checked ? '1' : '0');
     scheduleAutoPreview();
   });
+  $('reportFolder')?.addEventListener('change', markDirty);
   $('reportType').addEventListener('change', () => {
     markDirty();
     syncReportTypeUi();
     clearResults();
     scheduleAutoPreview();
   });
+  $('reportTypeSource')?.addEventListener('change', async () => {
+    const selected = selectedReportType();
+    if (selected) {
+      $('reportObject').value = selected.primary_object;
+      updateObjectChip();
+      state.selectedFields = [];
+      await loadFields($('reportObject').value);
+      renderSelectedFields();
+    }
+    markDirty();
+    syncReportTypeUi();
+    scheduleAutoPreview();
+  });
   $('reportObject').addEventListener('change', async () => {
     markDirty();
     updateObjectChip();
     state.selectedFields = [];
+    state.bucketFields = [];
+    state.rowFormulas = [];
+    state.summaryFormulas = [];
+    state.conditionalFormatting = [];
+    state.crossFilters = [];
     await loadFields($('reportObject').value);
     renderSelectedFields();
+    renderAdvancedMetadata();
+    renderCrossFilters();
     scheduleAutoPreview();
   });
   ['reportName', 'reportDescription', 'reportLimit', 'summaryGroupOne', 'summaryGroupTwo', 'matrixColumnGroup', 'summaryAggregateFn', 'summaryAggregateField']
@@ -93,6 +157,7 @@ function bindEvents() {
   $('summaryAggregateFn').addEventListener('change', syncAggregateFieldState);
   $('filterOperator').addEventListener('change', syncFilterValueState);
   $('addFilterBtn').addEventListener('click', addFilter);
+  $('addCrossFilterBtn')?.addEventListener('click', addCrossFilter);
   $('runReportBtn').addEventListener('click', runPreview);
   $('runFullReportBtn').addEventListener('click', runFullReport);
   $('addChartBtn')?.addEventListener('click', enableChart);
@@ -110,7 +175,16 @@ function bindEvents() {
   $('cloneReportBtn').addEventListener('click', cloneReport);
   $('favoriteReportBtn').addEventListener('click', toggleFavorite);
   $('exportReportBtn').addEventListener('click', exportReport);
+  $('exportExcelBtn')?.addEventListener('click', () => exportReport('xlsx'));
+  $('asyncExportBtn')?.addEventListener('click', asyncExportReport);
+  $('scheduleReportBtn')?.addEventListener('click', scheduleReport);
   $('deleteReportBtn').addEventListener('click', deleteReport);
+  $('addBucketFieldBtn')?.addEventListener('click', addBucketField);
+  $('addRowFormulaBtn')?.addEventListener('click', addRowFormula);
+  $('addSummaryFormulaBtn')?.addEventListener('click', addSummaryFormula);
+  $('addConditionalFormatBtn')?.addEventListener('click', addConditionalFormat);
+  $('advancedModalClose')?.addEventListener('click', closeAdvancedModal);
+  $('advancedModalCancel')?.addEventListener('click', closeAdvancedModal);
 
   // Footer toggle events
   $('toggleRowCounts')?.addEventListener('change', (e) => {
@@ -131,12 +205,15 @@ function bindEvents() {
   });
 
   // Left nav items
-  document.querySelectorAll('.home-nav-item').forEach((item) => {
+  document.querySelectorAll('.home-nav-item[data-report-view]').forEach((item) => {
     item.addEventListener('click', function () {
       document.querySelectorAll('.home-nav-item').forEach((el) => el.classList.remove('active'));
       this.classList.add('active');
+      state.reportView = this.dataset.reportView || 'recent';
+      state.selectedFolderId = '';
       const label = this.textContent.trim();
       if ($('reportsTitle')) $('reportsTitle').textContent = label;
+      loadReports();
     });
   });
 
@@ -173,6 +250,76 @@ async function api(path, options = {}) {
 async function loadFolders() {
   const data = await api('/api/reports/folders');
   state.folders = data.folders || [];
+  renderFolderOptions();
+  renderFolderNav();
+}
+
+function renderFolderOptions() {
+  const select = $('reportFolder');
+  if (!select) return;
+  const current = select.value;
+  select.innerHTML = [
+    '<option value="">Private Reports</option>',
+    ...state.folders.map((folder) => `<option value="${esc(folder.id)}">${esc(folder.name)}</option>`)
+  ].join('');
+  if ([...select.options].some((option) => option.value === current)) select.value = current;
+}
+
+function renderFolderNav() {
+  const target = $('folderNavList');
+  if (!target) return;
+  target.innerHTML = state.folders.length
+    ? state.folders.map((folder) => `
+      <button class="home-nav-item folder-nav-item ${state.selectedFolderId === folder.id ? 'active' : ''}" type="button" onclick="selectReportFolder('${esc(folder.id)}')">
+        ${esc(folder.name)}
+      </button>
+    `).join('')
+    : '<div class="folder-empty">No folders yet</div>';
+}
+
+function selectReportFolder(folderId) {
+  state.selectedFolderId = folderId || '';
+  document.querySelectorAll('.home-nav-item').forEach((el) => el.classList.remove('active'));
+  renderFolderNav();
+  const folder = state.folders.find((item) => item.id === state.selectedFolderId);
+  if ($('reportsTitle')) $('reportsTitle').textContent = folder ? folder.name : 'Recent';
+  loadReports();
+}
+
+function openFolderModal(folder = null) {
+  const existingFolder = folder && folder.id ? folder : null;
+  openAdvancedModal({
+    title: existingFolder ? 'Edit Folder' : 'New Report Folder',
+    saveLabel: existingFolder ? 'Save Folder' : 'Create Folder',
+    body: `
+      <div class="advanced-modal-grid">
+        <label>Folder Name<input id="folderModalName" value="${escAttr(existingFolder?.name || '')}" placeholder="e.g. Public Sales Reports"></label>
+        <label>Visibility<select id="folderModalVisibility">
+          <option value="private" ${existingFolder?.visibility !== 'public' ? 'selected' : ''}>Private</option>
+          <option value="public" ${existingFolder?.visibility === 'public' ? 'selected' : ''}>Public</option>
+        </select></label>
+        <label style="grid-column:1 / -1">Description<input id="folderModalDescription" value="${escAttr(existingFolder?.description || '')}" placeholder="Optional description"></label>
+      </div>
+      <div class="advanced-preview-box">Folder metadata is stored in Supabase only. Salesforce records are not duplicated.</div>
+      <div id="advancedValidation" class="advanced-validation"></div>
+    `,
+    onSave: async () => {
+      const name = $('folderModalName').value.trim();
+      if (!name) return setAdvancedValidation('Folder name is required.');
+      const payload = {
+        name,
+        visibility: $('folderModalVisibility').value,
+        description: $('folderModalDescription').value.trim()
+      };
+      const data = existingFolder
+        ? await api(`/api/reports/folders/${existingFolder.id}`, { method: 'PATCH', body: JSON.stringify(payload) })
+        : await api('/api/reports/folders', { method: 'POST', body: JSON.stringify(payload) });
+      closeAdvancedModal();
+      await loadFolders();
+      if (!existingFolder && $('reportFolder')) $('reportFolder').value = data.folder.id;
+      toast(existingFolder ? 'Folder updated' : 'Folder created', 'ok');
+    }
+  });
 }
 
 async function loadObjects() {
@@ -183,14 +330,49 @@ async function loadObjects() {
     .join('');
 }
 
+async function loadReportTypes() {
+  const data = await api('/api/reports/metadata/types');
+  state.reportTypes = data.reportTypes || [];
+  const options = [
+    '<option value="">Single Salesforce Object</option>',
+    ...state.reportTypes.map((type) => `<option value="${esc(type.id)}">${esc(type.name)}</option>`)
+  ];
+  if ($('reportTypeSource')) $('reportTypeSource').innerHTML = options.join('');
+}
+
+function selectedReportType() {
+  const id = $('reportTypeSource')?.value || '';
+  return state.reportTypes.find((type) => type.id === id) || null;
+}
+
 async function loadReports() {
   const q = ($('reportListSearch')?.value || $('reportSearch')?.value || '').trim();
-  const data = await api(`/api/reports${q ? `?search=${encodeURIComponent(q)}` : ''}`);
-  state.reports = data.reports || [];
-  const count = state.reports.length;
-  if ($('reportCount')) $('reportCount').textContent = `${count} ${count === 1 ? 'item' : 'items'}`;
-  if ($('reportsSubtitle')) $('reportsSubtitle').textContent = `${count} ${count === 1 ? 'item' : 'items'}`;
-  renderReports();
+  const params = new URLSearchParams();
+  if (q) params.set('search', q);
+  if (state.selectedFolderId) params.set('folderId', state.selectedFolderId);
+  if (!state.selectedFolderId && state.reportView) params.set('view', state.reportView);
+  showReportsLoading();
+  try {
+    const data = await api(`/api/reports${params.toString() ? `?${params.toString()}` : ''}`);
+    state.reports = data.reports || [];
+    const count = state.reports.length;
+    if ($('reportCount')) $('reportCount').textContent = `${count} ${count === 1 ? 'item' : 'items'}`;
+    if ($('reportsSubtitle')) $('reportsSubtitle').textContent = `${count} ${count === 1 ? 'item' : 'items'}`;
+    renderReports();
+  } catch (err) {
+    $('reportsList').innerHTML = `<tr><td colspan="6" class="reports-empty-row">Could not load reports: ${esc(err.message)}</td></tr>`;
+  }
+}
+
+function showReportsLoading() {
+  $('reportsList').innerHTML = `
+    <tr>
+      <td colspan="6" class="reports-loading-row">
+        <span class="mini-spinner"></span>
+        Loading reports...
+      </td>
+    </tr>
+  `;
 }
 
 function syncReportSearchAndLoad(event) {
@@ -198,6 +380,60 @@ function syncReportSearchAndLoad(event) {
   if ($('reportSearch') && $('reportSearch') !== event?.target) $('reportSearch').value = value;
   if ($('reportListSearch') && $('reportListSearch') !== event?.target) $('reportListSearch').value = value;
   loadReports();
+}
+
+function openReportTypeModal() {
+  const templates = {
+    account_contacts: { label: 'Account + Contact', primaryObject: 'Account', childObject: 'Contact', childAlias: 'Contact', relationshipField: 'AccountId' },
+    account_opportunities: { label: 'Account + Opportunity', primaryObject: 'Account', childObject: 'Opportunity', childAlias: 'Opportunity', relationshipField: 'AccountId' },
+    account_cases: { label: 'Account + Case', primaryObject: 'Account', childObject: 'Case', childAlias: 'Case', relationshipField: 'AccountId' },
+    campaign_leads: { label: 'Campaign + Lead', primaryObject: 'Campaign', childObject: 'Lead', childAlias: 'Lead', relationshipField: 'CampaignId' }
+  };
+  openAdvancedModal({
+    title: 'New Custom Report Type',
+    saveLabel: 'Create Type',
+    body: `
+      <div class="advanced-modal-grid">
+        <label><span>Report Type Name</span><input id="customTypeName" placeholder="Accounts with Active Contacts"></label>
+        <label><span>Relationship</span>
+          <select id="customTypeTemplate">
+            ${Object.entries(templates).map(([key, value]) => `<option value="${esc(key)}">${esc(value.label)}</option>`).join('')}
+          </select>
+        </label>
+        <label style="grid-column:1 / -1"><span>Description</span><input id="customTypeDescription" placeholder="Optional description"></label>
+      </div>
+      <div id="advancedValidation" class="advanced-validation"></div>
+    `,
+    onSave: async () => {
+      const name = $('customTypeName').value.trim();
+      const template = templates[$('customTypeTemplate').value];
+      if (!name) return setAdvancedValidation('Enter a report type name.');
+      const parentAlias = template.primaryObject;
+      const definition = {
+        primaryObject: template.primaryObject,
+        objects: [
+          { alias: parentAlias, object: template.primaryObject, label: template.primaryObject, relationship: 'primary' },
+          { alias: template.childAlias, object: template.childObject, label: template.childObject, parentAlias, relationshipField: template.relationshipField }
+        ],
+        relationships: [
+          { parentAlias, childAlias: template.childAlias, childObject: template.childObject, parentField: template.relationshipField }
+        ]
+      };
+      const data = await api('/api/reports/metadata/types', {
+        method: 'POST',
+        body: JSON.stringify({
+          name,
+          description: $('customTypeDescription').value.trim(),
+          primaryObject: template.primaryObject,
+          definition
+        })
+      });
+      closeAdvancedModal();
+      await loadReportTypes();
+      if ($('reportTypeSource')) $('reportTypeSource').value = data.reportType.id;
+      toast('Custom report type created', 'ok');
+    }
+  });
 }
 
 function renderReports() {
@@ -216,9 +452,44 @@ function renderReports() {
         <span style="display:inline-flex;align-items:center;gap:4px;background:var(--surface-2);border:1px solid var(--border);border-radius:4px;padding:2px 8px;font-size:11px;font-weight:700;color:var(--text-2)">${esc(titleCase(report.report_type))}</span>
       </td>
       <td style="color:var(--text-2)">${new Date(report.updated_at).toLocaleString()}</td>
-      <td><button class="row-action-btn" onclick="openReport('${esc(report.id)}')" title="Open report"><svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="12" cy="19" r="2"/></svg></button></td>
+      <td class="report-action-cell">
+        <button class="row-action-btn" onclick="toggleReportActionMenu('${esc(report.id)}', event)" title="Report actions">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="12" cy="19" r="2"/></svg>
+        </button>
+        ${state.reportActionMenuId === report.id ? renderReportActionMenu(report) : ''}
+      </td>
     </tr>
   `).join('');
+}
+
+function toggleReportActionMenu(reportId, event) {
+  event?.stopPropagation();
+  state.reportActionMenuId = state.reportActionMenuId === reportId ? '' : reportId;
+  renderReports();
+}
+
+function closeReportActionMenu() {
+  if (!state.reportActionMenuId) return;
+  state.reportActionMenuId = '';
+  renderReports();
+}
+
+function renderReportActionMenu(report) {
+  const canEdit = Boolean(report.can_edit);
+  return `
+    <div class="report-action-menu" onclick="event.stopPropagation()">
+      <button onclick="runReportFromList('${esc(report.id)}')">Run</button>
+      <button onclick="openReport('${esc(report.id)}')">${canEdit ? 'Edit' : 'View'}</button>
+      <button onclick="shareReportFromList('${esc(report.id)}')" ${canEdit ? '' : 'disabled'}>Share</button>
+      <button onclick="scheduleReportFromList('${esc(report.id)}')" ${canEdit ? '' : 'disabled'}>Subscribe</button>
+      <button onclick="exportReportFromList('${esc(report.id)}', 'csv')">Export CSV</button>
+      <button onclick="exportReportFromList('${esc(report.id)}', 'xlsx')">Export Excel</button>
+      <button onclick="addReportToDashboardFromList('${esc(report.id)}')" ${canEdit ? '' : 'disabled'}>Add to Dashboard</button>
+      <button onclick="toggleFavoriteFromList('${esc(report.id)}')">${report.is_favorite ? 'Unfavorite' : 'Favorite'}</button>
+      <button onclick="moveReportFromList('${esc(report.id)}')" ${canEdit ? '' : 'disabled'}>Move</button>
+      <button class="danger" onclick="deleteReportFromList('${esc(report.id)}')" ${canEdit ? '' : 'disabled'}>Delete</button>
+    </div>
+  `;
 }
 
 async function openReport(id, options = {}) {
@@ -230,10 +501,18 @@ async function openReport(id, options = {}) {
   $('reportName').value = state.activeReport.name || '';
   $('reportDescription').value = state.activeReport.description || '';
   $('reportType').value = definition.reportType || state.activeReport.report_type || 'tabular';
+  if ($('reportTypeSource')) $('reportTypeSource').value = definition.reportTypeId || '';
   $('reportObject').value = definition.primaryObject || state.activeReport.primary_object;
   updateObjectChip();
   $('reportLimit').value = definition.rowLimit || 200;
+  if ($('reportFolder')) $('reportFolder').value = state.activeReport.folder_id || '';
   state.selectedFields = [...(definition.fields || [])];
+  state.filters = [...(definition.filters || [])];
+  state.crossFilters = [...(definition.crossFilters || [])];
+  state.bucketFields = [...(definition.bucketFields || [])];
+  state.rowFormulas = [...(definition.rowFormulas || [])];
+  state.summaryFormulas = [...(definition.summaryFormulas || [])];
+  state.conditionalFormatting = [...(definition.conditionalFormatting || [])];
   await loadFields($('reportObject').value);
   $('summaryGroupOne').value = definition.groupBy?.[0] || '';
   $('summaryGroupTwo').value = definition.groupBy?.[1] || '';
@@ -241,7 +520,6 @@ async function openReport(id, options = {}) {
   const firstAggregate = (definition.aggregates || []).find((aggregate) => aggregate.function !== 'count') || (definition.aggregates || [])[0] || {};
   $('summaryAggregateFn').value = firstAggregate.function || 'count';
   $('summaryAggregateField').value = firstAggregate.field || '';
-  state.filters = [...(definition.filters || [])];
   state.chart = normalizeChartConfig(definition.chart);
   syncReportTypeUi();
   syncChartControls();
@@ -249,6 +527,8 @@ async function openReport(id, options = {}) {
   renderReports();
   renderSelectedFields();
   renderFilters();
+  renderCrossFilters();
+  renderAdvancedMetadata();
   renderGroupChips();
   clearResults();
 }
@@ -259,11 +539,18 @@ async function newReport() {
   $('reportName').value = 'New Tabular Report';
   $('reportDescription').value = '';
   $('reportType').value = 'tabular';
+  if ($('reportTypeSource')) $('reportTypeSource').value = '';
   $('reportObject').value = state.objects[0]?.apiName || 'Account';
   updateObjectChip();
   $('reportLimit').value = 200;
+  if ($('reportFolder')) $('reportFolder').value = '';
   state.selectedFields = [];
   state.filters = [];
+  state.crossFilters = [];
+  state.bucketFields = [];
+  state.rowFormulas = [];
+  state.summaryFormulas = [];
+  state.conditionalFormatting = [];
   state.chart = normalizeChartConfig();
   await loadFields($('reportObject').value);
   syncReportTypeUi();
@@ -272,6 +559,8 @@ async function newReport() {
   renderReports();
   renderSelectedFields();
   renderFilters();
+  renderCrossFilters();
+  renderAdvancedMetadata();
   renderGroupChips();
   clearResults();
 }
@@ -304,10 +593,14 @@ function reportIdFromHash() {
 
 async function loadFields(objectName) {
   if (!objectName) return;
-  const data = await api(`/api/reports/metadata/${encodeURIComponent(objectName)}/fields`);
+  const reportType = selectedReportType();
+  const url = reportType
+    ? `/api/reports/metadata/types/${encodeURIComponent(reportType.id)}/fields`
+    : `/api/reports/metadata/${encodeURIComponent(objectName)}/fields`;
+  const data = await api(url);
   state.fields = data.fields || [];
   if (!state.selectedFields.length) {
-    const preferred = ['Name', 'Account.Name', 'Email', 'Phone', 'Status', 'StageName', 'Amount', 'CloseDate'];
+    const preferred = ['Name', 'Account.Name', 'Contact.Name', 'Contact.Email', 'Opportunity.Name', 'Case.CaseNumber', 'Campaign.Name', 'Lead.Name', 'Email', 'Phone', 'Status', 'StageName', 'Amount', 'CloseDate'];
     state.selectedFields = state.fields
       .filter((field) => preferred.includes(field.name))
       .slice(0, 6)
@@ -316,6 +609,7 @@ async function loadFields(objectName) {
   renderFieldList();
   renderSummaryFieldOptions();
   renderFilterFieldOptions();
+  renderAdvancedMetadata();
 }
 
 function renderFieldList() {
@@ -346,6 +640,8 @@ function renderSelectedFields() {
     `).join('')
     : '<span class="muted">Select fields to build the report.</span>';
   renderFieldList();
+  refreshChartFieldOptions(window.currentReportResult);
+  renderChartForCurrentResult();
 }
 
 function removeField(field) {
@@ -375,18 +671,43 @@ function definitionFromForm() {
     });
   }
 
-  return {
+  const baseDefinition = {
     reportType,
     primaryObject: $('reportObject').value,
+    reportTypeId: $('reportTypeSource')?.value || null,
     fields: state.selectedFields,
     groupBy: reportType === 'summary' || reportType === 'matrix' ? groupBy : [],
     groupColumns: reportType === 'matrix' ? groupColumns : [],
     aggregates: reportType === 'summary' || reportType === 'matrix' ? aggregates : [],
+    bucketFields: state.bucketFields,
+    rowFormulas: state.rowFormulas,
+    summaryFormulas: reportType === 'summary' || reportType === 'matrix' ? state.summaryFormulas : [],
+    conditionalFormatting: state.conditionalFormatting,
+    crossFilters: state.crossFilters,
     chart: normalizeChartConfig(state.chart),
     filters: state.filters,
     sort: [],
     rowLimit: Number($('reportLimit').value || 200)
   };
+
+  if (reportType === 'joined') {
+    return {
+      ...baseDefinition,
+      blocks: [{
+        id: 'block_1',
+        name: `${$('reportObject').value} Block`,
+        definition: {
+          ...baseDefinition,
+          reportType: state.selectedFields.length ? 'tabular' : 'summary',
+          groupBy: groupBy.length ? groupBy : [],
+          groupColumns: [],
+          aggregates: aggregates
+        }
+      }]
+    };
+  }
+
+  return baseDefinition;
 }
 
 async function saveReport(options = {}) {
@@ -405,6 +726,7 @@ async function saveReport(options = {}) {
   const payload = {
     name: $('reportName').value.trim(),
     description: $('reportDescription').value.trim(),
+    folderId: $('reportFolder')?.value || null,
     definition: definitionFromForm(),
     visibility: 'private'
   };
@@ -492,10 +814,15 @@ async function runFullReport(options = {}) {
 
 async function cloneReport() {
   if (!state.activeReport) return toast('Save the report before cloning', 'info');
-  const data = await api(`/api/reports/${state.activeReport.id}/clone`, { method: 'POST', body: '{}' });
-  await loadReports();
-  await openReport(data.report.id);
-  toast('Report cloned', 'ok');
+  setPageBusy(true, 'Cloning report...');
+  try {
+    const data = await api(`/api/reports/${state.activeReport.id}/clone`, { method: 'POST', body: '{}' });
+    await loadReports();
+    await openReport(data.report.id);
+    toast('Report cloned', 'ok');
+  } finally {
+    setPageBusy(false);
+  }
 }
 
 async function toggleFavorite() {
@@ -516,10 +843,12 @@ async function deleteReport() {
   toast('Report deleted', 'ok');
 }
 
-async function exportReport() {
+async function exportReport(format = 'csv') {
+  if (format && typeof format !== 'string') format = 'csv';
+  format = format === 'xlsx' ? 'xlsx' : 'csv';
   if (!state.activeReport) return toast('Save the report before exporting', 'info');
   const token = localStorage.getItem('saasray_token');
-  const res = await fetch(`/api/reports/${state.activeReport.id}/export.csv`, {
+  const res = await fetch(`/api/reports/${state.activeReport.id}/export.${format}`, {
     headers: { Authorization: `Bearer ${token}` }
   });
   if (!res.ok) {
@@ -530,11 +859,276 @@ async function exportReport() {
   const url = URL.createObjectURL(blob);
   const link = document.createElement('a');
   link.href = url;
-  link.download = `${($('reportName').value || 'report').replace(/[^a-z0-9_-]+/gi, '_')}.csv`;
+  link.download = `${($('reportName').value || 'report').replace(/[^a-z0-9_-]+/gi, '_')}.${format}`;
   document.body.appendChild(link);
   link.click();
   link.remove();
   URL.revokeObjectURL(url);
+}
+
+async function runReportFromList(reportId) {
+  closeReportActionMenu();
+  setPageBusy(true, 'Opening report...');
+  try {
+    await openReport(reportId);
+    await runFullReport({ silentBusy: true });
+  } finally {
+    setPageBusy(false);
+  }
+}
+
+async function exportReportFromList(reportId, format = 'csv') {
+  closeReportActionMenu();
+  const previous = state.activeReport;
+  const report = state.reports.find((item) => item.id === reportId);
+  state.activeReport = report || { id: reportId, name: 'report' };
+  setPageBusy(true, `Exporting ${format === 'xlsx' ? 'Excel' : 'CSV'}...`);
+  try {
+    await exportReport(format);
+  } finally {
+    state.activeReport = previous;
+    setPageBusy(false);
+  }
+}
+
+async function toggleFavoriteFromList(reportId) {
+  closeReportActionMenu();
+  const report = state.reports.find((item) => item.id === reportId);
+  if (!report) return;
+  setPageBusy(true, report.is_favorite ? 'Removing favorite...' : 'Adding favorite...');
+  try {
+    await api(`/api/reports/${reportId}/favorite`, { method: report.is_favorite ? 'DELETE' : 'POST', body: report.is_favorite ? undefined : '{}' });
+    await loadReports();
+  } finally {
+    setPageBusy(false);
+  }
+}
+
+async function deleteReportFromList(reportId) {
+  closeReportActionMenu();
+  const report = state.reports.find((item) => item.id === reportId);
+  if (!report || !confirm(`Delete "${report.name}"?`)) return;
+  setPageBusy(true, 'Deleting report...');
+  try {
+    await api(`/api/reports/${reportId}`, { method: 'DELETE' });
+    if (state.activeReport?.id === reportId) state.activeReport = null;
+    await loadReports();
+    toast('Report deleted', 'ok');
+  } finally {
+    setPageBusy(false);
+  }
+}
+
+function moveReportFromList(reportId) {
+  closeReportActionMenu();
+  const report = state.reports.find((item) => item.id === reportId);
+  if (!report) return;
+  openMoveReportModal(report);
+}
+
+function shareReportFromList(reportId) {
+  closeReportActionMenu();
+  const report = state.reports.find((item) => item.id === reportId);
+  if (!report) return;
+  openShareReportModal(report);
+}
+
+function scheduleReportFromList(reportId) {
+  closeReportActionMenu();
+  const report = state.reports.find((item) => item.id === reportId);
+  if (!report) return;
+  state.activeReport = report;
+  scheduleReport();
+}
+
+async function addReportToDashboardFromList(reportId) {
+  closeReportActionMenu();
+  const report = state.reports.find((item) => item.id === reportId);
+  if (!report) return;
+  setPageBusy(true, 'Loading dashboards...');
+  try {
+    const data = await api('/api/dashboards');
+    setPageBusy(false);
+    const dashboards = data.dashboards || [];
+    if (!dashboards.length) return toast('Create a dashboard first, then add this report.', 'info');
+    openAdvancedModal({
+      title: 'Add to Dashboard',
+      saveLabel: 'Add',
+      body: `
+        <div class="advanced-modal-grid">
+          <label>Dashboard<select id="addDashboardId">
+            ${dashboards.map((dashboard) => `<option value="${esc(dashboard.id)}">${esc(dashboard.name)}</option>`).join('')}
+          </select></label>
+          <label>Component Type<select id="addDashboardType">
+            <option value="chart">Chart</option>
+            <option value="table">Table</option>
+            <option value="kpi">KPI</option>
+          </select></label>
+          <label style="grid-column:1 / -1">Component Title<input id="addDashboardTitle" value="${escAttr(report.name)}"></label>
+        </div>
+        <div id="advancedValidation" class="advanced-validation"></div>
+      `,
+      onSave: async () => {
+        const dashboardId = $('addDashboardId').value;
+        if (!dashboardId) return setAdvancedValidation('Select a dashboard.');
+        setAdvancedValidation('Adding component...', 'advancedValidation', 'ok');
+        await api(`/api/dashboards/${dashboardId}/components`, {
+          method: 'POST',
+          body: JSON.stringify({
+            reportId,
+            title: $('addDashboardTitle').value.trim() || report.name,
+            componentType: $('addDashboardType').value,
+            width: 6,
+            height: 3,
+            config: { chartType: report.definition?.chart?.type || 'bar' }
+          })
+        });
+        closeAdvancedModal();
+        toast('Report added to dashboard', 'ok');
+      }
+    });
+  } catch (err) {
+    setPageBusy(false);
+    toast(err.message || 'Could not load dashboards', 'err');
+  }
+}
+
+function openMoveReportModal(report) {
+  openAdvancedModal({
+    title: 'Move Report',
+    saveLabel: 'Move',
+    body: `
+      <div class="advanced-modal-grid">
+        <label style="grid-column:1 / -1">Folder<select id="moveReportFolder">
+          <option value="">Private Reports</option>
+          ${state.folders.map((folder) => `<option value="${esc(folder.id)}" ${report.folder_id === folder.id ? 'selected' : ''}>${esc(folder.name)}</option>`).join('')}
+        </select></label>
+      </div>
+      <div id="advancedValidation" class="advanced-validation"></div>
+    `,
+    onSave: async () => {
+      setAdvancedValidation('Moving...', 'advancedValidation', 'ok');
+      await api(`/api/reports/${report.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ name: report.name, folderId: $('moveReportFolder').value || null })
+      });
+      closeAdvancedModal();
+      await loadReports();
+      toast('Report moved', 'ok');
+    }
+  });
+}
+
+function openShareReportModal(report) {
+  openAdvancedModal({
+    title: 'Share Report',
+    saveLabel: 'Share',
+    body: `
+      <div class="advanced-modal-grid">
+        <label>User Email<input id="shareReportEmail" placeholder="user@example.com"></label>
+        <label>Access<select id="shareReportAccess">
+          <option value="read">View Only</option>
+          <option value="edit">View and Edit</option>
+        </select></label>
+      </div>
+      <div class="advanced-preview-box">Private reports can be shared with portal users without changing Salesforce data access. Report results still enforce object, field, and record security.</div>
+      <div id="advancedValidation" class="advanced-validation"></div>
+    `,
+    onSave: async () => {
+      const email = $('shareReportEmail').value.trim();
+      if (!email) return setAdvancedValidation('Enter a user email.');
+      setAdvancedValidation('Sharing...', 'advancedValidation', 'ok');
+      await api(`/api/reports/${report.id}/shares`, {
+        method: 'POST',
+        body: JSON.stringify({ email, accessLevel: $('shareReportAccess').value })
+      });
+      closeAdvancedModal();
+      await loadReports();
+      toast('Report shared', 'ok');
+    }
+  });
+}
+
+async function asyncExportReport() {
+  if (!state.activeReport) return toast('Save the report before starting an export job', 'info');
+  const format = confirm('Create Excel async export? Click Cancel for CSV.') ? 'xlsx' : 'csv';
+  const data = await api(`/api/reports/${state.activeReport.id}/export-jobs`, {
+    method: 'POST',
+    body: JSON.stringify({ format })
+  });
+  toast('Export job started', 'ok');
+  pollExportJob(data.job.id);
+}
+
+async function pollExportJob(jobId, tries = 0) {
+  const data = await api(`/api/reports/export-jobs/${jobId}`);
+  if (data.job.status === 'completed') {
+    toast('Export ready. Downloading...', 'ok');
+    await downloadExportJob(jobId, data.job);
+    return;
+  }
+  if (data.job.status === 'failed') return toast(data.job.error_message || 'Export failed', 'err');
+  if (tries < 30) setTimeout(() => pollExportJob(jobId, tries + 1), 1500);
+}
+
+async function downloadExportJob(jobId, job) {
+  const token = localStorage.getItem('saasray_token');
+  const res = await fetch(`/api/reports/export-jobs/${jobId}/download`, {
+    headers: { Authorization: `Bearer ${token}` }
+  });
+  if (!res.ok) return toast('Could not download export job', 'err');
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = job.file_name || `report.${job.format || 'csv'}`;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
+async function scheduleReport() {
+  if (!state.activeReport) return toast('Save the report before scheduling', 'info');
+  openAdvancedModal({
+    title: 'Schedule Report',
+    saveLabel: 'Save Schedule',
+    body: `
+      <div class="advanced-modal-grid">
+        <label><span>Recipients</span><input id="scheduleRecipients" placeholder="user@example.com, team@example.com"></label>
+        <label><span>Frequency</span>
+          <select id="scheduleCron">
+            <option value="0 8 * * 1">Weekly - Monday 8 AM</option>
+            <option value="0 8 * * *">Daily - 8 AM</option>
+            <option value="0 8 1 * *">Monthly - first day 8 AM</option>
+          </select>
+        </label>
+        <label><span>Format</span>
+          <select id="scheduleFormat"><option value="csv">CSV</option><option value="xlsx">Excel</option></select>
+        </label>
+        <label><span>Status</span>
+          <select id="scheduleActive"><option value="true">Active</option><option value="false">Inactive</option></select>
+        </label>
+      </div>
+      <div id="advancedValidation" class="advanced-validation"></div>
+    `,
+    onSave: async () => {
+      const recipients = $('scheduleRecipients').value.trim();
+      if (!recipients) return setAdvancedValidation('Enter at least one recipient.');
+      await api(`/api/reports/${state.activeReport.id}/schedules`, {
+        method: 'POST',
+        body: JSON.stringify({
+          recipients,
+          cronExpression: $('scheduleCron').value,
+          format: $('scheduleFormat').value,
+          isActive: $('scheduleActive').value === 'true',
+          timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'
+        })
+      });
+      closeAdvancedModal();
+      toast('Report schedule saved', 'ok');
+    }
+  });
 }
 
 function renderResults(result, options = { previewMode: true }) {
@@ -550,6 +1144,7 @@ function reportRunLabel() {
   const type = $('reportType')?.value;
   if (type === 'summary') return 'Run Summary';
   if (type === 'matrix') return 'Run Matrix';
+  if (type === 'joined') return 'Run Joined';
   return 'Run Preview';
 }
 
@@ -557,6 +1152,26 @@ function renderResultTable(result, options = { previewMode: true }) {
   window.currentReportResult = result;
   window.currentReportResultOptions = options;
   const columns = result.columns || [];
+
+  if (result.reportType === 'joined') {
+    const blockHtml = (result.blocks || []).map((block) => {
+      const blockResult = block.result || {};
+      const blockColumns = blockResult.columns || [];
+      const rows = (blockResult.rows || []).map((row) => `
+        <tr>${blockColumns.map((column) => `<td class="${cellFormatClass(row, column.field)}">${esc(readPath(row, column.field) ?? '')}</td>`).join('')}</tr>
+      `).join('') || `<tr><td colspan="${Math.max(blockColumns.length, 1)}" class="muted" style="text-align:center;padding:20px">No rows found</td></tr>`;
+      return `
+        <tr class="summary-group-row"><td colspan="99">${esc(block.name || blockResult.reportName || 'Report Block')}</td></tr>
+        <tr>${blockColumns.map((column) => `<th>${esc(column.label)}</th>`).join('')}</tr>
+        ${rows}
+      `;
+    }).join('');
+    $('reportResultsHead').innerHTML = '<tr><th>Joined Report Blocks</th></tr>';
+    $('reportResultsBody').innerHTML = blockHtml || '<tr><td class="muted" style="text-align:center;padding:32px">No blocks configured</td></tr>';
+    $('reportResultsFoot').innerHTML = '';
+    $('reportResultMeta').textContent = `${result.blocks?.length || 0} blocks, ${result.totalSize || 0} rows`;
+    return;
+  }
 
   // Column headers with sort indicators
   $('reportResultsHead').innerHTML = `<tr>${columns.map((column) => `<th>${esc(column.label)} <span class="col-sort-indicator">↕</span></th>`).join('')}</tr>`;
@@ -568,7 +1183,7 @@ function renderResultTable(result, options = { previewMode: true }) {
     renderSummaryTable(result, columns);
   } else {
     $('reportResultsBody').innerHTML = (result.rows || []).map((row) => `
-      <tr>${columns.map((column) => `<td>${esc(readPath(row, column.field) ?? '')}</td>`).join('')}</tr>
+      <tr>${columns.map((column) => `<td class="${cellFormatClass(row, column.field)}">${esc(readPath(row, column.field) ?? '')}</td>`).join('')}</tr>
     `).join('') || `<tr><td colspan="${Math.max(columns.length, 1)}" class="muted" style="text-align:center;padding:32px">No rows found</td></tr>`;
   }
 
@@ -597,11 +1212,27 @@ function renderResultTable(result, options = { previewMode: true }) {
 }
 
 function normalizeChartConfig(chart = {}) {
+  const allowedTypes = [
+    'bar', 'column', 'stacked_bar', 'stacked_column',
+    'line', 'area', 'stacked_area', 'pie', 'donut',
+    'scatter', 'bubble', 'funnel', 'gauge', 'treemap',
+    'heatmap', 'combo'
+  ];
   return {
     enabled: Boolean(chart.enabled),
-    type: ['bar', 'line', 'donut'].includes(chart.type) ? chart.type : 'bar',
+    type: allowedTypes.includes(chart.type) ? chart.type : 'bar',
     labelField: chart.labelField || '',
-    valueField: chart.valueField || ''
+    valueField: chart.valueField || '',
+    title: chart.title || '',
+    subtitle: chart.subtitle || '',
+    legendPosition: chart.legendPosition || 'right',
+    xAxisLabel: chart.xAxisLabel || '',
+    yAxisLabel: chart.yAxisLabel || '',
+    sortOrder: chart.sortOrder || 'none',
+    colors: Array.isArray(chart.colors) ? chart.colors.slice(0, 12) : [],
+    showDataLabels: chart.showDataLabels !== false,
+    nullHandling: chart.nullHandling || 'zero',
+    stacked: Boolean(chart.stacked)
   };
 }
 
@@ -610,6 +1241,7 @@ function enableChart() {
   syncChartControls();
   markDirty();
   renderChartForCurrentResult();
+  openChartPropertiesModal();
 }
 
 function removeChart() {
@@ -621,11 +1253,13 @@ function removeChart() {
 
 function syncChartFromControls() {
   state.chart = normalizeChartConfig({
+    ...state.chart,
     enabled: true,
     type: $('chartType')?.value || state.chart.type,
     labelField: $('chartLabelField')?.value || state.chart.labelField,
     valueField: $('chartValueField')?.value || state.chart.valueField
   });
+  syncChartControls();
 }
 
 function syncChartControls() {
@@ -634,6 +1268,94 @@ function syncChartControls() {
   if ($('chartConfigStrip')) $('chartConfigStrip').style.display = chart.enabled ? '' : 'none';
   if ($('chartType')) $('chartType').value = chart.type;
   refreshChartFieldOptions(window.currentReportResult);
+}
+
+function openChartPropertiesModal() {
+  state.chart = normalizeChartConfig({ ...state.chart, enabled: true });
+  const options = chartFieldOptions(window.currentReportResult);
+  openAdvancedModal({
+    title: 'Chart Properties',
+    saveLabel: 'Save Chart',
+    body: `
+      <div class="advanced-modal-grid chart-modal-grid">
+        <label>Chart Type<select id="chartModalType">
+          ${chartTypeOptions().map((type) => `<option value="${esc(type.value)}" ${state.chart.type === type.value ? 'selected' : ''}>${esc(type.label)}</option>`).join('')}
+        </select></label>
+        <label>Title<input id="chartModalTitle" value="${escAttr(state.chart.title)}" placeholder="Report Chart"></label>
+        <label>Subtitle<input id="chartModalSubtitle" value="${escAttr(state.chart.subtitle)}" placeholder="Optional subtitle"></label>
+        <label>Legend<select id="chartModalLegend">
+          ${['right', 'bottom', 'left', 'top', 'none'].map((item) => `<option value="${item}" ${state.chart.legendPosition === item ? 'selected' : ''}>${esc(titleCase(item))}</option>`).join('')}
+        </select></label>
+        <label>Label Field<select id="chartModalLabel">
+          ${options.labels.map((field) => `<option value="${esc(field.field)}" ${state.chart.labelField === field.field ? 'selected' : ''}>${esc(field.label)}</option>`).join('')}
+        </select></label>
+        <label>Value Field<select id="chartModalValue">
+          ${options.values.map((field) => `<option value="${esc(field.field)}" ${state.chart.valueField === field.field ? 'selected' : ''}>${esc(field.label)}</option>`).join('')}
+        </select></label>
+        <label>X Axis<input id="chartModalXAxis" value="${escAttr(state.chart.xAxisLabel)}" placeholder="Optional axis label"></label>
+        <label>Y Axis<input id="chartModalYAxis" value="${escAttr(state.chart.yAxisLabel)}" placeholder="Optional axis label"></label>
+        <label>Sort<select id="chartModalSort">
+          ${[
+            ['none', 'Report order'],
+            ['label_asc', 'Label ascending'],
+            ['label_desc', 'Label descending'],
+            ['value_asc', 'Value ascending'],
+            ['value_desc', 'Value descending']
+          ].map(([value, label]) => `<option value="${value}" ${state.chart.sortOrder === value ? 'selected' : ''}>${esc(label)}</option>`).join('')}
+        </select></label>
+        <label>Null Handling<select id="chartModalNulls">
+          <option value="zero" ${state.chart.nullHandling === 'zero' ? 'selected' : ''}>Show as zero</option>
+          <option value="exclude" ${state.chart.nullHandling === 'exclude' ? 'selected' : ''}>Exclude nulls</option>
+        </select></label>
+      </div>
+      <label class="modal-check"><input id="chartModalLabels" type="checkbox" ${state.chart.showDataLabels ? 'checked' : ''}> Show data labels</label>
+      <label class="modal-check"><input id="chartModalStacked" type="checkbox" ${state.chart.stacked ? 'checked' : ''}> Stack series where supported</label>
+      <div class="advanced-preview-box">Chart changes reuse the current report result. No Salesforce query runs until Preview or Run.</div>
+      <div id="advancedValidation" class="advanced-validation"></div>
+    `,
+    onSave: () => {
+      state.chart = normalizeChartConfig({
+        enabled: true,
+        type: $('chartModalType').value,
+        labelField: $('chartModalLabel').value,
+        valueField: $('chartModalValue').value,
+        title: $('chartModalTitle').value.trim(),
+        subtitle: $('chartModalSubtitle').value.trim(),
+        legendPosition: $('chartModalLegend').value,
+        xAxisLabel: $('chartModalXAxis').value.trim(),
+        yAxisLabel: $('chartModalYAxis').value.trim(),
+        sortOrder: $('chartModalSort').value,
+        nullHandling: $('chartModalNulls').value,
+        showDataLabels: $('chartModalLabels').checked,
+        stacked: $('chartModalStacked').checked
+      });
+      closeAdvancedModal();
+      syncChartControls();
+      markDirty();
+      renderChartForCurrentResult();
+    }
+  });
+}
+
+function chartTypeOptions() {
+  return [
+    ['bar', 'Bar'],
+    ['column', 'Column'],
+    ['stacked_bar', 'Stacked Bar'],
+    ['stacked_column', 'Stacked Column'],
+    ['line', 'Line'],
+    ['area', 'Area'],
+    ['stacked_area', 'Stacked Area'],
+    ['pie', 'Pie'],
+    ['donut', 'Donut'],
+    ['scatter', 'Scatter Plot'],
+    ['bubble', 'Bubble Chart'],
+    ['funnel', 'Funnel'],
+    ['gauge', 'Gauge'],
+    ['treemap', 'Treemap'],
+    ['heatmap', 'Heat Map'],
+    ['combo', 'Combo Chart']
+  ].map(([value, label]) => ({ value, label }));
 }
 
 function refreshChartFieldOptions(result) {
@@ -682,15 +1404,38 @@ function renderChartForCurrentResult() {
   panel.style.display = '';
   refreshChartFieldOptions(window.currentReportResult);
   const points = buildChartPoints(window.currentReportResult);
-  if ($('reportChartTitle')) $('reportChartTitle').textContent = `${titleCase(state.chart.type)} Chart`;
+  if ($('reportChartTitle')) $('reportChartTitle').textContent = state.chart.title || `${titleCase(state.chart.type.replace(/_/g, ' '))} Chart`;
   if ($('reportChartSubtitle')) {
-    $('reportChartSubtitle').textContent = points.length
+    $('reportChartSubtitle').textContent = state.chart.subtitle || (points.length
       ? `${labelForChartField(state.chart.valueField)} by ${labelForChartField(state.chart.labelField)}`
-      : 'Run Preview or Run Report to populate the chart';
+      : 'Run Preview or Run Report to populate the chart');
   }
   canvas.innerHTML = points.length
     ? renderChartSvg(points, state.chart.type)
     : '<div class="chart-empty">Run Preview or Run Report to populate the chart.</div>';
+}
+
+function openChartZoomModal() {
+  const modal = $('chartZoomModal');
+  const body = $('chartZoomBody');
+  if (!modal || !body || !state.chart?.enabled) return;
+
+  const points = buildChartPoints(window.currentReportResult);
+  if ($('chartZoomTitle')) $('chartZoomTitle').textContent = $('reportChartTitle')?.textContent || 'Report Chart';
+  if ($('chartZoomSubtitle')) $('chartZoomSubtitle').textContent = $('reportChartSubtitle')?.textContent || 'Uses current preview or run results';
+  body.innerHTML = points.length
+    ? renderChartSvg(points, state.chart.type)
+    : '<div class="chart-empty">Run Preview or Run Report to populate the chart.</div>';
+  modal.style.display = 'flex';
+  document.body.classList.add('modal-open');
+}
+
+function closeChartZoomModal() {
+  const modal = $('chartZoomModal');
+  if (!modal) return;
+  modal.style.display = 'none';
+  $('chartZoomBody') && ($('chartZoomBody').innerHTML = '');
+  document.body.classList.remove('modal-open');
 }
 
 function labelForChartField(field) {
@@ -702,56 +1447,102 @@ function buildChartPoints(result) {
   if (!result?.rows?.length) return [];
   const labelField = state.chart.labelField || chartFieldOptions(result).labels[0]?.field;
   const valueField = state.chart.valueField || chartFieldOptions(result).values[0]?.field;
+  const normalizeValue = (value) => {
+    if ((value === null || value === undefined || value === '') && state.chart.nullHandling === 'exclude') return null;
+    const number = Number(value || 0);
+    return Number.isFinite(number) ? number : null;
+  };
 
   if (result.reportType === 'tabular') {
     const grouped = new Map();
     result.rows.forEach((row) => {
       const label = String(readPath(row, labelField) ?? '(Blank)');
-      const increment = valueField === '__count' ? 1 : Number(readPath(row, valueField) || 0);
+      const increment = valueField === '__count' ? 1 : normalizeValue(readPath(row, valueField));
+      if (increment === null) return;
       grouped.set(label, (grouped.get(label) || 0) + increment);
     });
-    return Array.from(grouped.entries()).map(([label, value]) => ({ label, value })).slice(0, 12);
+    return sortChartPoints(Array.from(grouped.entries()).map(([label, value]) => ({ label, value }))).slice(0, 12);
   }
 
-  return result.rows.map((row) => ({
+  return sortChartPoints(result.rows.map((row) => ({
     label: String(readPath(row, labelField) ?? '(Blank)'),
-    value: Number(valueField === '__count' ? 1 : readPath(row, valueField) || 0)
-  })).filter((point) => Number.isFinite(point.value)).slice(0, 12);
+    value: valueField === '__count' ? 1 : normalizeValue(readPath(row, valueField))
+  })).filter((point) => Number.isFinite(point.value))).slice(0, 12);
+}
+
+function sortChartPoints(points) {
+  const order = state.chart?.sortOrder || 'none';
+  const sorted = [...points];
+  if (order === 'label_asc') sorted.sort((a, b) => a.label.localeCompare(b.label));
+  if (order === 'label_desc') sorted.sort((a, b) => b.label.localeCompare(a.label));
+  if (order === 'value_asc') sorted.sort((a, b) => a.value - b.value);
+  if (order === 'value_desc') sorted.sort((a, b) => b.value - a.value);
+  return sorted;
 }
 
 function renderChartSvg(points, type) {
+  if (type === 'funnel') return renderFunnelChart(points);
+  if (type === 'gauge') return renderGaugeChart(points);
+  if (type === 'treemap') return renderTreemapChart(points);
+  if (type === 'heatmap') return renderHeatmapChart(points);
+  if (type === 'pie') return renderPieChart(points);
   if (type === 'donut') return renderDonutChart(points);
-  if (type === 'line') return renderLineChart(points);
-  return renderBarChart(points);
+  if (['bar', 'stacked_bar'].includes(type)) return renderHorizontalBarChart(points);
+  if (['line', 'area', 'stacked_area', 'combo', 'scatter', 'bubble'].includes(type)) return renderLineChart(points, type);
+  return renderBarChart(points, type);
 }
 
-function renderBarChart(points) {
-  const width = 820;
+function renderBarChart(points, type = 'column') {
+  const width = Math.max(820, points.length * 92 + 90);
   const height = 260;
   const top = 20;
   const left = 46;
   const chartHeight = 170;
   const max = Math.max(...points.map((point) => point.value), 1);
   const slot = (width - left - 24) / points.length;
+  const colors = chartColors();
   const bars = points.map((point, index) => {
     const barHeight = Math.max((point.value / max) * chartHeight, 2);
     const x = left + index * slot + slot * 0.2;
     const y = top + chartHeight - barHeight;
     const w = Math.max(slot * 0.55, 10);
+    const fill = type === 'stacked_column' ? ` fill="${colors[index % colors.length]}"` : '';
     return `
-      <rect class="chart-bar" x="${x}" y="${y}" width="${w}" height="${barHeight}" rx="3"></rect>
-      <text class="chart-value" x="${x + w / 2}" y="${y - 6}" text-anchor="middle">${esc(formatChartNumber(point.value))}</text>
-      <text class="chart-label" x="${x + w / 2}" y="${top + chartHeight + 28}" text-anchor="middle">${esc(shortLabel(point.label))}</text>
+      <rect class="chart-bar" x="${x}" y="${y}" width="${w}" height="${barHeight}" rx="3"${fill}></rect>
+      ${state.chart.showDataLabels ? `<text class="chart-value" x="${x + w / 2}" y="${y - 6}" text-anchor="middle">${esc(formatChartNumber(point.value))}</text>` : ''}
+      <text class="chart-label" x="${x + w / 2}" y="${top + chartHeight + 28}" text-anchor="middle">${esc(shortLabel(point.label, 18))}</text>
     `;
   }).join('');
-  return `<svg class="chart-svg" viewBox="0 0 ${width} ${height}" role="img">
+  return `<svg class="chart-svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" role="img">
     <line class="chart-axis" x1="${left}" y1="${top + chartHeight}" x2="${width - 20}" y2="${top + chartHeight}"></line>
     ${bars}
   </svg>`;
 }
 
-function renderLineChart(points) {
+function renderHorizontalBarChart(points) {
+  const height = Math.max(230, points.length * 34 + 46);
   const width = 820;
+  const left = 180;
+  const right = 40;
+  const top = 20;
+  const rowHeight = 26;
+  const gap = 8;
+  const max = Math.max(...points.map((point) => point.value), 1);
+  const colors = chartColors();
+  const bars = points.map((point, index) => {
+    const y = top + index * (rowHeight + gap);
+    const w = Math.max(((width - left - right) * point.value) / max, 3);
+    return `
+      <text class="chart-label" x="${left - 10}" y="${y + 17}" text-anchor="end">${esc(shortLabel(point.label, 24))}</text>
+      <rect class="chart-bar" x="${left}" y="${y}" width="${w}" height="${rowHeight}" rx="3" fill="${colors[index % colors.length]}"></rect>
+      ${state.chart.showDataLabels ? `<text class="chart-value" x="${left + w + 8}" y="${y + 17}">${esc(formatChartNumber(point.value))}</text>` : ''}
+    `;
+  }).join('');
+  return `<svg class="chart-svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" role="img">${bars}</svg>`;
+}
+
+function renderLineChart(points, type = 'line') {
+  const width = Math.max(820, points.length * 92 + 90);
   const height = 260;
   const top = 24;
   const left = 46;
@@ -764,21 +1555,194 @@ function renderLineChart(points) {
     point
   }));
   const path = coords.map((coord, index) => `${index ? 'L' : 'M'} ${coord.x} ${coord.y}`).join(' ');
-  return `<svg class="chart-svg" viewBox="0 0 ${width} ${height}" role="img">
+  const areaPath = `M ${left} ${top + chartHeight} ${path.replace(/^M/, 'L')} L ${coords.at(-1)?.x || left} ${top + chartHeight} Z`;
+  const markers = coords.map((coord, index) => {
+    const radius = type === 'bubble' ? Math.max(4, Math.min(16, 5 + (coord.point.value / max) * 12)) : 4;
+    if (type === 'scatter' || type === 'bubble') {
+      return `<circle class="chart-point" cx="${coord.x}" cy="${coord.y}" r="${radius}"></circle>
+        ${state.chart.showDataLabels ? `<text class="chart-value" x="${coord.x}" y="${coord.y - radius - 5}" text-anchor="middle">${esc(formatChartNumber(coord.point.value))}</text>` : ''}`;
+    }
+    return `<circle class="chart-point" cx="${coord.x}" cy="${coord.y}" r="4"></circle>
+      ${state.chart.showDataLabels ? `<text class="chart-value" x="${coord.x}" y="${coord.y - 9}" text-anchor="middle">${esc(formatChartNumber(coord.point.value))}</text>` : ''}
+      <text class="chart-label" x="${coord.x}" y="${top + chartHeight + 28}" text-anchor="middle">${esc(shortLabel(coord.point.label, 18))}</text>`;
+  }).join('');
+  return `<svg class="chart-svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" role="img">
     <line class="chart-axis" x1="${left}" y1="${top + chartHeight}" x2="${width - 20}" y2="${top + chartHeight}"></line>
-    <path class="chart-line" d="${path}"></path>
-    ${coords.map((coord) => `
-      <circle class="chart-point" cx="${coord.x}" cy="${coord.y}" r="4"></circle>
-      <text class="chart-value" x="${coord.x}" y="${coord.y - 9}" text-anchor="middle">${esc(formatChartNumber(coord.point.value))}</text>
-      <text class="chart-label" x="${coord.x}" y="${top + chartHeight + 28}" text-anchor="middle">${esc(shortLabel(coord.point.label))}</text>
-    `).join('')}
+    ${['area', 'stacked_area', 'combo'].includes(type) ? `<path class="chart-area" d="${areaPath}"></path>` : ''}
+    ${['scatter', 'bubble'].includes(type) ? '' : `<path class="chart-line" d="${path}"></path>`}
+    ${type === 'combo' ? renderComboBars(points, width, left, top, chartHeight, max) : ''}
+    ${markers}
   </svg>`;
 }
 
-function renderDonutChart(points) {
+function renderComboBars(points, width, left, top, chartHeight, max) {
+  const slot = (width - left - 40) / Math.max(points.length, 1);
+  return points.map((point, index) => {
+    const h = Math.max((point.value / max) * chartHeight, 2);
+    const x = left + index * slot + slot * 0.3;
+    const y = top + chartHeight - h;
+    return `<rect class="chart-bar combo-bar" x="${x}" y="${y}" width="${Math.max(slot * 0.24, 8)}" height="${h}" rx="2"></rect>`;
+  }).join('');
+}
+
+function chartColors() {
+  return ['#0176d3', '#2e844a', '#ba0517', '#dd7a01', '#747474', '#706eec', '#06a59a', '#8e44ad', '#e67e22', '#1b96ff', '#45c65a', '#ffb75d'];
+}
+
+function renderFunnelChart(points) {
+  const ordered = [...points]
+    .filter((point) => Number(point.value) > 0)
+    .sort((a, b) => b.value - a.value);
+  if (!ordered.length) return '<div class="chart-empty">No positive values to display in the funnel.</div>';
+
+  const colors = chartColors();
+  const max = Math.max(...ordered.map((point) => point.value), 1);
+  const stageHeight = 36;
+  const gap = 4;
+  const width = 760;
+  const left = 34;
+  const center = 280;
+  const top = 14;
+  const totalHeight = top * 2 + ordered.length * (stageHeight + gap);
+  const stages = ordered.map((point, index) => {
+    const currentWidth = Math.max(96, 430 * (point.value / max));
+    const nextValue = ordered[index + 1]?.value ?? Math.max(point.value * 0.72, 1);
+    const nextWidth = Math.max(72, 430 * (nextValue / max));
+    const y = top + index * (stageHeight + gap);
+    const pointsAttr = [
+      `${center - currentWidth / 2},${y}`,
+      `${center + currentWidth / 2},${y}`,
+      `${center + nextWidth / 2},${y + stageHeight}`,
+      `${center - nextWidth / 2},${y + stageHeight}`
+    ].join(' ');
+    return `
+      <polygon class="funnel-stage" points="${pointsAttr}" fill="${colors[index % colors.length]}"></polygon>
+      <text class="funnel-stage-label" x="${center}" y="${y + 22}" text-anchor="middle">${esc(shortLabel(point.label, 24))}</text>
+      ${state.chart.showDataLabels ? `<text class="funnel-stage-value" x="${center + currentWidth / 2 + 18}" y="${y + 22}">${esc(formatChartNumber(point.value))}</text>` : ''}
+    `;
+  }).join('');
+  const legend = ordered.map((point, index) => `
+    <div class="chart-legend-item"><span style="background:${colors[index % colors.length]}"></span>${esc(shortLabel(point.label, 28))}<strong>${esc(formatChartNumber(point.value))}</strong></div>
+  `).join('');
+  return `<div class="funnel-chart">
+    <svg class="funnel-svg" width="${width}" height="${Math.max(totalHeight, 190)}" viewBox="0 0 ${width} ${Math.max(totalHeight, 190)}" role="img">
+      ${stages}
+    </svg>
+    <div class="chart-legend funnel-legend">${legend}</div>
+  </div>`;
+}
+
+function renderGaugeChart(points) {
+  const value = points.reduce((sum, point) => sum + Math.max(point.value, 0), 0);
+  const max = Math.max(value * 1.25, 100);
+  const pct = Math.max(0, Math.min(value / max, 1));
+  const angle = -90 + pct * 180;
+  const needleX = 120 + Math.cos((angle * Math.PI) / 180) * 76;
+  const needleY = 118 + Math.sin((angle * Math.PI) / 180) * 76;
+  return `<div class="gauge-chart">
+    <svg class="gauge-svg" width="300" height="190" viewBox="0 0 300 190" role="img">
+      <path class="gauge-track" d="M40 120 A80 80 0 0 1 200 120"></path>
+      <path class="gauge-low" d="M40 120 A80 80 0 0 1 92 45"></path>
+      <path class="gauge-mid" d="M92 45 A80 80 0 0 1 148 45"></path>
+      <path class="gauge-high" d="M148 45 A80 80 0 0 1 200 120"></path>
+      <line class="gauge-needle" x1="120" y1="120" x2="${needleX}" y2="${needleY}"></line>
+      <circle class="gauge-pin" cx="120" cy="120" r="6"></circle>
+      <text class="donut-total" x="120" y="154" text-anchor="middle">${esc(formatChartNumber(value))}</text>
+      <text class="donut-caption" x="120" y="172" text-anchor="middle">${esc(labelForChartField(state.chart.valueField))}</text>
+    </svg>
+    <div class="chart-legend gauge-legend">${points.slice(0, 6).map((point) => `
+      <div class="chart-legend-item"><span></span>${esc(shortLabel(point.label, 28))}<strong>${esc(formatChartNumber(point.value))}</strong></div>
+    `).join('')}</div>
+  </div>`;
+}
+
+function renderPieChart(points) {
+  const total = points.reduce((sum, point) => sum + Math.max(point.value, 0), 0) || 1;
+  const colors = chartColors();
+  let startAngle = -90;
+  const segments = points.map((point, index) => {
+    const pct = Math.max(point.value, 0) / total;
+    const endAngle = startAngle + pct * 360;
+    const path = describePieSlice(90, 90, 72, startAngle, endAngle);
+    startAngle = endAngle;
+    return `<path class="pie-segment" d="${path}" fill="${colors[index % colors.length]}"></path>`;
+  }).join('');
+  const legend = points.map((point, index) => `
+    <div class="chart-legend-item"><span style="background:${colors[index % colors.length]}"></span>${esc(shortLabel(point.label, 22))} <strong>${esc(formatChartNumber(point.value))}</strong></div>
+  `).join('');
+  return `<div class="donut-chart pie-chart">
+    <svg class="donut-svg" viewBox="0 0 180 180" role="img">${segments}</svg>
+    <div class="chart-legend">${legend}</div>
+  </div>`;
+}
+
+function describePieSlice(cx, cy, radius, startAngle, endAngle) {
+  const start = polarToCartesian(cx, cy, radius, endAngle);
+  const end = polarToCartesian(cx, cy, radius, startAngle);
+  const largeArcFlag = endAngle - startAngle <= 180 ? '0' : '1';
+  return [
+    `M ${cx} ${cy}`,
+    `L ${start.x} ${start.y}`,
+    `A ${radius} ${radius} 0 ${largeArcFlag} 0 ${end.x} ${end.y}`,
+    'Z'
+  ].join(' ');
+}
+
+function polarToCartesian(cx, cy, radius, angleDegrees) {
+  const angleRadians = (angleDegrees * Math.PI) / 180;
+  return {
+    x: cx + radius * Math.cos(angleRadians),
+    y: cy + radius * Math.sin(angleRadians)
+  };
+}
+
+function renderTreemapChart(points) {
+  const colors = chartColors();
+  const total = points.reduce((sum, point) => sum + Math.max(point.value, 0), 0) || 1;
+  const width = 780;
+  const height = 210;
+  let x = 0;
+  const tiles = points.map((point, index) => {
+    const w = Math.max(54, (Math.max(point.value, 0) / total) * width);
+    const tile = `
+      <g>
+        <rect class="treemap-tile" x="${x}" y="0" width="${w}" height="${height}" fill="${colors[index % colors.length]}"></rect>
+        <text class="treemap-label" x="${x + 10}" y="24">${esc(shortLabel(point.label, Math.max(10, Math.floor(w / 8))))}</text>
+        ${state.chart.showDataLabels ? `<text class="treemap-value" x="${x + 10}" y="44">${esc(formatChartNumber(point.value))}</text>` : ''}
+      </g>
+    `;
+    x += w;
+    return tile;
+  }).join('');
+  return `<svg class="chart-svg treemap-svg" width="${Math.max(width, x)}" height="${height}" viewBox="0 0 ${Math.max(width, x)} ${height}" role="img">${tiles}</svg>`;
+}
+
+function renderHeatmapChart(points) {
+  const colors = chartColors();
+  const cell = 84;
+  const cols = Math.min(6, Math.max(1, Math.ceil(Math.sqrt(points.length))));
+  const rows = Math.ceil(points.length / cols);
+  const max = Math.max(...points.map((point) => point.value), 1);
+  const cells = points.map((point, index) => {
+    const col = index % cols;
+    const row = Math.floor(index / cols);
+    const intensity = Math.max(0.18, point.value / max);
+    return `
+      <g>
+        <rect class="heatmap-cell" x="${col * cell}" y="${row * cell}" width="${cell - 5}" height="${cell - 5}" rx="5" fill="${colors[index % colors.length]}" opacity="${intensity}"></rect>
+        <text class="heatmap-label" x="${col * cell + 8}" y="${row * cell + 22}">${esc(shortLabel(point.label, 10))}</text>
+        ${state.chart.showDataLabels ? `<text class="heatmap-value" x="${col * cell + 8}" y="${row * cell + 43}">${esc(formatChartNumber(point.value))}</text>` : ''}
+      </g>
+    `;
+  }).join('');
+  return `<svg class="chart-svg heatmap-svg" width="${cols * cell}" height="${rows * cell}" viewBox="0 0 ${cols * cell} ${rows * cell}" role="img">${cells}</svg>`;
+}
+
+function renderDonutChart(points, type = 'donut') {
   const total = points.reduce((sum, point) => sum + Math.max(point.value, 0), 0) || 1;
   let offset = 0;
-  const colors = ['#0176d3', '#2e844a', '#ba0517', '#dd7a01', '#747474', '#706eec', '#06a59a', '#8e44ad', '#e67e22', '#1b96ff', '#45c65a', '#ffb75d'];
+  const colors = chartColors();
+  const strokeWidth = type === 'pie' ? 52 : 28;
   const segments = points.map((point, index) => {
     const pct = Math.max(point.value, 0) / total;
     const dash = `${pct * 100} ${100 - pct * 100}`;
@@ -789,12 +1753,12 @@ function renderDonutChart(points) {
   const legend = points.map((point, index) => `
     <div class="chart-legend-item"><span style="background:${colors[index % colors.length]}"></span>${esc(shortLabel(point.label, 22))} <strong>${esc(formatChartNumber(point.value))}</strong></div>
   `).join('');
-  return `<div class="donut-chart">
-    <svg class="donut-svg" viewBox="0 0 180 180" role="img">
+  return `<div class="donut-chart ${type === 'pie' ? 'pie-chart' : ''}">
+    <svg class="donut-svg" viewBox="0 0 180 180" role="img" style="--donut-stroke:${strokeWidth}">
       <circle class="donut-track" r="52" cx="90" cy="90"></circle>
       ${segments}
-      <text class="donut-total" x="90" y="86" text-anchor="middle">${esc(formatChartNumber(total))}</text>
-      <text class="donut-caption" x="90" y="105" text-anchor="middle">Total</text>
+      ${type === 'pie' ? '' : `<text class="donut-total" x="90" y="86" text-anchor="middle">${esc(formatChartNumber(total))}</text>
+      <text class="donut-caption" x="90" y="105" text-anchor="middle">Total</text>`}
     </svg>
     <div class="chart-legend">${legend}</div>
   </div>`;
@@ -824,9 +1788,9 @@ function renderMatrixTable(result, columns) {
 
   $('reportResultsBody').innerHTML = (result.rows || []).map((row) => `
     <tr>
-      ${rowGroupColumns.map((column) => `<td class="matrix-row-header">${esc(readPath(row, column.field) ?? '')}</td>`).join('')}
-      ${matrixColumns.map((column) => `<td class="matrix-value-cell">${esc(readPath(row, column.field) ?? 0)}</td>`).join('')}
-      ${totalColumn ? `<td class="matrix-total-cell">${esc(readPath(row, totalColumn.field) ?? 0)}</td>` : ''}
+      ${rowGroupColumns.map((column) => `<td class="matrix-row-header ${cellFormatClass(row, column.field)}">${esc(readPath(row, column.field) ?? '')}</td>`).join('')}
+      ${matrixColumns.map((column) => `<td class="matrix-value-cell ${cellFormatClass(row, column.field)}">${esc(readPath(row, column.field) ?? 0)}</td>`).join('')}
+      ${totalColumn ? `<td class="matrix-total-cell ${cellFormatClass(row, totalColumn.field)}">${esc(readPath(row, totalColumn.field) ?? 0)}</td>` : ''}
     </tr>
   `).join('') || `<tr><td colspan="${Math.max(columns.length, 1)}" class="muted" style="text-align:center;padding:32px">No rows found</td></tr>`;
 
@@ -865,7 +1829,7 @@ function renderSummaryTable(result, columns) {
           <button class="group-toggle" onclick="toggleSummaryGroup('${key}')">${expanded ? '−' : '+'}</button>
           ${esc(groupLabel)}${rowCountDisplay}
         </td>
-        ${aggregateColumns.map((column) => `<td>${esc(summary[column.field] ?? '')}</td>`).join('')}
+        ${aggregateColumns.map((column) => `<td class="${cellFormatClass(summary, column.field)}">${esc(summary[column.field] ?? '')}</td>`).join('')}
       </tr>
     `);
 
@@ -883,7 +1847,7 @@ function renderSummaryTable(result, columns) {
         bodyRows.push(`
           <tr class="summary-total-row">
             <td colspan="${Math.max(groupCount, 1)}">Subtotal</td>
-            ${aggregateColumns.map((column) => `<td>${esc(summary[column.field] ?? '')}</td>`).join('')}
+            ${aggregateColumns.map((column) => `<td class="${cellFormatClass(summary, column.field)}">${esc(summary[column.field] ?? '')}</td>`).join('')}
           </tr>
         `);
       }
@@ -912,16 +1876,49 @@ function toggleSummaryGroup(key) {
 }
 
 function renderSummaryFieldOptions() {
-  const options = ['<option value="">None</option>']
-    .concat(state.fields.map((field) => `<option value="${esc(field.name)}">${esc(field.label)}</option>`))
+  const previous = {
+    rowOne: $('summaryGroupOne')?.value || '',
+    rowTwo: $('summaryGroupTwo')?.value || '',
+    matrix: $('matrixColumnGroup')?.value || '',
+    aggregate: $('summaryAggregateField')?.value || ''
+  };
+  const groupOptions = ['<option value="">None</option>']
+    .concat(reportGroupingFields().map((field) => `<option value="${esc(field.name)}">${esc(field.label)}</option>`))
     .join('');
-  $('summaryGroupOne').innerHTML = options;
-  $('summaryGroupTwo').innerHTML = options;
-  $('matrixColumnGroup').innerHTML = options;
-  $('summaryAggregateField').innerHTML = options;
+  const aggregateOptions = ['<option value="">None</option>']
+    .concat(reportAggregateFields().map((field) => `<option value="${esc(field.name)}">${esc(field.label)}</option>`))
+    .join('');
+  $('summaryGroupOne').innerHTML = groupOptions;
+  $('summaryGroupTwo').innerHTML = groupOptions;
+  $('matrixColumnGroup').innerHTML = groupOptions;
+  $('summaryAggregateField').innerHTML = aggregateOptions;
+  restoreSelectValue('summaryGroupOne', previous.rowOne);
+  restoreSelectValue('summaryGroupTwo', previous.rowTwo);
+  restoreSelectValue('matrixColumnGroup', previous.matrix);
+  restoreSelectValue('summaryAggregateField', previous.aggregate);
   syncAggregateFieldState();
   renderGroupChips();
   renderColumnGroupChips();
+}
+
+function restoreSelectValue(id, value) {
+  if (!value || !$(`${id}`)) return;
+  if ([...$(id).options].some((option) => option.value === value)) $(id).value = value;
+}
+
+function reportGroupingFields() {
+  return [
+    ...state.fields.map((field) => ({ name: field.name, label: field.label, virtual: false })),
+    ...state.bucketFields.map((field) => ({ name: field.fieldName, label: field.label, virtual: true })),
+    ...state.rowFormulas.map((field) => ({ name: field.fieldName, label: field.label, virtual: true }))
+  ];
+}
+
+function reportAggregateFields() {
+  return [
+    ...state.fields.map((field) => ({ name: field.name, label: field.label })),
+    ...state.rowFormulas.map((field) => ({ name: field.fieldName, label: field.label }))
+  ];
 }
 
 function syncReportTypeUi() {
@@ -930,6 +1927,7 @@ function syncReportTypeUi() {
   $('summaryConfig').style.display = isSummary || isMatrix ? '' : 'none';
   $('matrixColumnConfig').style.display = isMatrix ? '' : 'none';
   $('summaryGroupTwo').style.display = isMatrix ? 'none' : '';
+  if ($('reportObject')) $('reportObject').disabled = Boolean($('reportTypeSource')?.value);
   $('runReportBtn').textContent = reportRunLabel();
   $('reportName').placeholder = isMatrix ? 'New Matrix Report' : isSummary ? 'New Summary Report' : 'New Tabular Report';
   renderGroupChips();
@@ -981,6 +1979,842 @@ function renderFilters() {
       </span>
     `).join('')
     : '<span class="muted">No filters. All records allowed by security are included in preview.</span>';
+}
+
+function addCrossFilter() {
+  openCrossFilterModal();
+}
+
+function editCrossFilter(index) {
+  openCrossFilterModal(index);
+}
+
+function duplicateCrossFilter(index) {
+  const source = state.crossFilters[index];
+  if (!source) return;
+  state.crossFilters.push({ ...JSON.parse(JSON.stringify(source)), id: `cf_${Date.now()}` });
+  markDirtyAndPreview();
+  renderCrossFilters();
+}
+
+function removeCrossFilter(index) {
+  state.crossFilters.splice(index, 1);
+  markDirtyAndPreview();
+  renderCrossFilters();
+}
+
+function renderCrossFilters() {
+  const target = $('crossFilterChips');
+  if (!target) return;
+  target.innerHTML = state.crossFilters.length
+    ? state.crossFilters.map((filter, index) => `
+      <span class="field-pill metadata-pill">
+        ${esc(crossFilterLabel(filter))}
+        ${metadataActions('editCrossFilter', 'duplicateCrossFilter', 'removeCrossFilter', index)}
+      </span>
+    `).join('')
+    : '';
+}
+
+function openCrossFilterModal(index = null) {
+  const filter = state.crossFilters[index] || defaultCrossFilter();
+  openAdvancedModal({
+    title: index === null ? 'New Cross Filter' : 'Edit Cross Filter',
+    saveLabel: index === null ? 'Create Cross Filter' : 'Save Cross Filter',
+    body: renderCrossFilterModalBody(filter),
+    onOpen: () => {
+      $('crossFilterRelationship').addEventListener('change', () => renderCrossSubfilters(readCrossSubfilters()));
+      renderCrossSubfilters(filter.subfilters || []);
+    },
+    onSave: () => {
+      const relationship = crossFilterRelationshipOptions().find((item) => item.key === $('crossFilterRelationship').value);
+      if (!relationship) return setAdvancedValidation('Select a relationship.');
+      const next = {
+        id: filter.id || `cf_${Date.now()}`,
+        type: $('crossFilterType').value,
+        parentObject: relationship.parentObject,
+        childObject: relationship.childObject,
+        parentField: relationship.parentField,
+        label: `${relationship.parentObject} ${$('crossFilterType').value.toUpperCase()} ${relationship.childObject}`,
+        subfilters: readCrossSubfilters()
+      };
+      if (index === null) state.crossFilters.push(next);
+      else state.crossFilters[index] = next;
+      closeAdvancedModal();
+      markDirtyAndPreview();
+      renderCrossFilters();
+    }
+  });
+}
+
+function renderCrossFilterModalBody(filter) {
+  const options = crossFilterRelationshipOptions();
+  const selectedKey = crossFilterKey(filter) || options[0]?.key || '';
+  return `
+    <div class="advanced-modal-grid">
+      <label>Relationship<select id="crossFilterRelationship">
+        ${options.map((option) => `<option value="${esc(option.key)}" ${selectedKey === option.key ? 'selected' : ''}>${esc(option.parentObject)} / ${esc(option.childObject)}</option>`).join('')}
+      </select></label>
+      <label>Filter Type<select id="crossFilterType">
+        <option value="with" ${filter.type !== 'without' ? 'selected' : ''}>WITH related records</option>
+        <option value="without" ${filter.type === 'without' ? 'selected' : ''}>WITHOUT related records</option>
+      </select></label>
+    </div>
+    <div class="advanced-modal-section">
+      <div class="advanced-modal-title">Sub-filters</div>
+      <div id="crossSubfilterRows"></div>
+      <button class="btn btn-ghost" type="button" onclick="addCrossSubfilterRow()">+ Add Sub-filter</button>
+    </div>
+    <div class="advanced-preview-box">Example: Accounts WITH Opportunities WHERE StageName = Closed Won.</div>
+    <div id="advancedValidation" class="advanced-validation"></div>
+  `;
+}
+
+function renderCrossSubfilters(filters = []) {
+  const relationship = crossFilterRelationshipOptions().find((item) => item.key === $('crossFilterRelationship')?.value) || crossFilterRelationshipOptions()[0];
+  const fields = crossFilterFields(relationship?.childObject);
+  $('crossSubfilterRows').innerHTML = (filters.length ? filters : []).map((filter, index) => `
+    <div class="bucket-definition-row cross-subfilter-row">
+      <select class="cross-subfilter-field">
+        ${fields.map((field) => `<option value="${esc(field.name)}" ${filter.field === field.name ? 'selected' : ''}>${esc(field.label)}</option>`).join('')}
+      </select>
+      <select class="cross-subfilter-operator">
+        ${['eq', 'neq', 'contains', 'starts_with', 'gt', 'gte', 'lt', 'lte', 'is_null', 'is_not_null'].map((op) => `<option value="${op}" ${filter.operator === op ? 'selected' : ''}>${esc(operatorLabel(op))}</option>`).join('')}
+      </select>
+      <input class="cross-subfilter-value" value="${esc(filter.value || '')}" placeholder="Value">
+      <button type="button" onclick="removeCrossSubfilterRow(${index})">&times;</button>
+    </div>
+  `).join('') || '<div class="muted">No sub-filters. The relationship alone will be evaluated.</div>';
+}
+
+function addCrossSubfilterRow() {
+  const rows = readCrossSubfilters();
+  const relationship = crossFilterRelationshipOptions().find((item) => item.key === $('crossFilterRelationship')?.value) || crossFilterRelationshipOptions()[0];
+  const field = crossFilterFields(relationship?.childObject)[0]?.name || 'Name';
+  rows.push({ field, operator: 'eq', value: '' });
+  renderCrossSubfilters(rows);
+}
+
+function removeCrossSubfilterRow(index) {
+  const rows = readCrossSubfilters();
+  rows.splice(index, 1);
+  renderCrossSubfilters(rows);
+}
+
+function readCrossSubfilters() {
+  return [...document.querySelectorAll('#crossSubfilterRows .cross-subfilter-row')].map((row) => ({
+    field: row.querySelector('.cross-subfilter-field')?.value || '',
+    operator: row.querySelector('.cross-subfilter-operator')?.value || 'eq',
+    value: row.querySelector('.cross-subfilter-value')?.value || ''
+  })).filter((filter) => filter.field);
+}
+
+function defaultCrossFilter() {
+  const relationship = crossFilterRelationshipOptions()[0] || { parentObject: 'Account', childObject: 'Contact', parentField: 'AccountId' };
+  return {
+    id: `cf_${Date.now()}`,
+    type: 'with',
+    parentObject: relationship.parentObject,
+    childObject: relationship.childObject,
+    parentField: relationship.parentField,
+    subfilters: []
+  };
+}
+
+function crossFilterRelationshipOptions() {
+  const primary = $('reportObject')?.value || 'Account';
+  const options = [];
+  if (primary === 'Account') {
+    options.push(
+      { key: 'Account:Contact:AccountId', parentObject: 'Account', childObject: 'Contact', parentField: 'AccountId' },
+      { key: 'Account:Opportunity:AccountId', parentObject: 'Account', childObject: 'Opportunity', parentField: 'AccountId' },
+      { key: 'Account:Case:AccountId', parentObject: 'Account', childObject: 'Case', parentField: 'AccountId' }
+    );
+  }
+  if (primary === 'Campaign') {
+    options.push({ key: 'Campaign:Lead:CampaignId', parentObject: 'Campaign', childObject: 'Lead', parentField: 'CampaignId' });
+  }
+  return options.length ? options : [{ key: 'Account:Contact:AccountId', parentObject: 'Account', childObject: 'Contact', parentField: 'AccountId' }];
+}
+
+function crossFilterFields(childObject) {
+  const fields = {
+    Contact: [
+      { name: 'Name', label: 'Contact Name' },
+      { name: 'Email', label: 'Email' },
+      { name: 'Title', label: 'Title' },
+      { name: 'Phone', label: 'Phone' }
+    ],
+    Opportunity: [
+      { name: 'Name', label: 'Opportunity Name' },
+      { name: 'StageName', label: 'Stage' },
+      { name: 'Amount', label: 'Amount' },
+      { name: 'CloseDate', label: 'Close Date' }
+    ],
+    Case: [
+      { name: 'CaseNumber', label: 'Case Number' },
+      { name: 'Status', label: 'Status' },
+      { name: 'Priority', label: 'Priority' },
+      { name: 'Subject', label: 'Subject' }
+    ],
+    Lead: [
+      { name: 'Name', label: 'Lead Name' },
+      { name: 'Company', label: 'Company' },
+      { name: 'Status', label: 'Status' },
+      { name: 'Email', label: 'Email' }
+    ]
+  };
+  return fields[childObject] || [{ name: 'Name', label: 'Name' }];
+}
+
+function crossFilterKey(filter) {
+  return filter?.parentObject && filter?.childObject && filter?.parentField
+    ? `${filter.parentObject}:${filter.childObject}:${filter.parentField}`
+    : '';
+}
+
+function crossFilterLabel(filter) {
+  const type = filter.type === 'without' ? 'WITHOUT' : 'WITH';
+  const subfilters = (filter.subfilters || []).length
+    ? ` WHERE ${(filter.subfilters || []).map((item) => `${item.field} ${operatorLabel(item.operator)} ${item.value || ''}`).join(' AND ')}`
+    : '';
+  return `${filter.parentObject || $('reportObject')?.value || 'Records'} ${type} ${filter.childObject}${subfilters}`;
+}
+
+function addBucketField() {
+  openBucketFieldModal();
+}
+
+function editBucketField(index) {
+  openBucketFieldModal(index);
+}
+
+function removeBucketField(index) {
+  state.bucketFields.splice(index, 1);
+  markDirtyAndPreview();
+  renderAdvancedMetadata();
+}
+
+function duplicateBucketField(index) {
+  const item = state.bucketFields[index];
+  if (!item) return;
+  state.bucketFields.push({ ...JSON.parse(JSON.stringify(item)), fieldName: derivedFieldName('bucket', `${item.label} Copy`), label: `${item.label} Copy` });
+  markDirtyAndPreview();
+  renderAdvancedMetadata();
+}
+
+function addRowFormula() {
+  openRowFormulaModal();
+}
+
+function editRowFormula(index) {
+  openRowFormulaModal(index);
+}
+
+function removeRowFormula(index) {
+  state.rowFormulas.splice(index, 1);
+  markDirtyAndPreview();
+  renderAdvancedMetadata();
+}
+
+function duplicateRowFormula(index) {
+  const item = state.rowFormulas[index];
+  if (!item) return;
+  state.rowFormulas.push({ ...JSON.parse(JSON.stringify(item)), fieldName: derivedFieldName('formula', `${item.label} Copy`), label: `${item.label} Copy` });
+  markDirtyAndPreview();
+  renderAdvancedMetadata();
+}
+
+function addSummaryFormula() {
+  if (!['summary', 'matrix'].includes($('reportType').value)) {
+    return toast('Summary formulas are available for summary and matrix reports', 'info');
+  }
+  openSummaryFormulaModal();
+}
+
+function editSummaryFormula(index) {
+  openSummaryFormulaModal(index);
+}
+
+function removeSummaryFormula(index) {
+  state.summaryFormulas.splice(index, 1);
+  markDirtyAndPreview();
+  renderAdvancedMetadata();
+}
+
+function duplicateSummaryFormula(index) {
+  const item = state.summaryFormulas[index];
+  if (!item) return;
+  state.summaryFormulas.push({ ...JSON.parse(JSON.stringify(item)), fieldName: derivedFieldName('summary', `${item.label} Copy`), label: `${item.label} Copy` });
+  markDirtyAndPreview();
+  renderAdvancedMetadata();
+}
+
+function addConditionalFormat() {
+  openConditionalFormatModal();
+}
+
+function editConditionalFormat(index) {
+  openConditionalFormatModal(index);
+}
+
+function removeConditionalFormat(index) {
+  state.conditionalFormatting.splice(index, 1);
+  markDirtyAndPreview();
+  renderAdvancedMetadata();
+}
+
+function duplicateConditionalFormat(index) {
+  const item = state.conditionalFormatting[index];
+  if (!item) return;
+  state.conditionalFormatting.push({ ...JSON.parse(JSON.stringify(item)) });
+  markDirtyAndPreview();
+  renderAdvancedMetadata();
+}
+
+function renderAdvancedMetadata() {
+  renderMetadataChips('bucketFieldChips', state.bucketFields, (bucket, index) => (
+    `${esc(bucket.label)} from ${esc(labelForField(bucket.sourceField))}${metadataActions('editBucketField', 'duplicateBucketField', 'removeBucketField', index)}`
+  ), 'No bucket fields.');
+  renderMetadataChips('rowFormulaChips', state.rowFormulas, (formula, index) => (
+    `${esc(formula.label)}${metadataActions('editRowFormula', 'duplicateRowFormula', 'removeRowFormula', index)}`
+  ), 'No row formulas.');
+  renderMetadataChips('summaryFormulaChips', state.summaryFormulas, (formula, index) => (
+    `${esc(formula.label)}${metadataActions('editSummaryFormula', 'duplicateSummaryFormula', 'removeSummaryFormula', index)}`
+  ), 'No summary formulas.');
+  renderMetadataChips('conditionalFormatChips', state.conditionalFormatting, (rule, index) => (
+    `${esc(labelForField(rule.field))} ${esc(operatorLabel(rule.operator))} ${esc(rule.value || '')}${metadataActions('editConditionalFormat', 'duplicateConditionalFormat', 'removeConditionalFormat', index)}`
+  ), 'No formatting rules.');
+  renderMetadataChips('advancedFieldChips', advancedMetadataItems(), (item) => item.html, 'No buckets, formulas, or formatting rules.');
+}
+
+function advancedMetadataItems() {
+  return [
+    ...state.bucketFields.map((bucket, index) => ({
+      html: `<strong>Bucket</strong> ${esc(bucket.label)} from ${esc(labelForField(bucket.sourceField))}${metadataActions('editBucketField', 'duplicateBucketField', 'removeBucketField', index)}`
+    })),
+    ...state.rowFormulas.map((formula, index) => ({
+      html: `<strong>Row Formula</strong> ${esc(formula.label)}${metadataActions('editRowFormula', 'duplicateRowFormula', 'removeRowFormula', index)}`
+    })),
+    ...state.summaryFormulas.map((formula, index) => ({
+      html: `<strong>Summary Formula</strong> ${esc(formula.label)}${metadataActions('editSummaryFormula', 'duplicateSummaryFormula', 'removeSummaryFormula', index)}`
+    })),
+    ...state.conditionalFormatting.map((rule, index) => ({
+      html: `<strong>Format</strong> ${esc(labelForField(rule.field))} ${esc(operatorLabel(rule.operator))} ${esc(rule.value || '')}${metadataActions('editConditionalFormat', 'duplicateConditionalFormat', 'removeConditionalFormat', index)}`
+    }))
+  ];
+}
+
+function metadataActions(editFn, duplicateFn, removeFn, index) {
+  return `<button title="Edit" onclick="${editFn}(${index})">Edit</button><button title="Duplicate" onclick="${duplicateFn}(${index})">Copy</button><button title="Delete" onclick="${removeFn}(${index})">&times;</button>`;
+}
+
+function renderMetadataChips(targetId, items, renderer, emptyText) {
+  const target = $(targetId);
+  if (!target) return;
+  target.innerHTML = items.length
+    ? items.map((item, index) => `<span class="field-pill metadata-pill">${renderer(item, index)}</span>`).join('')
+    : `<span class="muted">${esc(emptyText)}</span>`;
+}
+
+function openBucketFieldModal(index = null) {
+  const bucket = state.bucketFields[index] || {
+    label: '',
+    sourceField: state.fields[0]?.name || '',
+    bucketType: 'text',
+    defaultLabel: 'Other',
+    rules: [
+      { label: 'Small', operator: 'between', min: 0, max: 100000 },
+      { label: 'Medium', operator: 'between', min: 100001, max: 1000000 },
+      { label: 'Enterprise', operator: 'gt', value: 1000000 }
+    ]
+  };
+  openAdvancedModal({
+    title: index === null ? 'New Bucket Field' : 'Edit Bucket Field',
+    saveLabel: index === null ? 'Create Bucket' : 'Save Bucket',
+    body: renderBucketModalBody(bucket),
+    onOpen: () => {
+      $('bucketModalName').value = bucket.label || '';
+      $('bucketModalSource').value = bucket.sourceField || state.fields[0]?.name || '';
+      $('bucketModalType').value = bucket.bucketType || 'text';
+      renderBucketDefinitionRows(bucket.rules || []);
+      refreshBucketPreview();
+    },
+    onSave: () => {
+      const label = $('bucketModalName').value.trim();
+      const sourceField = $('bucketModalSource').value;
+      const rules = readBucketDefinitionRows();
+      if (!label) return setAdvancedValidation('Bucket name is required.');
+      if (!sourceField) return setAdvancedValidation('Select a source field.');
+      if (!rules.length) return setAdvancedValidation('Add at least one bucket definition.');
+      const next = {
+        fieldName: bucket.fieldName || derivedFieldName('bucket', label),
+        label,
+        sourceField,
+        bucketType: $('bucketModalType').value,
+        defaultLabel: 'Other',
+        rules
+      };
+      if (index === null) state.bucketFields.push(next);
+      else state.bucketFields[index] = next;
+      closeAdvancedModal();
+      markDirtyAndPreview();
+      renderAdvancedMetadata();
+    }
+  });
+}
+
+function renderBucketModalBody(bucket) {
+  return `
+    <div class="advanced-modal-grid bucket-modal-grid">
+      <label>Bucket Name<input id="bucketModalName" placeholder="e.g. Revenue Segment"></label>
+      <label>Source Field<select id="bucketModalSource">${fieldOptions(bucket.sourceField)}</select></label>
+      <label>Bucket Type<select id="bucketModalType">
+        <option value="numeric">Numeric</option>
+        <option value="text">Text</option>
+        <option value="picklist">Picklist</option>
+      </select></label>
+    </div>
+    <div class="advanced-modal-section">
+      <div class="advanced-modal-title">Bucket Definitions</div>
+      <div class="bucket-definition-table">
+        <div class="bucket-definition-head"><span>Name</span><span>Operator</span><span>Value / Range</span><span></span></div>
+        <div id="bucketDefinitionRows"></div>
+      </div>
+      <button class="btn btn-ghost" type="button" onclick="addBucketDefinitionRow()">+ Add Bucket</button>
+    </div>
+    <div class="advanced-modal-section">
+      <div class="advanced-modal-title">Preview Results</div>
+      <div id="bucketPreview" class="advanced-preview-box"></div>
+    </div>
+    <div id="advancedValidation" class="advanced-validation"></div>
+  `;
+}
+
+function renderBucketDefinitionRows(rules = []) {
+  $('bucketDefinitionRows').innerHTML = (rules.length ? rules : [{ label: '', operator: 'eq', values: [] }]).map((rule, index) => `
+    <div class="bucket-definition-row" data-index="${index}">
+      <input class="bucket-rule-label" value="${esc(rule.label || '')}" placeholder="Bucket label">
+      <select class="bucket-rule-operator">
+        ${['eq', 'contains', 'starts_with', 'between', 'gt', 'gte', 'lt', 'lte', 'is_blank'].map((op) => `<option value="${op}" ${rule.operator === op ? 'selected' : ''}>${esc(bucketOperatorLabel(op))}</option>`).join('')}
+      </select>
+      <input class="bucket-rule-value" value="${esc(bucketRuleValue(rule))}" placeholder="Value, value1,value2, or min-max">
+      <div class="bucket-row-actions">
+        <button type="button" onclick="moveBucketDefinitionRow(${index}, -1)">↑</button>
+        <button type="button" onclick="moveBucketDefinitionRow(${index}, 1)">↓</button>
+        <button type="button" onclick="removeBucketDefinitionRow(${index})">×</button>
+      </div>
+    </div>
+  `).join('');
+  document.querySelectorAll('#bucketDefinitionRows input, #bucketDefinitionRows select, #bucketModalSource').forEach((el) => {
+    el.addEventListener('input', refreshBucketPreview);
+    el.addEventListener('change', refreshBucketPreview);
+  });
+}
+
+function addBucketDefinitionRow() {
+  const rules = readBucketDefinitionRows();
+  rules.push({ label: '', operator: 'eq', values: [] });
+  renderBucketDefinitionRows(rules);
+  refreshBucketPreview();
+}
+
+function removeBucketDefinitionRow(index) {
+  const rules = readBucketDefinitionRows();
+  rules.splice(index, 1);
+  renderBucketDefinitionRows(rules);
+  refreshBucketPreview();
+}
+
+function moveBucketDefinitionRow(index, direction) {
+  const rules = readBucketDefinitionRows();
+  const target = index + direction;
+  if (target < 0 || target >= rules.length) return;
+  [rules[index], rules[target]] = [rules[target], rules[index]];
+  renderBucketDefinitionRows(rules);
+  refreshBucketPreview();
+}
+
+function readBucketDefinitionRows() {
+  return [...document.querySelectorAll('#bucketDefinitionRows .bucket-definition-row')]
+    .map((row) => parseBucketRule(
+      row.querySelector('.bucket-rule-label')?.value,
+      row.querySelector('.bucket-rule-operator')?.value,
+      row.querySelector('.bucket-rule-value')?.value
+    ))
+    .filter((rule) => rule.label);
+}
+
+function parseBucketRule(label, operator, valueText) {
+  const rule = { label: String(label || '').trim(), operator: operator || 'eq' };
+  const text = String(valueText || '').trim();
+  if (operator === 'between') {
+    const [min, max] = text.split('-').map((part) => Number(part.trim()));
+    rule.min = Number.isFinite(min) ? min : null;
+    rule.max = Number.isFinite(max) ? max : null;
+  } else if (operator === 'eq' && text.includes(',')) {
+    rule.values = text.split(',').map((value) => value.trim()).filter(Boolean);
+  } else {
+    rule.value = text;
+  }
+  return rule;
+}
+
+function bucketRuleValue(rule) {
+  if (rule.operator === 'between') return `${rule.min ?? ''}-${rule.max ?? ''}`;
+  if (Array.isArray(rule.values) && rule.values.length) return rule.values.join(', ');
+  return rule.value ?? '';
+}
+
+function refreshBucketPreview() {
+  const target = $('bucketPreview');
+  if (!target) return;
+  const field = $('bucketModalSource')?.value;
+  const rules = readBucketDefinitionRows();
+  const rows = (window.currentReportResult?.rows || []).slice(0, 20);
+  if (!field || !rows.length) {
+    target.innerHTML = '<span class="muted">Run Preview to see bucket sample results.</span>';
+    return;
+  }
+  const counts = {};
+  rows.forEach((row) => {
+    const label = previewBucketValue(readPath(row, field), rules);
+    counts[label] = (counts[label] || 0) + 1;
+  });
+  target.innerHTML = Object.entries(counts).map(([label, count]) => `<span class="preview-chip">${esc(label)}: ${count}</span>`).join('');
+}
+
+function previewBucketValue(value, rules) {
+  const text = String(value ?? '');
+  const number = Number(value);
+  const match = rules.find((rule) => {
+    if (rule.operator === 'is_blank') return text === '';
+    if (rule.operator === 'between') return Number.isFinite(number) && number >= Number(rule.min) && number <= Number(rule.max);
+    if (['gt', 'gte', 'lt', 'lte'].includes(rule.operator)) {
+      const right = Number(rule.value);
+      if (!Number.isFinite(number) || !Number.isFinite(right)) return false;
+      if (rule.operator === 'gt') return number > right;
+      if (rule.operator === 'gte') return number >= right;
+      if (rule.operator === 'lt') return number < right;
+      return number <= right;
+    }
+    if (rule.operator === 'contains') return text.toLowerCase().includes(String(rule.value || '').toLowerCase());
+    if (rule.operator === 'starts_with') return text.toLowerCase().startsWith(String(rule.value || '').toLowerCase());
+    if (Array.isArray(rule.values) && rule.values.length) return rule.values.includes(text);
+    return text === String(rule.value ?? '');
+  });
+  return match?.label || 'Other';
+}
+
+function openRowFormulaModal(index = null) {
+  const formula = state.rowFormulas[index] || { label: '', formula: '', format: 'number' };
+  openFormulaModal({
+    mode: 'row',
+    title: index === null ? 'New Row Formula' : 'Edit Row Formula',
+    formula,
+    onSave: (next) => {
+      const value = { fieldName: formula.fieldName || derivedFieldName('row', next.label), ...next };
+      if (index === null) state.rowFormulas.push(value);
+      else state.rowFormulas[index] = value;
+    }
+  });
+}
+
+function openSummaryFormulaModal(index = null) {
+  const formula = state.summaryFormulas[index] || { label: '', formula: '', format: 'number' };
+  openFormulaModal({
+    mode: 'summary',
+    title: index === null ? 'New Summary Formula' : 'Edit Summary Formula',
+    formula,
+    onSave: (next) => {
+      const value = { fieldName: formula.fieldName || derivedFieldName('summary', next.label), ...next };
+      if (index === null) state.summaryFormulas.push(value);
+      else state.summaryFormulas[index] = value;
+    }
+  });
+}
+
+function openFormulaModal({ mode, title, formula, onSave }) {
+  openAdvancedModal({
+    title,
+    saveLabel: 'Save Formula',
+    body: `
+      <div class="formula-builder">
+        <aside class="formula-fields-panel">
+          <div class="advanced-modal-title">${mode === 'summary' ? 'Aggregate References' : 'Available Fields'}</div>
+          <input id="formulaFieldSearch" placeholder="Search fields...">
+          <div id="formulaFieldList" class="formula-field-list"></div>
+        </aside>
+        <section class="formula-editor-panel">
+          <div class="advanced-modal-grid">
+            <label>Formula Name<input id="formulaModalName" placeholder="e.g. Weighted Revenue"></label>
+            <label>Return Type<select id="formulaReturnType">
+              <option value="number">Number</option>
+              <option value="currency">Currency</option>
+              <option value="percent">Percent</option>
+            </select></label>
+          </div>
+          <label class="formula-expression-label">Formula Expression<textarea id="formulaExpression" rows="7" placeholder="${mode === 'summary' ? 'SUM(AnnualRevenue) / COUNT(Id)' : '{Amount} * 0.1'}"></textarea></label>
+          <div class="formula-actions">
+            <button class="btn btn-ghost" type="button" onclick="validateFormulaModal('${mode}')">Validate Formula</button>
+            <button class="btn btn-ghost" type="button" onclick="previewFormulaModal('${mode}')">Preview</button>
+          </div>
+          <div id="formulaValidation" class="advanced-validation"></div>
+          <div id="formulaPreview" class="advanced-preview-box"></div>
+        </section>
+      </div>
+    `,
+    onOpen: () => {
+      $('formulaModalName').value = formula.label || '';
+      $('formulaReturnType').value = formula.format || formula.dataType || 'number';
+      $('formulaExpression').value = formula.formula || '';
+      renderFormulaFieldList(mode);
+      $('formulaFieldSearch').addEventListener('input', () => renderFormulaFieldList(mode));
+      $('formulaExpression').addEventListener('input', () => validateFormulaModal(mode, true));
+    },
+    onSave: () => {
+      const label = $('formulaModalName').value.trim();
+      const expression = $('formulaExpression').value.trim();
+      if (!label) return setAdvancedValidation('Formula name is required.', 'formulaValidation');
+      if (!expression) return setAdvancedValidation('Formula expression is required.', 'formulaValidation');
+      const normalized = mode === 'summary' ? normalizeSummaryFormulaExpression(expression) : expression;
+      const validation = validateFormulaExpression(normalized);
+      if (!validation.ok) return setAdvancedValidation(validation.message, 'formulaValidation');
+      onSave({ label, formula: normalized, format: $('formulaReturnType').value, dataType: $('formulaReturnType').value });
+      closeAdvancedModal();
+      markDirtyAndPreview();
+      renderAdvancedMetadata();
+    }
+  });
+}
+
+function renderFormulaFieldList(mode) {
+  const q = ($('formulaFieldSearch')?.value || '').toLowerCase();
+  const items = mode === 'summary' ? aggregateFormulaOptions() : state.fields.map((field) => ({
+    label: field.label,
+    token: `{${field.name}}`
+  }));
+  $('formulaFieldList').innerHTML = items
+    .filter((item) => !q || item.label.toLowerCase().includes(q) || item.token.toLowerCase().includes(q))
+    .map((item) => `<button type="button" onclick="insertFormulaToken('${escAttr(item.token)}')"><span>${esc(item.label)}</span><code>${esc(item.token)}</code></button>`)
+    .join('');
+}
+
+function aggregateFormulaOptions() {
+  const selected = $('summaryAggregateField')?.value;
+  const aggregateFn = $('summaryAggregateFn')?.value || 'count';
+  const options = [{ label: 'Record Count', token: '{agg_count_records}' }];
+  if (selected && aggregateFn !== 'count') {
+    options.push({ label: `${aggregateFn.toUpperCase()} ${labelForField(selected)}`, token: `{${aggregateAlias(aggregateFn, selected)}}` });
+  }
+  state.fields.slice(0, 40).forEach((field) => {
+    options.push({ label: `SUM(${field.label})`, token: `SUM(${field.name})` });
+    options.push({ label: `AVG(${field.label})`, token: `AVG(${field.name})` });
+  });
+  return options;
+}
+
+function insertFormulaToken(token) {
+  const input = $('formulaExpression');
+  if (!input) return;
+  const start = input.selectionStart || input.value.length;
+  const end = input.selectionEnd || input.value.length;
+  input.value = `${input.value.slice(0, start)}${token}${input.value.slice(end)}`;
+  input.focus();
+  input.selectionStart = input.selectionEnd = start + token.length;
+  validateFormulaModal('row', true);
+}
+
+function validateFormulaModal(mode, silent = false) {
+  const normalized = mode === 'summary'
+    ? normalizeSummaryFormulaExpression($('formulaExpression')?.value || '')
+    : $('formulaExpression')?.value || '';
+  const validation = validateFormulaExpression(normalized);
+  if (!silent || validation.ok) setAdvancedValidation(validation.ok ? 'Formula is valid.' : validation.message, 'formulaValidation', validation.ok ? 'ok' : 'err');
+  return validation.ok;
+}
+
+function previewFormulaModal(mode) {
+  const normalized = mode === 'summary'
+    ? normalizeSummaryFormulaExpression($('formulaExpression')?.value || '')
+    : $('formulaExpression')?.value || '';
+  const sample = mode === 'summary' ? sampleAggregateContext() : (window.currentReportResult?.rows || [])[0] || {};
+  const preview = evaluateFormulaPreview(normalized, sample);
+  $('formulaPreview').innerHTML = preview.ok
+    ? `<span class="preview-chip">Preview value: ${esc(preview.value)}</span>`
+    : `<span class="muted">${esc(preview.message)}</span>`;
+}
+
+function normalizeSummaryFormulaExpression(expression) {
+  return String(expression || '')
+    .replace(/\bCOUNT\s*\(\s*Id\s*\)/gi, '{agg_count_records}')
+    .replace(/\b(SUM|AVG|MIN|MAX)\s*\(\s*([A-Za-z_][A-Za-z0-9_.]*)\s*\)/gi, (_, fn, field) => `{${aggregateAlias(fn.toLowerCase(), field)}}`);
+}
+
+function aggregateAlias(fn, field) {
+  return `agg_${fn}_${field || 'records'}`.replace(/[^A-Za-z0-9_]/g, '_');
+}
+
+function validateFormulaExpression(expression) {
+  const replaced = String(expression || '').replace(/\{([^}]+)\}/g, '1');
+  if (!replaced.trim()) return { ok: false, message: 'Formula expression is required.' };
+  if (!/^[0-9+\-*/().\s]+$/.test(replaced)) {
+    return { ok: false, message: 'Only numeric operators and field tokens are supported in this release.' };
+  }
+  try {
+    Function(`"use strict"; return (${replaced});`)();
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, message: 'Formula syntax is not valid.' };
+  }
+}
+
+function evaluateFormulaPreview(expression, sample) {
+  const validation = validateFormulaExpression(expression);
+  if (!validation.ok) return validation;
+  const parsed = String(expression || '').replace(/\{([^}]+)\}/g, (_, token) => {
+    const number = Number(readPath(sample, token.trim()));
+    return Number.isFinite(number) ? String(number) : '0';
+  });
+  try {
+    const value = Function(`"use strict"; return (${parsed});`)();
+    return { ok: true, value: Number.isFinite(value) ? Math.round(value * 100) / 100 : '' };
+  } catch (err) {
+    return { ok: false, message: 'No preview value available.' };
+  }
+}
+
+function sampleAggregateContext() {
+  const row = (window.currentReportResult?.rows || [])[0] || {};
+  if (Object.keys(row).length) return row;
+  return { agg_count_records: 1 };
+}
+
+function openConditionalFormatModal(index = null) {
+  const rule = state.conditionalFormatting[index] || {
+    field: state.selectedFields[0] || state.bucketFields[0]?.fieldName || '',
+    operator: 'eq',
+    value: '',
+    style: 'yellow'
+  };
+  openAdvancedModal({
+    title: index === null ? 'New Conditional Formatting Rule' : 'Edit Conditional Formatting Rule',
+    saveLabel: 'Save Rule',
+    body: `
+      <div class="advanced-modal-grid">
+        <label>Target Field<select id="formatTargetField">${reportResultFieldOptions(rule.field)}</select></label>
+        <label>Operator<select id="formatOperator">
+          ${['eq', 'neq', 'contains', 'gt', 'gte', 'lt', 'lte', 'is_blank', 'is_not_blank'].map((op) => `<option value="${op}" ${rule.operator === op ? 'selected' : ''}>${esc(operatorLabel(op))}</option>`).join('')}
+        </select></label>
+        <label>Value<input id="formatValue" value="${esc(rule.value || '')}" placeholder="Compare value"></label>
+        <label>Style<select id="formatStyle">
+          ${['green', 'yellow', 'red', 'blue'].map((style) => `<option value="${style}" ${rule.style === style ? 'selected' : ''}>${esc(titleCase(style))}</option>`).join('')}
+        </select></label>
+      </div>
+      <div class="advanced-modal-section">
+        <div class="advanced-modal-title">Live Preview</div>
+        <div id="formatPreview" class="advanced-preview-box"></div>
+      </div>
+      <div id="advancedValidation" class="advanced-validation"></div>
+    `,
+    onOpen: () => {
+      ['formatTargetField', 'formatOperator', 'formatValue', 'formatStyle'].forEach((id) => {
+        $(id)?.addEventListener('input', refreshFormatPreview);
+        $(id)?.addEventListener('change', refreshFormatPreview);
+      });
+      refreshFormatPreview();
+    },
+    onSave: () => {
+      const next = {
+        field: $('formatTargetField').value,
+        operator: $('formatOperator').value,
+        value: $('formatValue').value,
+        style: $('formatStyle').value
+      };
+      if (!next.field) return setAdvancedValidation('Select a target field.');
+      if (!['is_blank', 'is_not_blank'].includes(next.operator) && !String(next.value).trim()) {
+        return setAdvancedValidation('Enter a comparison value.');
+      }
+      if (index === null) state.conditionalFormatting.push(next);
+      else state.conditionalFormatting[index] = next;
+      closeAdvancedModal();
+      markDirtyAndPreview();
+      renderAdvancedMetadata();
+    }
+  });
+}
+
+function reportResultFieldOptions(selected) {
+  const fields = [
+    ...state.selectedFields.map((field) => ({ field, label: labelForField(field) })),
+    ...state.bucketFields.map((field) => ({ field: field.fieldName, label: field.label })),
+    ...state.rowFormulas.map((field) => ({ field: field.fieldName, label: field.label })),
+    ...state.summaryFormulas.map((field) => ({ field: field.fieldName, label: field.label }))
+  ];
+  return fields.map((field) => `<option value="${esc(field.field)}" ${selected === field.field ? 'selected' : ''}>${esc(field.label)}</option>`).join('');
+}
+
+function refreshFormatPreview() {
+  const style = $('formatStyle')?.value || 'yellow';
+  const field = $('formatTargetField')?.value || '';
+  const label = labelForField(field);
+  $('formatPreview').innerHTML = `<span class="format-preview-cell report-cell-highlight report-cell-${esc(style)}">${esc(label)} will use ${esc(titleCase(style))} highlighting when the rule matches.</span>`;
+}
+
+function openAdvancedModal({ title, body, saveLabel = 'Save', onOpen, onSave }) {
+  $('advancedModalTitle').textContent = title;
+  $('advancedModalBody').innerHTML = body;
+  $('advancedModalSave').textContent = saveLabel;
+  $('advancedModalSave').onclick = onSave;
+  $('advancedReportModal').style.display = 'flex';
+  setAdvancedValidation('');
+  if (typeof onOpen === 'function') onOpen();
+}
+
+function closeAdvancedModal() {
+  if ($('advancedReportModal')) $('advancedReportModal').style.display = 'none';
+  if ($('advancedModalBody')) $('advancedModalBody').innerHTML = '';
+}
+
+function setAdvancedValidation(message, targetId = 'advancedValidation', type = 'err') {
+  const target = $(targetId);
+  if (!target) return false;
+  target.textContent = message || '';
+  target.className = `advanced-validation ${type === 'ok' ? 'ok' : ''}`;
+  return false;
+}
+
+function fieldOptions(selected) {
+  return state.fields.map((field) => `<option value="${esc(field.name)}" ${selected === field.name ? 'selected' : ''}>${esc(field.label)}</option>`).join('');
+}
+
+function bucketOperatorLabel(operator) {
+  return ({
+    eq: 'Equals any',
+    contains: 'Contains',
+    starts_with: 'Starts With',
+    between: 'Between',
+    gt: 'Greater Than',
+    gte: 'Greater Or Equal',
+    lt: 'Less Than',
+    lte: 'Less Or Equal',
+    is_blank: 'Is Blank'
+  })[operator] || operator;
+}
+
+function derivedFieldName(prefix, label) {
+  const slug = String(label || prefix)
+    .replace(/[^A-Za-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .slice(0, 40) || prefix;
+  return `${prefix}_${slug}`;
+}
+
+function markDirtyAndPreview() {
+  markDirty();
+  renderSummaryFieldOptions();
+  refreshChartFieldOptions(window.currentReportResult);
+  scheduleAutoPreview();
 }
 
 function renderGroupChips() {
@@ -1201,9 +3035,35 @@ function readPath(row, path) {
   return String(path || '').split('.').reduce((value, key) => value?.[key], row);
 }
 
+function cellFormatClass(row, field) {
+  const style = row?.__cellFormats?.[field];
+  if (!style) return '';
+  return `report-cell-highlight report-cell-${String(style).replace(/[^a-z0-9_-]/gi, '').toLowerCase() || 'yellow'}`;
+}
+
 function setBusy(button, busy, label) {
+  if (!button) return;
   button.disabled = busy;
-  button.textContent = label;
+  if (busy) {
+    button.dataset.originalText = button.dataset.originalText || button.textContent;
+    button.innerHTML = `<span class="btn-spinner"></span>${esc(label || 'Working...')}`;
+  } else {
+    button.textContent = label || button.dataset.originalText || 'Save';
+    delete button.dataset.originalText;
+  }
+}
+
+function setPageBusy(busy, message = 'Working...') {
+  let overlay = $('reportsPageBusy');
+  if (busy && !overlay) {
+    overlay = document.createElement('div');
+    overlay.id = 'reportsPageBusy';
+    overlay.className = 'reports-page-busy';
+    document.body.appendChild(overlay);
+  }
+  if (!overlay) return;
+  overlay.innerHTML = `<div class="reports-page-busy-box"><span class="mini-spinner"></span>${esc(message)}</div>`;
+  overlay.style.display = busy ? 'flex' : 'none';
 }
 
 function updateObjectChip() {
@@ -1265,4 +3125,8 @@ function esc(value) {
     '"': '&quot;',
     "'": '&#39;'
   }[char]));
+}
+
+function escAttr(value) {
+  return esc(value).replace(/`/g, '&#96;');
 }

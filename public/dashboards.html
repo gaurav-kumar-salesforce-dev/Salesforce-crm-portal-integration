@@ -127,6 +127,7 @@
           </div>
           <div class="builder-buttons">
             <button class="btn btn-ghost" id="addComponentBtn">+ Add Component</button>
+            <button class="btn btn-ghost" id="dashboardFiltersBtn">Global Filters</button>
             <button class="btn btn-ghost" id="refreshDashboardRunBtn">Refresh</button>
             <button class="btn btn-ghost" id="favoriteDashboardBtn">Favorite</button>
             <button class="btn btn-ghost" id="deleteDashboardBtn">Delete</button>
@@ -134,6 +135,7 @@
             <button class="btn btn-ghost" id="closeDashboardBtn">Close</button>
           </div>
         </div>
+        <div class="active-filters" id="dashboardGlobalFilters" style="padding:10px 22px;border-top:1px solid var(--border)"></div>
 
         <div class="dashboard-canvas" id="dashboardCanvas">
           <div class="dashboard-empty" id="dashboardEmpty">
@@ -179,6 +181,31 @@
       <div class="modal-footer">
         <button class="btn btn-ghost" id="cancelComponentBtn">Cancel</button>
         <button class="btn btn-primary" id="saveComponentBtn">Add Component</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal-backdrop" id="dashboardFilterModal" style="display:none">
+    <div class="modal-card dashboard-modal-card">
+      <div class="modal-header">
+        <h2>Dashboard Global Filter</h2>
+        <button class="modal-close" id="closeDashboardFilterModalBtn">&times;</button>
+      </div>
+      <div class="modal-body">
+        <label class="form-field"><span>Field API Name</span><input id="dashboardFilterField" placeholder="Account.Name or BillingCountry"></label>
+        <label class="form-field"><span>Operator</span>
+          <select id="dashboardFilterOperator">
+            <option value="eq">Equals</option>
+            <option value="contains">Contains</option>
+            <option value="starts_with">Starts With</option>
+            <option value="neq">Not Equal</option>
+          </select>
+        </label>
+        <label class="form-field"><span>Value</span><input id="dashboardFilterValue" placeholder="Filter value"></label>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-ghost" id="cancelDashboardFilterBtn">Cancel</button>
+        <button class="btn btn-primary" id="saveDashboardFilterBtn">Add Filter</button>
       </div>
     </div>
   </div>

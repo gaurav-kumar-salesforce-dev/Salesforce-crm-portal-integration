@@ -1,5 +1,7 @@
-const SUPPORTED_REPORT_TYPES = new Set(['tabular', 'summary', 'matrix']);
+const SUPPORTED_REPORT_TYPES = new Set(['tabular', 'summary', 'matrix', 'joined']);
 const SUPPORTED_AGGREGATES = new Set(['count', 'sum', 'avg', 'min', 'max', 'distinct_count']);
+const SUPPORTED_BUCKET_OPERATORS = new Set(['eq', 'neq', 'contains', 'starts_with', 'gt', 'gte', 'lt', 'lte', 'between', 'is_blank']);
+const SUPPORTED_HIGHLIGHT_OPERATORS = new Set(['eq', 'neq', 'contains', 'gt', 'gte', 'lt', 'lte', 'is_blank', 'is_not_blank']);
 const SUPPORTED_OPERATORS = new Set([
   'eq',
   'neq',
@@ -12,6 +14,11 @@ const SUPPORTED_OPERATORS = new Set([
   'is_null',
   'is_not_null'
 ]);
+const SUPPORTED_CROSS_FILTERS = new Set(['with', 'without']);
+const SUPPORTED_CHART_TYPES = new Set([
+  'bar', 'column', 'stacked_bar', 'stacked_column', 'line', 'area', 'stacked_area',
+  'pie', 'donut', 'scatter', 'bubble', 'funnel', 'gauge', 'treemap', 'heatmap', 'combo'
+]);
 
 const FIELD_NAME_PATTERN = /^[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]*)?$/;
 
@@ -19,7 +26,7 @@ function normalizeReportDefinition(input = {}) {
   const definition = input.definition || input;
   const reportType = definition.reportType || definition.report_type || 'tabular';
   if (!SUPPORTED_REPORT_TYPES.has(reportType)) {
-    const error = new Error('Supported report types are tabular, summary, and matrix.');
+    const error = new Error('Supported report types are tabular, summary, matrix, and joined.');
     error.statusCode = 400;
     throw error;
   }
@@ -54,37 +61,175 @@ function normalizeReportDefinition(input = {}) {
     throw error;
   }
 
-  if (!fields.length && !groupBy.length) {
+  if (reportType !== 'joined' && !fields.length && !groupBy.length) {
     const error = new Error('Select at least one report column.');
     error.statusCode = 400;
     throw error;
   }
 
-  return {
+  const normalized = {
     reportType,
     primaryObject,
+    reportTypeId: String(definition.reportTypeId || definition.report_type_id || '').trim() || null,
     fields,
     groupBy,
     groupColumns: reportType === 'matrix' ? groupColumns : [],
     aggregates: reportType === 'summary' || reportType === 'matrix' ? aggregates : [],
+    bucketFields: normalizeBucketFields(definition.bucketFields || definition.bucket_fields || []),
+    rowFormulas: normalizeFormulas(definition.rowFormulas || definition.row_formulas || [], 5),
+    summaryFormulas: normalizeFormulas(definition.summaryFormulas || definition.summary_formulas || [], 5),
+    conditionalFormatting: normalizeConditionalFormatting(definition.conditionalFormatting || definition.conditional_formatting || []),
+    crossFilters: normalizeCrossFilters(definition.crossFilters || definition.cross_filters || []),
     chart: normalizeChart(definition.chart || {}),
     filters: normalizeFilters(definition.filters || []),
     sort: normalizeSort(definition.sort || []),
     rowLimit: clampInt(definition.rowLimit || definition.row_limit || 200, 1, 2000)
   };
+
+  if (reportType === 'joined') {
+    normalized.blocks = normalizeJoinedBlocks(definition.blocks || [], primaryObject);
+  }
+
+  return normalized;
+}
+
+function normalizeJoinedBlocks(blocks, fallbackObject) {
+  if (!Array.isArray(blocks)) return [];
+  return blocks
+    .map((block, index) => ({
+      id: String(block.id || `block_${index + 1}`).replace(/[^A-Za-z0-9_-]/g, '_').slice(0, 40),
+      name: String(block.name || `Block ${index + 1}`).trim().slice(0, 80),
+      definition: normalizeJoinedBlockDefinition(block.definition || block, fallbackObject)
+    }))
+    .filter((block) => block.definition.fields.length || block.definition.groupBy.length)
+    .slice(0, 5);
+}
+
+function normalizeJoinedBlockDefinition(input, fallbackObject) {
+  const reportType = ['summary', 'matrix'].includes(input.reportType) ? input.reportType : 'tabular';
+  const fields = uniqueStrings(input.fields || []).filter(isValidFieldName).slice(0, 50);
+  const groupBy = uniqueStrings(input.groupBy || []).filter(isValidFieldName).slice(0, 3);
+  const groupColumns = uniqueStrings(input.groupColumns || []).filter(isValidFieldName).slice(0, 2);
+  return {
+    reportType,
+    primaryObject: String(input.primaryObject || fallbackObject || '').trim(),
+    reportTypeId: String(input.reportTypeId || '').trim() || null,
+    fields,
+    groupBy,
+    groupColumns: reportType === 'matrix' ? groupColumns : [],
+    aggregates: reportType === 'summary' || reportType === 'matrix' ? normalizeAggregates(input.aggregates || []) : [],
+    bucketFields: normalizeBucketFields(input.bucketFields || []),
+    rowFormulas: normalizeFormulas(input.rowFormulas || [], 5),
+    summaryFormulas: normalizeFormulas(input.summaryFormulas || [], 5),
+    conditionalFormatting: normalizeConditionalFormatting(input.conditionalFormatting || []),
+    crossFilters: normalizeCrossFilters(input.crossFilters || []),
+    chart: normalizeChart(input.chart || {}),
+    filters: normalizeFilters(input.filters || []),
+    sort: normalizeSort(input.sort || []),
+    rowLimit: clampInt(input.rowLimit || 200, 1, 2000)
+  };
+}
+
+function normalizeBucketFields(bucketFields) {
+  if (!Array.isArray(bucketFields)) return [];
+  return bucketFields
+    .map((bucket, index) => {
+      const sourceField = String(bucket.sourceField || bucket.source_field || '').trim();
+      const fieldName = safeDerivedName(bucket.fieldName || bucket.field_name || bucket.name || `bucket_${sourceField || index + 1}`);
+      const rules = normalizeBucketRules(bucket.rules || bucket.buckets || bucket.values || []);
+      return {
+        fieldName,
+        label: String(bucket.label || titleCase(fieldName.replace(/_/g, ' '))).trim().slice(0, 80),
+        sourceField,
+        defaultLabel: String(bucket.defaultLabel || bucket.default_label || 'Other').trim().slice(0, 80),
+        rules
+      };
+    })
+    .filter((bucket) => isValidFieldName(bucket.sourceField) && bucket.rules.length)
+    .slice(0, 10);
+}
+
+function normalizeBucketRules(rules) {
+  if (!Array.isArray(rules)) return [];
+  return rules
+    .map((rule) => ({
+      label: String(rule.label || 'Bucket').trim().slice(0, 80),
+      operator: SUPPORTED_BUCKET_OPERATORS.has(rule.operator) ? rule.operator : 'eq',
+      value: rule.value,
+      values: Array.isArray(rule.values) ? rule.values.slice(0, 100) : [],
+      min: rule.min ?? null,
+      max: rule.max ?? null,
+      valueTo: rule.valueTo ?? rule.value_to ?? null
+    }))
+    .slice(0, 50);
+}
+
+function normalizeFormulas(formulas, max) {
+  if (!Array.isArray(formulas)) return [];
+  return formulas
+    .map((formula, index) => {
+      const fieldName = safeDerivedName(formula.fieldName || formula.field_name || formula.name || `formula_${index + 1}`);
+      return {
+        fieldName,
+        label: String(formula.label || titleCase(fieldName.replace(/_/g, ' '))).trim().slice(0, 80),
+        formula: String(formula.formula || '').trim().slice(0, 500),
+        format: ['number', 'currency', 'percent', 'text'].includes(formula.format) ? formula.format : 'number'
+      };
+    })
+    .filter((formula) => formula.formula)
+    .slice(0, max);
+}
+
+function normalizeConditionalFormatting(rules) {
+  if (!Array.isArray(rules)) return [];
+  return rules
+    .map((rule) => ({
+      field: String(rule.field || '').trim(),
+      operator: SUPPORTED_HIGHLIGHT_OPERATORS.has(rule.operator) ? rule.operator : 'eq',
+      value: rule.value,
+      style: ['green', 'yellow', 'red', 'blue'].includes(rule.style) ? rule.style : 'yellow'
+    }))
+    .filter((rule) => rule.field && (isValidFieldName(rule.field) || isDerivedFieldName(rule.field)))
+    .slice(0, 20);
 }
 
 function normalizeChart(chart) {
   const enabled = Boolean(chart.enabled);
-  const type = ['bar', 'line', 'donut'].includes(chart.type) ? chart.type : 'bar';
+  const type = SUPPORTED_CHART_TYPES.has(chart.type) ? chart.type : 'bar';
   const labelField = String(chart.labelField || '').trim();
   const valueField = String(chart.valueField || '').trim();
   return {
     enabled,
     type,
+    title: String(chart.title || '').trim().slice(0, 120),
+    subtitle: String(chart.subtitle || '').trim().slice(0, 160),
+    legendPosition: ['right', 'bottom', 'left', 'top', 'none'].includes(chart.legendPosition) ? chart.legendPosition : 'right',
+    xAxisLabel: String(chart.xAxisLabel || '').trim().slice(0, 80),
+    yAxisLabel: String(chart.yAxisLabel || '').trim().slice(0, 80),
+    sortOrder: ['asc', 'desc', 'none'].includes(chart.sortOrder) ? chart.sortOrder : 'none',
+    colors: Array.isArray(chart.colors) ? chart.colors.slice(0, 12).map((color) => String(color).trim()).filter(Boolean) : [],
+    showDataLabels: chart.showDataLabels !== false,
+    nullHandling: ['zero', 'hide', 'blank'].includes(chart.nullHandling) ? chart.nullHandling : 'blank',
+    stacked: Boolean(chart.stacked),
     labelField: isValidFieldName(labelField) || labelField === '__count' ? labelField : '',
     valueField: isValidFieldName(valueField) || valueField === '__count' ? valueField : ''
   };
+}
+
+function normalizeCrossFilters(crossFilters) {
+  if (!Array.isArray(crossFilters)) return [];
+  return crossFilters
+    .map((filter, index) => ({
+      id: String(filter.id || '').replace(/[^A-Za-z0-9_-]/g, '').slice(0, 40) || `cf_${index + 1}`,
+      type: SUPPORTED_CROSS_FILTERS.has(filter.type) ? filter.type : 'with',
+      parentObject: String(filter.parentObject || filter.parent_object || '').trim(),
+      childObject: String(filter.childObject || filter.child_object || '').trim(),
+      parentField: String(filter.parentField || filter.parent_field || '').trim(),
+      label: String(filter.label || '').trim().slice(0, 120),
+      subfilters: normalizeFilters(filter.subfilters || filter.subFilters || []).slice(0, 10)
+    }))
+    .filter((filter) => filter.childObject && filter.parentField)
+    .slice(0, 8);
 }
 
 function titleCase(value) {
@@ -141,6 +286,18 @@ function uniqueStrings(values) {
 
 function isValidFieldName(field) {
   return FIELD_NAME_PATTERN.test(String(field || ''));
+}
+
+function isDerivedFieldName(field) {
+  return /^[_A-Za-z][_A-Za-z0-9]*$/.test(String(field || ''));
+}
+
+function safeDerivedName(value) {
+  const normalized = String(value || '')
+    .replace(/[^A-Za-z0-9_]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .slice(0, 50);
+  return /^[A-Za-z_]/.test(normalized) ? normalized : `field_${normalized || 'value'}`;
 }
 
 function clampInt(value, min, max) {

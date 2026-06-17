@@ -4,6 +4,7 @@ const state = {
   activeDashboard: null,
   activeComponents: [],
   renderedComponents: [],
+  filters: [],
   isDirty: false
 };
 
@@ -34,6 +35,10 @@ function bindEvents() {
   $('refreshDashboardRunBtn').addEventListener('click', runDashboard);
   $('favoriteDashboardBtn').addEventListener('click', toggleFavorite);
   $('deleteDashboardBtn').addEventListener('click', deleteDashboard);
+  $('dashboardFiltersBtn')?.addEventListener('click', openDashboardFilterModal);
+  $('closeDashboardFilterModalBtn')?.addEventListener('click', closeDashboardFilterModal);
+  $('cancelDashboardFilterBtn')?.addEventListener('click', closeDashboardFilterModal);
+  $('saveDashboardFilterBtn')?.addEventListener('click', addDashboardFilter);
   $('closeComponentModalBtn').addEventListener('click', closeComponentModal);
   $('cancelComponentBtn').addEventListener('click', closeComponentModal);
   $('saveComponentBtn').addEventListener('click', addComponent);
@@ -108,6 +113,8 @@ async function openDashboard(id, options = {}) {
   showBuilder();
   $('dashboardName').value = state.activeDashboard.name || '';
   $('dashboardDescription').value = state.activeDashboard.description || '';
+  state.filters = Array.isArray(state.activeDashboard.filters) ? [...state.activeDashboard.filters] : [];
+  renderDashboardFilters();
   markSaved();
   renderDashboards();
   await runDashboard();
@@ -117,9 +124,11 @@ function newDashboard() {
   state.activeDashboard = null;
   state.activeComponents = [];
   state.renderedComponents = [];
+  state.filters = [];
   showBuilder();
   $('dashboardName').value = 'New Dashboard';
   $('dashboardDescription').value = '';
+  renderDashboardFilters();
   markDirty();
   renderDashboardCanvas();
 }
@@ -146,6 +155,7 @@ async function saveDashboard() {
     name: $('dashboardName').value.trim(),
     description: $('dashboardDescription').value.trim(),
     layout: { columns: 12, rowHeight: 90 },
+    filters: state.filters,
     visibility: 'private'
   };
   if (!payload.name) return toast('Dashboard name is required', 'err');
@@ -183,6 +193,44 @@ async function runDashboard() {
   } finally {
     setBusy(button, false, 'Refresh');
   }
+}
+
+function openDashboardFilterModal() {
+  $('dashboardFilterField').value = '';
+  $('dashboardFilterOperator').value = 'eq';
+  $('dashboardFilterValue').value = '';
+  $('dashboardFilterModal').style.display = 'flex';
+}
+
+function closeDashboardFilterModal() {
+  $('dashboardFilterModal').style.display = 'none';
+}
+
+function addDashboardFilter() {
+  const field = $('dashboardFilterField').value.trim();
+  const value = $('dashboardFilterValue').value.trim();
+  if (!field || !value) return toast('Enter a field and value for the filter', 'err');
+  state.filters.push({ field, operator: $('dashboardFilterOperator').value, value });
+  closeDashboardFilterModal();
+  renderDashboardFilters();
+  markDirty();
+}
+
+function removeDashboardFilter(index) {
+  state.filters.splice(index, 1);
+  renderDashboardFilters();
+  markDirty();
+}
+
+function renderDashboardFilters() {
+  if (!$('dashboardGlobalFilters')) return;
+  $('dashboardGlobalFilters').innerHTML = state.filters.length
+    ? state.filters.map((filter, index) => `
+      <span class="field-pill">${esc(filter.field)} ${esc(filter.operator)} ${esc(filter.value)}
+        <button onclick="removeDashboardFilter(${index})">&times;</button>
+      </span>
+    `).join('')
+    : '<span class="muted">No dashboard global filters.</span>';
 }
 
 function openComponentModal() {

@@ -27,11 +27,46 @@ function reportSourceFields(definition) {
     ...(definition.fields || []),
     ...(definition.groupBy || []),
     ...(definition.groupColumns || []),
+    ...((definition.bucketFields || [])
+      .map((bucket) => bucket.sourceField)
+      .filter(Boolean)),
+    ...formulaSourceFields(definition.rowFormulas || []),
+    ...formulaSourceFields(definition.summaryFormulas || []),
+    ...((definition.filters || [])
+      .map((filter) => filter.field)
+      .filter((field) => field && !isDerivedField(field))),
+    ...((definition.conditionalFormatting || [])
+      .map((rule) => rule.field)
+      .filter((field) => field && !isDerivedField(field))),
     ...((definition.aggregates || [])
       .map((aggregate) => aggregate.field)
       .filter(Boolean))
   ];
   return [...new Set(fields)];
+}
+
+function formulaSourceFields(formulas = []) {
+  const fields = [];
+  (formulas || []).forEach((formula) => {
+    const text = String(formula.formula || '');
+    const aggregateMatches = text.matchAll(/\b(?:SUM|AVG|MIN|MAX)\s*\(\s*([A-Za-z_][A-Za-z0-9_.]*)\s*\)/gi);
+    for (const match of aggregateMatches) {
+      const field = String(match[1] || '').trim();
+      if (field) fields.push(field);
+    }
+    const tokenMatches = text.matchAll(/\{([^}]+)\}/g);
+    for (const match of tokenMatches) {
+      const field = String(match[1] || '').trim();
+      const aggregateMatch = field.match(/^agg_(?:sum|avg|min|max|distinct_count)_(.+)$/i);
+      if (aggregateMatch?.[1] && aggregateMatch[1] !== 'records') fields.push(aggregateMatch[1]);
+      if (field && !isDerivedField(field)) fields.push(field);
+    }
+  });
+  return fields;
+}
+
+function isDerivedField(field) {
+  return /^(__count|agg_|bucket_|formula_|summary_|row_|matrix_col_|row_group_|group_)/i.test(String(field || ''));
 }
 
 function buildFilterClause(filters = [], availableFields, escapeSOQL) {

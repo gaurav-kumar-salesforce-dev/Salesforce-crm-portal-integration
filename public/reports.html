@@ -77,6 +77,8 @@
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="vertical-align:-2px;margin-right:4px"><path d="M23 4v6h-6"/><path d="M1 20v-6h6"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
             Refresh
           </button>
+          <button class="btn btn-ghost" id="newReportTypeBtn">New Report Type</button>
+          <button class="btn btn-ghost" id="newFolderBtn">New Folder</button>
           <button class="btn btn-primary" id="newReportBtn">
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" style="vertical-align:-1px;margin-right:4px"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
             New Report
@@ -88,16 +90,17 @@
       <section class="reports-home" id="reportsListView">
         <aside class="reports-home-nav">
           <div class="home-nav-title">Reports</div>
-          <button class="home-nav-item active" type="button">Recent</button>
-          <button class="home-nav-item" type="button">Created by Me</button>
-          <button class="home-nav-item" type="button">Private Reports</button>
-          <button class="home-nav-item" type="button">Public Reports</button>
-          <button class="home-nav-item" type="button">All Reports</button>
+          <button class="home-nav-item active" type="button" data-report-view="recent">Recent</button>
+          <button class="home-nav-item" type="button" data-report-view="mine">Created by Me</button>
+          <button class="home-nav-item" type="button" data-report-view="private">Private Reports</button>
+          <button class="home-nav-item" type="button" data-report-view="public">Public Reports</button>
+          <button class="home-nav-item" type="button" data-report-view="all">All Reports</button>
           <div class="home-nav-title">Folders</div>
-          <button class="home-nav-item" type="button">All Folders</button>
-          <button class="home-nav-item" type="button">Shared with Me</button>
+          <button class="home-nav-item" type="button" data-report-view="folders">All Folders</button>
+          <button class="home-nav-item" type="button" data-report-view="shared">Shared with Me</button>
+          <div id="folderNavList" class="folder-nav-list"></div>
           <div class="home-nav-title">Favorites</div>
-          <button class="home-nav-item" type="button">All Favorites</button>
+          <button class="home-nav-item" type="button" data-report-view="favorites">All Favorites</button>
         </aside>
 
         <div class="reports-home-main">
@@ -142,16 +145,6 @@
                 <textarea id="reportDescription" class="report-desc-input" placeholder="Optional description" rows="1"></textarea>
               </div>
               <div class="builder-buttons">
-                <!-- Undo/Redo icon buttons -->
-                <button class="btn btn-ghost btn-icon" id="undoBtn" title="Undo" disabled>
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M3 10h13a4 4 0 0 1 0 8H7"/><polyline points="7 6 3 10 7 14"/></svg>
-                </button>
-                <button class="btn btn-ghost btn-icon" id="redoBtn" title="Redo" disabled>
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 10H8a4 4 0 0 0 0 8h9"/><polyline points="17 6 21 10 17 14"/></svg>
-                </button>
-                <!-- Separator -->
-                <span style="width:1px;height:20px;background:var(--border-dark);margin:0 4px"></span>
-                <!-- Add Chart -->
                 <button class="btn btn-ghost btn-add-chart" id="addChartBtn" title="Add Chart">
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="12" width="4" height="9" rx="1"/><rect x="10" y="7" width="4" height="14" rx="1"/><rect x="17" y="3" width="4" height="18" rx="1"/></svg>
                   Add Chart
@@ -161,13 +154,12 @@
                 <button class="btn btn-ghost" id="cloneReportBtn">Clone</button>
                 <button class="btn btn-ghost" id="favoriteReportBtn">Favorite</button>
                 <button class="btn btn-ghost" id="exportReportBtn">Export CSV</button>
+                <button class="btn btn-ghost" id="exportExcelBtn">Export Excel</button>
+                <button class="btn btn-ghost" id="asyncExportBtn">Async Export</button>
+                <button class="btn btn-ghost" id="scheduleReportBtn">Schedule</button>
                 <button class="btn btn-ghost" id="deleteReportBtn">Delete</button>
                 <button class="btn btn-ghost" id="saveRunReportBtn">Save & Run</button>
-                <!-- Split Save Button -->
-                <div class="btn-group">
-                  <button class="btn btn-ghost" id="saveReportBtn">Save</button>
-                  <button class="btn btn-ghost" id="saveDropdownBtn" title="Save options">▾</button>
-                </div>
+                <button class="btn btn-ghost" id="saveReportBtn">Save</button>
                 <button class="btn btn-ghost" id="closeBuilderBtn">Close</button>
                 <button class="btn btn-primary" id="runFullReportBtn">Run</button>
               </div>
@@ -181,7 +173,12 @@
                   <option value="tabular">Tabular</option>
                   <option value="summary">Summary</option>
                   <option value="matrix">Matrix</option>
+                  <option value="joined">Joined</option>
                 </select>
+              </label>
+              <label class="meta-object">
+                <span>Report Type</span>
+                <select id="reportTypeSource"></select>
               </label>
               <label class="meta-object">
                 <span>Object</span>
@@ -190,6 +187,10 @@
               <label class="meta-limit">
                 <span>Run Limit</span>
                 <input id="reportLimit" type="number" min="1" max="2000" value="200">
+              </label>
+              <label class="meta-object">
+                <span>Folder</span>
+                <select id="reportFolder"></select>
               </label>
               <label class="auto-preview-toggle">
                 <span>Update Preview Automatically</span>
@@ -206,8 +207,21 @@
                 <span>Type</span>
                 <select id="chartType">
                   <option value="bar">Bar</option>
+                  <option value="column">Column</option>
+                  <option value="stacked_bar">Stacked Bar</option>
+                  <option value="stacked_column">Stacked Column</option>
                   <option value="line">Line</option>
+                  <option value="area">Area</option>
+                  <option value="stacked_area">Stacked Area</option>
+                  <option value="pie">Pie</option>
                   <option value="donut">Donut</option>
+                  <option value="scatter">Scatter Plot</option>
+                  <option value="bubble">Bubble Chart</option>
+                  <option value="funnel">Funnel</option>
+                  <option value="gauge">Gauge</option>
+                  <option value="treemap">Treemap</option>
+                  <option value="heatmap">Heat Map</option>
+                  <option value="combo">Combo Chart</option>
                 </select>
               </label>
               <label>
@@ -256,7 +270,14 @@
                       </div>
                       <input id="fieldSearch" class="field-search" placeholder="Search all fields...">
                       <div id="fieldList" class="field-list"></div>
+                      <div class="column-action-row">
+                        <button class="placeholder-action" id="addBucketFieldBtn" type="button">+ Bucket</button>
+                        <button class="placeholder-action" id="addRowFormulaBtn" type="button">+ Row Formula</button>
+                        <button class="placeholder-action" id="addSummaryFormulaBtn" type="button">+ Summary Formula</button>
+                        <button class="placeholder-action" id="addConditionalFormatBtn" type="button">Formatting</button>
+                      </div>
                       <div id="selectedFields" class="selected-fields"></div>
+                      <div id="advancedFieldChips" class="active-filters"></div>
                     </div>
                     <div class="builder-section" id="summaryConfig">
                       <div class="builder-section-title">
@@ -273,12 +294,29 @@
                       </select>
                       <select id="summaryAggregateField"></select>
                     </div>
-                    <div class="builder-section future-section">
+                    <div class="builder-section future-section" style="display:none">
                       <div class="builder-section-title">
                         <svg class="sf-section-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/><line x1="4" y1="22" x2="4" y2="15"/></svg>
-                        Formulas
+                        Bucket Fields
                       </div>
-                      <button class="placeholder-action" disabled>Row-Level and Summary Formulas</button>
+                      <button class="placeholder-action" type="button">+ Add Bucket Field</button>
+                      <div id="bucketFieldChips" class="active-filters"></div>
+                    </div>
+                    <div class="builder-section future-section" style="display:none">
+                      <div class="builder-section-title">
+                        <svg class="sf-section-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/><line x1="4" y1="22" x2="4" y2="15"/></svg>
+                        Row Formulas
+                      </div>
+                      <button class="placeholder-action" type="button">+ Add Row Formula</button>
+                      <div id="rowFormulaChips" class="active-filters"></div>
+                    </div>
+                    <div class="builder-section future-section" style="display:none">
+                      <div class="builder-section-title">
+                        <svg class="sf-section-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 20V10"/><path d="M12 20V4"/><path d="M6 20v-6"/></svg>
+                        Summary Formulas
+                      </div>
+                      <button class="placeholder-action" type="button">+ Add Summary Formula</button>
+                      <div id="summaryFormulaChips" class="active-filters"></div>
                     </div>
                   </section>
 
@@ -307,6 +345,22 @@
                       <div class="logic-preview">Logic: AND</div>
                       <div id="activeFilters" class="active-filters"></div>
                     </div>
+                    <div class="builder-section">
+                      <div class="builder-section-title">
+                        <svg class="sf-section-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 7h8"/><path d="M8 12h8"/><path d="M8 17h8"/><circle cx="4" cy="7" r="1"/><circle cx="4" cy="12" r="1"/><circle cx="4" cy="17" r="1"/></svg>
+                        Cross Filters
+                      </div>
+                      <button class="btn btn-ghost cross-filter-add-btn" id="addCrossFilterBtn" type="button">+ Add Cross Filter</button>
+                      <div id="crossFilterChips" class="active-filters compact-filter-chips"></div>
+                    </div>
+                    <div class="builder-section future-section" style="display:none">
+                      <div class="builder-section-title">
+                        <svg class="sf-section-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20V10"/><path d="M18 20V4"/><path d="M6 20v-6"/></svg>
+                        Conditional Formatting
+                      </div>
+                      <button class="placeholder-action" type="button">+ Add Formatting Rule</button>
+                      <div id="conditionalFormatChips" class="active-filters"></div>
+                    </div>
                     <div class="builder-section future-section">
                       <div class="builder-section-title">
                         <svg class="sf-section-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
@@ -332,6 +386,9 @@
                       <div class="report-chart-title" id="reportChartTitle">Report Chart</div>
                       <div class="report-chart-subtitle" id="reportChartSubtitle">Uses current preview or run results</div>
                     </div>
+                    <button class="chart-expand-btn" id="expandChartBtn" type="button" title="Expand chart">
+                      <span>Expand</span>
+                    </button>
                   </div>
                   <div class="report-chart-canvas" id="reportChartCanvas"></div>
                 </div>
@@ -373,7 +430,34 @@
     </main>
   </div>
 
+  <div class="modal-backdrop report-modal-backdrop" id="advancedReportModal" style="display:none">
+    <div class="report-modal-card">
+      <div class="modal-header">
+        <h2 id="advancedModalTitle">Report Builder</h2>
+        <button class="modal-close" id="advancedModalClose" type="button">&times;</button>
+      </div>
+      <div class="modal-body" id="advancedModalBody"></div>
+      <div class="modal-footer">
+        <button class="btn btn-ghost" id="advancedModalCancel" type="button">Cancel</button>
+        <button class="btn btn-primary" id="advancedModalSave" type="button">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal-backdrop chart-zoom-modal" id="chartZoomModal" style="display:none">
+    <div class="chart-zoom-card">
+      <div class="chart-zoom-header">
+        <div>
+          <h2 id="chartZoomTitle">Report Chart</h2>
+          <p id="chartZoomSubtitle">Uses current preview or run results</p>
+        </div>
+        <button class="modal-close" id="closeChartZoomBtn" type="button">&times;</button>
+      </div>
+      <div class="chart-zoom-body" id="chartZoomBody"></div>
+    </div>
+  </div>
+
   <div id="toastStack" class="toast-stack"></div>
-  <script src="reports.js?v=9"></script>
+  <script src="reports.js?v=10"></script>
 </body>
 </html>

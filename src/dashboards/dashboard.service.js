@@ -1,5 +1,6 @@
 const { supabase } = require('../../db');
 const reportService = require('../reports/report.service');
+const crypto = require('crypto');
 
 const COMPONENT_TYPES = new Set(['kpi', 'chart', 'table']);
 
@@ -199,12 +200,18 @@ async function deleteComponent(dashboardId, componentId, user) {
 async function runDashboard(dashboardId, user, deps) {
   const dashboard = await getDashboardForUser(dashboardId, user);
   const components = await listComponents(dashboardId);
+  const cacheKey = dashboardCacheKey(dashboard, components, user);
+  const cached = await getDashboardCache(cacheKey);
+  if (cached) return { ...cached, cached: true };
+
+  const globalFilters = Array.isArray(dashboard.filters) ? dashboard.filters : [];
   const rendered = await Promise.all(components.map(async (component) => {
     try {
       const result = await reportService.runReport(component.report_id, user, deps, {
         previewMode: true,
         dashboardMode: true,
-        skipCache: false
+        skipCache: false,
+        additionalFilters: globalFilters
       });
       return renderComponent(component, result);
     } catch (error) {
@@ -216,7 +223,55 @@ async function runDashboard(dashboardId, user, deps) {
       };
     }
   }));
-  return { dashboard, components: rendered };
+  const result = { dashboard, components: rendered, cached: false };
+  await setDashboardCache(cacheKey, dashboardId, user.id, result);
+  return result;
+}
+
+async function getDashboardCache(cacheKey) {
+  const { data, error } = await supabase
+    .from('dashboard_cache')
+    .select('result, expires_at')
+    .eq('cache_key', cacheKey)
+    .maybeSingle();
+  if (error || !data) return null;
+  if (new Date(data.expires_at).getTime() < Date.now()) {
+    await supabase.from('dashboard_cache').delete().eq('cache_key', cacheKey);
+    return null;
+  }
+  return data.result;
+}
+
+async function setDashboardCache(cacheKey, dashboardId, userId, result) {
+  await supabase
+    .from('dashboard_cache')
+    .upsert({
+      cache_key: cacheKey,
+      dashboard_id: dashboardId,
+      user_id: userId,
+      result,
+      expires_at: new Date(Date.now() + 5 * 60 * 1000).toISOString()
+    }, { onConflict: 'cache_key' })
+    .then(() => null, () => null);
+}
+
+function dashboardCacheKey(dashboard, components, user) {
+  return crypto.createHash('sha256')
+    .update(JSON.stringify({
+      dashboardId: dashboard.id,
+      updatedAt: dashboard.updated_at,
+      filters: dashboard.filters || [],
+      components: components.map((component) => ({
+        id: component.id,
+        reportId: component.report_id,
+        updatedAt: component.updated_at,
+        config: component.config
+      })),
+      userId: user.id,
+      role: user.role,
+      isSystemAdmin: Boolean(user.isSystemAdmin)
+    }))
+    .digest('hex');
 }
 
 async function setFavorite(dashboardId, user, isFavorite) {
