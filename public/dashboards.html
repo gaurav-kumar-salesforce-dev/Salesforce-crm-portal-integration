@@ -70,6 +70,7 @@
         </div>
         <div class="reports-actions">
           <button class="btn btn-ghost" id="refreshDashboardsBtn">Refresh</button>
+          <button class="btn btn-ghost" id="newDashboardFolderBtn">New Folder</button>
           <button class="btn btn-primary" id="newDashboardBtn">+ New Dashboard</button>
         </div>
       </section>
@@ -77,16 +78,18 @@
       <section class="reports-home" id="dashboardsListView">
         <aside class="reports-home-nav">
           <div class="home-nav-title">Dashboards</div>
-          <button class="home-nav-item active" type="button">Recent</button>
-          <button class="home-nav-item" type="button">Created by Me</button>
-          <button class="home-nav-item" type="button">Private Dashboards</button>
-          <button class="home-nav-item" type="button">Public Dashboards</button>
-          <button class="home-nav-item" type="button">All Dashboards</button>
+          <button class="home-nav-item active" type="button" data-dashboard-view="recent">Recent <span id="navCountRecent"></span></button>
+          <button class="home-nav-item" type="button" data-dashboard-view="mine">Created by Me <span id="navCountMine"></span></button>
+          <button class="home-nav-item" type="button" data-dashboard-view="private">Private Dashboards <span id="navCountPrivate"></span></button>
+          <button class="home-nav-item" type="button" data-dashboard-view="public">Public Dashboards <span id="navCountPublic"></span></button>
+          <button class="home-nav-item" type="button" data-dashboard-view="shared">Shared With Me <span id="navCountShared"></span></button>
+          <button class="home-nav-item" type="button" data-dashboard-view="all">All Dashboards <span id="navCountAll"></span></button>
           <div class="home-nav-title">Folders</div>
-          <button class="home-nav-item" type="button">All Folders</button>
-          <button class="home-nav-item" type="button">Shared with Me</button>
+          <button class="home-nav-item" type="button" data-dashboard-view="folders">All Folders</button>
+          <div class="folder-search-box"><input id="dashboardFolderSearch" type="text" placeholder="Search folders..."></div>
+          <div class="folder-tree" id="dashboardFolderTree"></div>
           <div class="home-nav-title">Favorites</div>
-          <button class="home-nav-item" type="button">All Favorites</button>
+          <button class="home-nav-item" type="button" data-dashboard-view="favorites">All Favorites <span id="navCountFavorites"></span></button>
         </aside>
 
         <div class="reports-home-main">
@@ -101,11 +104,12 @@
             <table class="reports-list-table">
               <thead>
                 <tr>
-                  <th>Dashboard Name</th>
-                  <th>Description</th>
-                  <th>Folder</th>
-                  <th>Visibility</th>
-                  <th>Updated On</th>
+                  <th data-dashboard-sort="name">Dashboard Name</th>
+                  <th data-dashboard-sort="description">Description</th>
+                  <th data-dashboard-sort="folder">Folder</th>
+                  <th data-dashboard-sort="owner">Owner</th>
+                  <th data-dashboard-sort="visibility">Visibility</th>
+                  <th data-dashboard-sort="updated_at">Updated On</th>
                   <th></th>
                 </tr>
               </thead>
@@ -126,9 +130,17 @@
             <textarea id="dashboardDescription" class="report-desc-input" placeholder="Optional description" rows="1"></textarea>
           </div>
           <div class="builder-buttons">
+            <button class="btn btn-primary" id="dashboardEditModeBtn">Edit</button>
             <button class="btn btn-ghost" id="addComponentBtn">+ Add Component</button>
             <button class="btn btn-ghost" id="dashboardFiltersBtn">Global Filters</button>
+            <button class="btn btn-ghost" id="dashboardPropertiesBtn">Properties</button>
             <button class="btn btn-ghost" id="refreshDashboardRunBtn">Refresh</button>
+            <select class="dashboard-auto-refresh" id="dashboardAutoRefresh">
+              <option value="0">Auto Refresh Off</option>
+              <option value="60">Every 1 min</option>
+              <option value="300">Every 5 min</option>
+              <option value="900">Every 15 min</option>
+            </select>
             <button class="btn btn-ghost" id="favoriteDashboardBtn">Favorite</button>
             <button class="btn btn-ghost" id="deleteDashboardBtn">Delete</button>
             <button class="btn btn-ghost" id="saveDashboardBtn">Save</button>
@@ -144,6 +156,79 @@
         </div>
       </section>
     </main>
+  </div>
+
+  <div class="modal-backdrop" id="dashboardEditorModal" style="display:none">
+    <div class="modal-card dashboard-modal-card">
+      <div class="modal-header">
+        <h2 id="dashboardEditorTitle">New Dashboard</h2>
+        <button class="modal-close" id="closeDashboardEditorModalBtn">&times;</button>
+      </div>
+      <div class="modal-body dashboard-form-grid">
+        <label class="form-field">
+          <span>Dashboard Name <b>*</b></span>
+          <input id="dashboardEditorName" placeholder="e.g. Executive Sales Overview">
+        </label>
+        <label class="form-field">
+          <span>Folder</span>
+          <select id="dashboardEditorFolder"></select>
+        </label>
+        <label class="form-field">
+          <span>Visibility</span>
+          <select id="dashboardEditorVisibility">
+            <option value="private">Private</option>
+            <option value="public">Public</option>
+            <option value="shared">Shared</option>
+          </select>
+        </label>
+        <label class="form-field">
+          <span>Owner</span>
+          <input id="dashboardEditorOwner" disabled>
+        </label>
+        <label class="form-field form-field-wide">
+          <span>Description</span>
+          <textarea id="dashboardEditorDescription" rows="3" placeholder="What this dashboard is used for"></textarea>
+        </label>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-danger" id="deleteDashboardFromModalBtn" style="display:none">Delete</button>
+        <button class="btn btn-ghost" id="cloneDashboardFromModalBtn" style="display:none">Clone</button>
+        <button class="btn btn-ghost" id="cancelDashboardEditorBtn">Cancel</button>
+        <button class="btn btn-primary" id="saveDashboardEditorBtn">Save Dashboard</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal-backdrop" id="dashboardFolderModal" style="display:none">
+    <div class="modal-card dashboard-modal-card">
+      <div class="modal-header">
+        <h2 id="dashboardFolderTitle">New Folder</h2>
+        <button class="modal-close" id="closeDashboardFolderModalBtn">&times;</button>
+      </div>
+      <div class="modal-body dashboard-form-grid">
+        <label class="form-field">
+          <span>Folder Name <b>*</b></span>
+          <input id="dashboardFolderName" placeholder="e.g. Sales Dashboards">
+        </label>
+        <label class="form-field">
+          <span>Visibility</span>
+          <select id="dashboardFolderVisibility">
+            <option value="private">Private</option>
+            <option value="public">Public</option>
+            <option value="shared">Shared</option>
+          </select>
+        </label>
+        <label class="form-field form-field-wide">
+          <span>Description</span>
+          <textarea id="dashboardFolderDescription" rows="3" placeholder="Who uses this folder"></textarea>
+        </label>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-danger" id="deleteDashboardFolderBtn" style="display:none">Delete Folder</button>
+        <button class="btn btn-ghost" id="cancelDashboardFolderBtn">Cancel</button>
+        <button class="btn btn-primary" id="saveDashboardFolderBtn">Save Folder</button>
+      </div>
+    </div>
   </div>
 
   <div class="modal-backdrop" id="componentModal" style="display:none">
@@ -167,6 +252,22 @@
             <option value="chart">Chart</option>
             <option value="kpi">KPI</option>
             <option value="table">Table</option>
+            <option value="gauge">Gauge</option>
+            <option value="rich_text">Rich Text</option>
+            <option value="image">Image</option>
+          </select>
+        </label>
+        <label class="form-field" id="componentChartTypeField">
+          <span>Chart Style</span>
+          <select id="componentChartType">
+            <option value="bar">Bar</option>
+            <option value="column">Column</option>
+            <option value="line">Line</option>
+            <option value="area">Area</option>
+            <option value="donut">Donut</option>
+            <option value="pie">Pie</option>
+            <option value="funnel">Funnel</option>
+            <option value="gauge">Gauge</option>
           </select>
         </label>
         <label class="form-field">
@@ -177,8 +278,38 @@
             <option value="12">Full Width</option>
           </select>
         </label>
+        <label class="form-field" id="componentHeightField">
+          <span>Height</span>
+          <select id="componentHeight">
+            <option value="2">Short</option>
+            <option value="3" selected>Standard</option>
+            <option value="4">Tall</option>
+          </select>
+        </label>
+        <label class="form-field" id="componentLimitField">
+          <span>Rows / Points</span>
+          <input id="componentLimit" type="number" min="1" max="50" value="10">
+        </label>
+        <label class="form-field" id="componentGaugeMaxField" style="display:none">
+          <span>Gauge Maximum</span>
+          <input id="componentGaugeMax" type="number" min="1" value="100">
+        </label>
+        <label class="form-field" id="componentTargetField" style="display:none">
+          <span>Target</span>
+          <input id="componentTarget" type="number" min="0" placeholder="Optional KPI target">
+        </label>
+        <label class="form-field form-field-wide" id="componentRichTextField" style="display:none">
+          <span>Text</span>
+          <textarea id="componentRichText" rows="5" placeholder="Add dashboard instructions, notes, or executive commentary"></textarea>
+        </label>
+        <label class="form-field form-field-wide" id="componentImageUrlField" style="display:none">
+          <span>Image URL</span>
+          <input id="componentImageUrl" placeholder="https://...">
+        </label>
       </div>
       <div class="modal-footer">
+        <button class="btn btn-danger" id="deleteComponentFromModalBtn" style="display:none">Delete</button>
+        <button class="btn btn-ghost" id="cloneComponentFromModalBtn" style="display:none">Clone</button>
         <button class="btn btn-ghost" id="cancelComponentBtn">Cancel</button>
         <button class="btn btn-primary" id="saveComponentBtn">Add Component</button>
       </div>

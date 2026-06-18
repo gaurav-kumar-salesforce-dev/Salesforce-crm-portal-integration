@@ -9,6 +9,31 @@ function createDashboardsRouter({ checkAuth, deps }) {
     res.json({ folders: await dashboardService.listFolders(req.user) });
   }));
 
+  router.post('/folders', asyncHandler(async (req, res) => {
+    res.status(201).json({ folder: await dashboardService.createFolder(req.user, req.body || {}) });
+  }));
+
+  router.patch('/folders/:folderId', asyncHandler(async (req, res) => {
+    res.json({ folder: await dashboardService.updateFolder(req.params.folderId, req.user, req.body || {}) });
+  }));
+
+  router.delete('/folders/:folderId', asyncHandler(async (req, res) => {
+    await dashboardService.deleteFolder(req.params.folderId, req.user);
+    res.json({ ok: true });
+  }));
+
+  router.post('/folders/:folderId/favorite', asyncHandler(async (req, res) => {
+    res.json(await dashboardService.setFolderFavorite(req.params.folderId, req.user, true));
+  }));
+
+  router.delete('/folders/:folderId/favorite', asyncHandler(async (req, res) => {
+    res.json(await dashboardService.setFolderFavorite(req.params.folderId, req.user, false));
+  }));
+
+  router.post('/folders/:folderId/shares', asyncHandler(async (req, res) => {
+    res.status(201).json({ share: await dashboardService.shareFolder(req.params.folderId, req.user, req.body || {}) });
+  }));
+
   router.get('/', asyncHandler(async (req, res) => {
     res.json({ dashboards: await dashboardService.listDashboards(req.user, req.query) });
   }));
@@ -30,6 +55,10 @@ function createDashboardsRouter({ checkAuth, deps }) {
     res.json({ ok: true });
   }));
 
+  router.post('/:id/clone', asyncHandler(async (req, res) => {
+    res.status(201).json({ dashboard: await dashboardService.cloneDashboard(req.params.id, req.user, req.body || {}) });
+  }));
+
   router.post('/:id/favorite', asyncHandler(async (req, res) => {
     res.json(await dashboardService.setFavorite(req.params.id, req.user, true));
   }));
@@ -39,7 +68,7 @@ function createDashboardsRouter({ checkAuth, deps }) {
   }));
 
   router.post('/:id/run', asyncHandler(async (req, res) => {
-    res.json(await dashboardService.runDashboard(req.params.id, req.user, deps));
+    res.json(await dashboardService.runDashboard(req.params.id, req.user, deps, req.body || {}));
   }));
 
   router.get('/:id/components', asyncHandler(async (req, res) => {
