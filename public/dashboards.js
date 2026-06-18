@@ -29,6 +29,8 @@ const $ = (id) => document.getElementById(id);
 
 document.addEventListener('DOMContentLoaded', async () => {
   initTheme();
+  const appSidebarCollapsed = sessionStorage.getItem('reports_app_sidebar_collapsed') === '1';
+  document.body.classList.toggle('sidebar-collapsed', appSidebarCollapsed);
   bindEvents();
   try {
     await Promise.all([loadFolders(), loadDashboards(), loadReports()]);
@@ -40,6 +42,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 });
 
 function bindEvents() {
+  $('appSidebarToggle')?.addEventListener('click', toggleAppSidebar);
   $('newDashboardBtn').addEventListener('click', () => openDashboardEditorModal());
   $('newDashboardFolderBtn')?.addEventListener('click', () => openFolderModal());
   $('refreshDashboardsBtn').addEventListener('click', refreshDashboardHome);
@@ -1495,4 +1498,9 @@ function esc(value) {
     '"': '&quot;',
     "'": '&#39;'
   }[char]));
+}
+
+function toggleAppSidebar() {
+  document.body.classList.toggle('sidebar-collapsed');
+  sessionStorage.setItem('reports_app_sidebar_collapsed', document.body.classList.contains('sidebar-collapsed') ? '1' : '0');
 }
