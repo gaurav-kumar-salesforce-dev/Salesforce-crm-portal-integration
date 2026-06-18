@@ -93,6 +93,40 @@ function bindEvents() {
   document.addEventListener('click', (event) => {
     if (!event.target.closest('.dashboard-row-menu') && !event.target.closest('.row-action-btn')) closeActionMenu();
   });
+
+  // Card selection/deselection when clicking in edit mode
+  document.addEventListener('pointerdown', (event) => {
+    if (!state.isEditMode) return;
+    const card = event.target.closest('.dashboard-component-card');
+    if (card) {
+      document.querySelectorAll('.dashboard-component-card.selected').forEach(c => {
+        if (c !== card) c.classList.remove('selected');
+      });
+      card.classList.add('selected');
+    } else if (!event.target.closest('.dash-handle') && !event.target.closest('.dashboard-toolbar')) {
+      document.querySelectorAll('.dashboard-component-card.selected').forEach(c => {
+        c.classList.remove('selected');
+      });
+    }
+  });
+
+  // Handle window resizing to update grid background and component sizes instantly
+  window.addEventListener('resize', () => {
+    const canvas = $('dashboardCanvas');
+    if (canvas && state.activeDashboard && state.isEditMode) {
+      updateCanvasGridBackground(canvas);
+      // Re-layout cards since colW changes
+      state.activeComponents.forEach(comp => {
+        const cardEl = canvas.querySelector(`.dashboard-component-card[data-component-id="${comp.id}"]`);
+        if (cardEl && !cardEl.classList.contains('dragging')) {
+          const geo = gridToPixels(canvas, comp.position_x || 0, comp.position_y || 0, comp.width || 6, comp.height || 3);
+          applyCardGeometry(cardEl, geo.left, geo.top, geo.width, geo.height);
+        }
+      });
+      resizeCanvasHeight(canvas);
+    }
+  });
+
   window.addEventListener('beforeunload', (event) => {
     if (!state.isDirty) return;
     event.preventDefault();
@@ -805,186 +839,378 @@ async function reloadActiveDashboardAndRun() {
   await runDashboard();
 }
 
+/* =================================================================
+   GRID MATH HELPERS — same constants used by Salesforce Dashboard
+   ================================================================= */
+
+const DB_COLS = 12;         // number of columns
+const DB_PAD_X = 24;        // horizontal padding (left and right)
+const DB_PAD_Y = 18;        // top padding
+const DB_PAD_BOTTOM = 48;   // bottom padding
+const DB_GAP = 14;          // gap between cells
+const DB_ROW_H = 82;        // height of a single grid row, in px
+
+// Compute the pixel left/top/width/height of a grid cell.
+// col and row are 0-indexed; colSpan and rowSpan in grid units.
+function gridToPixels(canvas, col, row, colSpan, rowSpan) {
+  const contentW = canvas.clientWidth - DB_PAD_X * 2;
+  const colW = (contentW - (DB_COLS - 1) * DB_GAP) / DB_COLS;
+  const left = DB_PAD_X + col * (colW + DB_GAP);
+  const top  = DB_PAD_Y + row * (DB_ROW_H + DB_GAP);
+  const width  = colSpan * colW + (colSpan - 1) * DB_GAP;
+  const height = rowSpan * DB_ROW_H + (rowSpan - 1) * DB_GAP;
+  return { left, top, width, height, colW };
+}
+
+// Snap pixel offset to nearest column/row.
+function pixelsToGrid(canvas, pixelLeft, pixelTop) {
+  const contentW = canvas.clientWidth - DB_PAD_X * 2;
+  const colW = (contentW - (DB_COLS - 1) * DB_GAP) / DB_COLS;
+  const col = Math.round((pixelLeft - DB_PAD_X) / (colW + DB_GAP));
+  const row = Math.round((pixelTop  - DB_PAD_Y) / (DB_ROW_H + DB_GAP));
+  return { col, row };
+}
+
+// Apply pixel geometry to a card element.
+function applyCardGeometry(cardEl, left, top, width, height) {
+  cardEl.style.left   = `${left}px`;
+  cardEl.style.top    = `${top}px`;
+  cardEl.style.width  = `${width}px`;
+  cardEl.style.height = `${height}px`;
+}
+
+// Compute the total canvas height needed and set it.
+function resizeCanvasHeight(canvas) {
+  let maxBottom = 0;
+  canvas.querySelectorAll('.dashboard-component-card').forEach(card => {
+    const t = parseFloat(card.style.top) || 0;
+    const h = parseFloat(card.style.height) || 0;
+    if (t + h > maxBottom) maxBottom = t + h;
+  });
+  canvas.style.minHeight = `${maxBottom + DB_PAD_BOTTOM}px`;
+}
+
+/* ================================================
+   DRAG — startComponentDrag
+   ================================================ */
 function startComponentDrag(event, componentId) {
   if (!state.isEditMode) return;
   if (event.button !== 0) return;
   const card = event.target.closest('.dashboard-component-card');
-  const source = state.activeComponents.find((item) => item.id === componentId);
+  const source = state.activeComponents.find(item => item.id === componentId);
   if (!card || !source) return;
   event.preventDefault();
-  card.setPointerCapture?.(event.pointerId);
+
+  // Pointer capture ensures movement works even if cursor leaves the card
+  try {
+    event.target.setPointerCapture(event.pointerId);
+  } catch (err) {}
+
+  // Disable text selection on body
+  document.body.style.userSelect = 'none';
+  document.body.style.webkitUserSelect = 'none';
+
+  // Make sure card selection state is active
+  document.querySelectorAll('.dashboard-component-card.selected').forEach(c => {
+    if (c !== card) c.classList.remove('selected');
+  });
+  card.classList.add('selected');
+
+  const cardRect = card.getBoundingClientRect();
   state.drag = {
     mode: 'move',
     componentId,
-    startX: event.clientX,
-    startY: event.clientY,
-    startPositionX: Number(source.position_x || 0),
-    startPositionY: Number(source.position_y || 0),
+    // offset of pointer inside the card at drag-start
+    offsetX: event.clientX - cardRect.left,
+    offsetY: event.clientY - cardRect.top,
+    startCol: Number(source.position_x || 0),
+    startRow: Number(source.position_y || 0),
     startWidth: Number(source.width || 6),
     startHeight: Number(source.height || 3),
     card
   };
+
   card.classList.add('dragging');
+  // Move card to the top of the stacking order
+  card.parentElement.appendChild(card);
+
+  // Bind global pointer move / up on window so card doesn't escape
+  window.addEventListener('pointermove', handleDashboardPointerMove, { passive: true });
+  window.addEventListener('pointerup', handleDashboardPointerUp);
 }
 
-function startComponentResize(event, componentId) {
+/* ================================================
+   RESIZE — startComponentResize
+   ================================================ */
+function startComponentResize(event, componentId, handleDir) {
   if (!state.isEditMode) return;
   if (event.button !== 0) return;
   const card = event.target.closest('.dashboard-component-card');
-  const source = state.activeComponents.find((item) => item.id === componentId);
+  const source = state.activeComponents.find(item => item.id === componentId);
   if (!card || !source) return;
   event.preventDefault();
   event.stopPropagation();
-  card.setPointerCapture?.(event.pointerId);
+
+  // Pointer capture on the handle
+  try {
+    event.target.setPointerCapture(event.pointerId);
+  } catch (err) {}
+
+  // Disable text selection on body
+  document.body.style.userSelect = 'none';
+  document.body.style.webkitUserSelect = 'none';
+
+  // Card selection
+  document.querySelectorAll('.dashboard-component-card.selected').forEach(c => {
+    if (c !== card) c.classList.remove('selected');
+  });
+  card.classList.add('selected');
+
   state.drag = {
     mode: 'resize',
     componentId,
+    handleDir: handleDir || 'se',
     startX: event.clientX,
     startY: event.clientY,
-    startPositionX: Number(source.position_x || 0),
-    startPositionY: Number(source.position_y || 0),
     startWidth: Number(source.width || 6),
     startHeight: Number(source.height || 3),
+    startCol: Number(source.position_x || 0),
+    startRow: Number(source.position_y || 0),
     card
   };
+
   card.classList.add('dragging');
+  card.parentElement.appendChild(card);
+
+  window.addEventListener('pointermove', handleDashboardPointerMove, { passive: true });
+  window.addEventListener('pointerup', handleDashboardPointerUp);
 }
 
+/* ================================================
+   POINTER MOVE
+   ================================================ */
 function handleDashboardPointerMove(event) {
   if (!state.drag) return;
   const canvas = $('dashboardCanvas');
-  const rect = canvas.getBoundingClientRect();
-  const colWidth = Math.max(rect.width / 12, 1);
-  const rowHeight = Number(state.activeDashboard?.layout?.rowHeight || 90);
-  const dx = event.clientX - state.drag.startX;
-  const dy = event.clientY - state.drag.startY;
-  const component = state.activeComponents.find((item) => item.id === state.drag.componentId);
+  if (!canvas) return;
+  const canvasRect = canvas.getBoundingClientRect();
+  const component = state.activeComponents.find(item => item.id === state.drag.componentId);
   if (!component) return;
+
   autoScrollDashboard(event.clientY);
 
   if (state.drag.mode === 'move') {
-    const width = Number(component.width || 6);
-    component.position_x = clamp(state.drag.startPositionX + Math.round(dx / colWidth), 0, 12 - width);
-    component.position_y = Math.max(0, state.drag.startPositionY + Math.round(dy / rowHeight));
-    state.drag.card.style.transform = `translate(${dx}px, ${dy}px)`;
-    showDropIndicator(component);
-  } else {
-    component.width = clamp(state.drag.startWidth + Math.round(dx / colWidth), 3, 12 - Number(component.position_x || 0));
-    component.height = clamp(state.drag.startHeight + Math.round(dy / rowHeight), 2, 8);
-    const start = clamp(Number(component.position_x || 0) + 1, 1, 12);
-    state.drag.card.style.gridColumn = `${start} / span ${Math.min(component.width, 13 - start)}`;
-    state.drag.card.style.gridRow = `span ${component.height}`;
-    showDropIndicator(component);
+    // Compute absolute position the card's top-left corner should be at
+    const absLeft = event.clientX - canvasRect.left + canvas.scrollLeft - state.drag.offsetX;
+    const absTop  = event.clientY - canvasRect.top - state.drag.offsetY;
+
+    // Move the actual dragging card to follow the cursor exactly
+    state.drag.card.style.left = `${absLeft}px`;
+    state.drag.card.style.top  = `${Math.max(DB_PAD_Y, absTop)}px`;
+
+    // Snap to grid cell for the drop preview
+    const snapped = pixelsToGrid(canvas, absLeft, absTop);
+    const newCol = clamp(snapped.col, 0, DB_COLS - Number(component.width || 6));
+    const newRow = Math.max(0, snapped.row);
+
+    component.position_x = newCol;
+    component.position_y = newRow;
+    
+    showDropIndicator(canvas, component);
+    updateOtherCardPositions(canvas, component);
+
+  } else /* resize */ {
+    const dx = event.clientX - state.drag.startX;
+    const dy = event.clientY - state.drag.startY;
+    const contentW = canvas.clientWidth - DB_PAD_X * 2;
+    const colW = (contentW - (DB_COLS - 1) * DB_GAP) / DB_COLS;
+    const colDelta = Math.round(dx / (colW + DB_GAP));
+    const rowDelta = Math.round(dy / (DB_ROW_H + DB_GAP));
+
+    // 8-point resize calculations
+    const dir = state.drag.handleDir || 'se';
+    let newCol = state.drag.startCol;
+    let newW = state.drag.startWidth;
+    let newRow = state.drag.startRow;
+    let newH = state.drag.startHeight;
+
+    if (dir.includes('e')) {
+      newW = clamp(state.drag.startWidth + colDelta, 2, DB_COLS - state.drag.startCol);
+    } else if (dir.includes('w')) {
+      newCol = clamp(state.drag.startCol + colDelta, 0, state.drag.startCol + state.drag.startWidth - 2);
+      newW = state.drag.startWidth + (state.drag.startCol - newCol);
+    }
+
+    if (dir.includes('s')) {
+      newH = clamp(state.drag.startHeight + rowDelta, 2, 20);
+    } else if (dir.includes('n')) {
+      newRow = clamp(state.drag.startRow + rowDelta, 0, state.drag.startRow + state.drag.startHeight - 2);
+      newH = state.drag.startHeight + (state.drag.startRow - newRow);
+    }
+
+    component.width  = newW;
+    component.height = newH;
+    component.position_x = newCol;
+    component.position_y = newRow;
+
+    // Update the dragging card size and position live
+    const geo = gridToPixels(canvas, newCol, newRow, newW, newH);
+    applyCardGeometry(state.drag.card, geo.left, geo.top, geo.width, geo.height);
+
+    showDropIndicator(canvas, component);
+    updateOtherCardPositions(canvas, component);
+    resizeCanvasHeight(canvas);
   }
 }
 
-function handleDashboardPointerUp() {
+/* ================================================
+   POINTER UP
+   ================================================ */
+function handleDashboardPointerUp(event) {
   if (!state.drag) return;
   const drag = state.drag;
   state.drag = null;
+
+  window.removeEventListener('pointermove', handleDashboardPointerMove);
+  window.removeEventListener('pointerup', handleDashboardPointerUp);
+
+  // Restore user selection
+  document.body.style.userSelect = '';
+  document.body.style.webkitUserSelect = '';
+
+  // Release pointer capture
+  if (event && event.pointerId) {
+    try {
+      event.target.releasePointerCapture(event.pointerId);
+    } catch (e) {}
+  }
+
   drag.card.classList.remove('dragging');
-  drag.card.style.transform = '';
-  const component = state.activeComponents.find((item) => item.id === drag.componentId);
-  if (!component) return;
+  drag.card.style.cursor = '';
+
+  const component = state.activeComponents.find(item => item.id === drag.componentId);
   hideDropIndicator();
-  compactDashboardLayout(component.id);
-  renderDashboardCanvas();
+
+  if (component) {
+    // RESOLVE collisions one final time and save final positions
+    const resolved = resolveCollisions($('dashboardCanvas'), state.activeComponents, component.id);
+    resolved.forEach(item => {
+      const comp = state.activeComponents.find(c => c.id === item.id);
+      if (comp) {
+        comp.position_x = item.x;
+        comp.position_y = item.y;
+        comp.width = item.w;
+        comp.height = item.h;
+      }
+    });
+
+    // Snap card exactly to its final grid position with spring snap glide
+    const canvas = $('dashboardCanvas');
+    const geo = gridToPixels(canvas, component.position_x || 0, component.position_y || 0, component.width || 6, component.height || 3);
+    
+    drag.card.classList.add('snapping');
+    applyCardGeometry(drag.card, geo.left, geo.top, geo.width, geo.height);
+    
+    setTimeout(() => {
+      drag.card.classList.remove('snapping');
+    }, 200);
+
+    // Apply layout positions to all other cards
+    state.activeComponents.forEach(comp => {
+      const cardEl = canvas.querySelector(`.dashboard-component-card[data-component-id="${comp.id}"]`);
+      if (cardEl && comp.id !== component.id) {
+        const geoOther = gridToPixels(canvas, comp.position_x || 0, comp.position_y || 0, comp.width || 6, comp.height || 3);
+        applyCardGeometry(cardEl, geoOther.left, geoOther.top, geoOther.width, geoOther.height);
+      }
+    });
+
+    resizeCanvasHeight(canvas);
+  }
+
   markDirty();
   scheduleLayoutAutosave();
 }
 
-async function persistComponentLayout(component) {
-  await api(`/api/dashboards/${state.activeDashboard.id}/components/${component.id}`, {
-    method: 'PATCH',
-    body: JSON.stringify({
-      positionX: Number(component.position_x || 0),
-      positionY: Number(component.position_y || 0),
-      width: Number(component.width || 6),
-      height: Number(component.height || 3)
-    })
-  });
+/* ================================================
+   COLLISION RESOLVER & CASCADING REFLOW
+   ================================================ */
+function collides(a, b) {
+  return a.x < b.x + b.w &&
+         a.x + a.w > b.x &&
+         a.y < b.y + b.h &&
+         a.y + a.h > b.y;
 }
 
-function compactDashboardLayout(priorityId = '') {
-  const components = [...state.activeComponents].sort((a, b) => {
-    if (a.id === priorityId) return -1;
-    if (b.id === priorityId) return 1;
-    return Number(a.position_y || 0) - Number(b.position_y || 0) || Number(a.position_x || 0) - Number(b.position_x || 0);
-  });
-  const occupied = new Map();
-  components.forEach((component) => {
-    const width = clamp(Number(component.width || 6), 3, 12);
-    const height = clamp(Number(component.height || 3), 2, 8);
-    let row = Math.max(0, Number(component.position_y || 0));
-    let col = clamp(Number(component.position_x || 0), 0, 12 - width);
-    while (!gridSlotAvailable(occupied, col, row, width, height)) {
-      col += 1;
-      if (col > 12 - width) {
-        col = 0;
-        row += 1;
+function resolveCollisions(canvas, activeComponents, activeId) {
+  // Map layouts to simple coords
+  const items = activeComponents.map(c => ({
+    id: c.id,
+    x: Number(c.position_x || 0),
+    y: Number(c.position_y || 0),
+    w: Number(c.width || 6),
+    h: Number(c.height || 3),
+    isDragged: c.id === activeId
+  }));
+
+  const draggedItem = items.find(item => item.isDragged);
+  const nonDragged = items.filter(item => !item.isDragged);
+
+  // Sort items from top-to-bottom so push-down behaves naturally
+  nonDragged.sort((a, b) => a.y - b.y || a.x - b.x);
+
+  const resolved = [];
+  if (draggedItem) {
+    resolved.push(draggedItem);
+  }
+
+  for (const item of nonDragged) {
+    let collision = true;
+    while (collision) {
+      collision = false;
+      for (const other of resolved) {
+        if (collides(item, other)) {
+          item.y = other.y + other.h;
+          collision = true;
+        }
       }
     }
-    component.position_x = col;
-    component.position_y = row;
-    component.width = width;
-    component.height = height;
-    occupyGridSlot(occupied, col, row, width, height);
+    resolved.push(item);
+  }
+
+  return resolved;
+}
+
+function updateOtherCardPositions(canvas, draggingComponent) {
+  const resolved = resolveCollisions(canvas, state.activeComponents, draggingComponent.id);
+  resolved.forEach(item => {
+    if (item.isDragged) return; // Managed by pointer event cursor positions
+    const cardEl = canvas.querySelector(`.dashboard-component-card[data-component-id="${item.id}"]`);
+    if (cardEl) {
+      const geo = gridToPixels(canvas, item.x, item.y, item.w, item.h);
+      cardEl.style.left = `${geo.left}px`;
+      cardEl.style.top = `${geo.top}px`;
+    }
   });
 }
 
-function gridSlotAvailable(occupied, col, row, width, height) {
-  for (let y = row; y < row + height; y += 1) {
-    const taken = occupied.get(y) || new Set();
-    for (let x = col; x < col + width; x += 1) {
-      if (taken.has(x)) return false;
-    }
-  }
-  return true;
-}
-
-function occupyGridSlot(occupied, col, row, width, height) {
-  for (let y = row; y < row + height; y += 1) {
-    if (!occupied.has(y)) occupied.set(y, new Set());
-    const taken = occupied.get(y);
-    for (let x = col; x < col + width; x += 1) taken.add(x);
-  }
-}
-
-function scheduleLayoutAutosave() {
-  clearTimeout(state.layoutAutosaveTimer);
-  state.layoutAutosaveTimer = setTimeout(persistAllComponentLayouts, 900);
-}
-
-async function persistAllComponentLayouts() {
-  if (!state.activeDashboard?.id || !state.activeComponents.length) return;
-  const button = $('saveDashboardBtn');
-  setBusy(button, true, 'Saving...');
-  try {
-    await Promise.all(state.activeComponents.map((component) => persistComponentLayout(component)));
-    markSaved();
-    toast('Layout saved', 'ok');
-  } catch (err) {
-    toast(err.message || 'Could not auto-save layout', 'err');
-    updateDashboardEditControls();
-  } finally {
-    setBusy(button, false, 'Save');
-    updateDashboardEditControls();
-  }
-}
-
-function showDropIndicator(component) {
+/* ================================================
+   SHOW / HIDE DROP PLACEHOLDER
+   ================================================ */
+function showDropIndicator(canvas, component) {
   let indicator = $('dashboardDropIndicator');
   if (!indicator) {
     indicator = document.createElement('div');
     indicator.id = 'dashboardDropIndicator';
     indicator.className = 'dashboard-drop-placeholder';
-    $('dashboardCanvas').appendChild(indicator);
+    indicator.textContent = '';
+    canvas.insertBefore(indicator, canvas.firstChild);
   }
-  const start = clamp(Number(component.position_x || 0) + 1, 1, 12);
-  const width = clamp(Number(component.width || 6), 3, 12);
-  indicator.style.gridColumn = `${start} / span ${Math.min(width, 13 - start)}`;
-  indicator.style.gridRow = `span ${clamp(Number(component.height || 3), 2, 8)}`;
-  indicator.textContent = 'Drop component here';
+  const col = clamp(Number(component.position_x || 0), 0, DB_COLS - 1);
+  const row = Math.max(0, Number(component.position_y || 0));
+  const w   = clamp(Number(component.width  || 6), 1, DB_COLS);
+  const h   = clamp(Number(component.height || 3), 1, 20);
+  const geo = gridToPixels(canvas, col, row, w, h);
+  applyCardGeometry(indicator, geo.left, geo.top, geo.width, geo.height);
 }
 
 function hideDropIndicator() {
@@ -993,120 +1219,134 @@ function hideDropIndicator() {
 
 function autoScrollDashboard(pointerY) {
   const margin = 80;
-  if (pointerY < margin) window.scrollBy({ top: -18, behavior: 'smooth' });
-  if (pointerY > window.innerHeight - margin) window.scrollBy({ top: 18, behavior: 'smooth' });
+  if (pointerY < margin) window.scrollBy({ top: -18 });
+  if (pointerY > window.innerHeight - margin) window.scrollBy({ top: 18 });
 }
 
-function setComponentLoading(componentId, loading) {
-  const card = document.querySelector(`.dashboard-component-card[data-component-id="${cssEscape(componentId)}"]`);
-  card?.classList.toggle('loading', loading);
-}
+/* =================================================================
+   DYNAMIC CANVAS GRID BACKGROUND
+   ================================================================= */
+function updateCanvasGridBackground(canvas) {
+  if (!canvas) canvas = $('dashboardCanvas');
+  if (!canvas) return;
 
-function clamp(value, min, max) {
-  return Math.max(min, Math.min(max, value));
-}
-
-function configureAutoRefresh(value) {
-  clearInterval(state.autoRefreshTimer);
-  state.autoRefreshTimer = null;
-  const seconds = Number(typeof value === 'number' ? value : $('dashboardAutoRefresh')?.value || 0);
-  if ($('dashboardAutoRefresh') && typeof value === 'number') $('dashboardAutoRefresh').value = String(value);
-  if (!seconds || !state.activeDashboard?.id) return;
-  state.autoRefreshTimer = setInterval(() => runDashboard({ skipCache: true }), seconds * 1000);
-  toast(`Dashboard will refresh every ${seconds / 60} minute${seconds === 60 ? '' : 's'}`, 'info');
-}
-
-function setDashboardEditMode(enabled) {
-  state.isEditMode = Boolean(enabled);
-  $('dashboardBuilderView')?.classList.toggle('dashboard-edit-mode', state.isEditMode);
-  updateDashboardEditControls();
-  renderDashboardCanvas();
-}
-
-function updateDashboardEditControls() {
-  const editButton = $('dashboardEditModeBtn');
-  if (editButton) {
-    editButton.textContent = state.isEditMode ? 'Done' : 'Edit';
-    editButton.classList.toggle('btn-primary', !state.isEditMode);
-    editButton.classList.toggle('btn-ghost', state.isEditMode);
+  if (!state.isEditMode) {
+    canvas.style.backgroundImage = 'none';
+    return;
   }
-  ['addComponentBtn', 'dashboardFiltersBtn', 'dashboardPropertiesBtn', 'deleteDashboardBtn'].forEach((id) => {
-    const node = $(id);
-    if (node) node.disabled = !state.isEditMode;
-  });
-  const saveButton = $('saveDashboardBtn');
-  if (saveButton) saveButton.disabled = !state.isEditMode || !state.isDirty;
+
+  const contentW = canvas.clientWidth - DB_PAD_X * 2;
+  const colW = (contentW - (DB_COLS - 1) * DB_GAP) / DB_COLS;
+  const stepX = colW + DB_GAP;
+  const stepY = DB_ROW_H + DB_GAP;
+
+  canvas.style.backgroundImage = `
+    linear-gradient(to right, rgba(215, 230, 248, 0.4) ${colW}px, transparent ${colW}px),
+    linear-gradient(to bottom, rgba(215, 230, 248, 0.4) ${DB_ROW_H}px, transparent ${DB_ROW_H}px)
+  `;
+  canvas.style.backgroundSize = `${stepX}px ${stepY}px`;
+  canvas.style.backgroundPosition = `${DB_PAD_X}px ${DB_PAD_Y}px`;
+  canvas.style.backgroundRepeat = 'repeat';
 }
 
-function cssEscape(value) {
-  if (window.CSS?.escape) return CSS.escape(String(value));
-  return String(value).replace(/"/g, '\\"');
-}
-
-async function toggleFavorite() {
-  if (!state.activeDashboard?.id) return toast('Save the dashboard first', 'info');
-  const dashboard = state.dashboards.find((item) => item.id === state.activeDashboard.id);
-  const favorite = !dashboard?.is_favorite;
-  await api(`/api/dashboards/${state.activeDashboard.id}/favorite`, { method: favorite ? 'POST' : 'DELETE', body: favorite ? '{}' : undefined });
-  await loadDashboards();
-  toast(favorite ? 'Dashboard favorited' : 'Favorite removed', 'ok');
-}
-
-async function deleteDashboard() {
-  if (!state.activeDashboard?.id) return closeDashboard();
-  if (!confirm(`Delete "${state.activeDashboard.name}"?`)) return;
-  await api(`/api/dashboards/${state.activeDashboard.id}`, { method: 'DELETE' });
-  closeDashboard();
-  await loadDashboards();
-  toast('Dashboard deleted', 'ok');
-}
-
+/* ================================================
+   RENDER CANVAS (position:absolute, not CSS Grid)
+   ================================================ */
 function renderDashboardCanvas() {
-  const components = [...state.renderedComponents].sort((a, b) => {
-    const as = state.activeComponents.find((item) => item.id === a.componentId) || {};
-    const bs = state.activeComponents.find((item) => item.id === b.componentId) || {};
-    return Number(as.position_y || a.layout?.y || 0) - Number(bs.position_y || b.layout?.y || 0)
-      || Number(as.position_x || a.layout?.x || 0) - Number(bs.position_x || b.layout?.x || 0);
+  const canvas = $('dashboardCanvas');
+  if (!canvas) return;
+  canvas.querySelectorAll('.dashboard-component-card, .dashboard-drop-placeholder').forEach(node => node.remove());
+  $('dashboardEmpty').style.display = state.renderedComponents.length ? 'none' : '';
+  updateCanvasGridBackground(canvas);
+
+  const sorted = [...state.renderedComponents].sort((a, b) => {
+    const as = state.activeComponents.find(item => item.id === a.componentId) || {};
+    const bs = state.activeComponents.find(item => item.id === b.componentId) || {};
+    return (Number(as.position_y || 0) - Number(bs.position_y || 0))
+        || (Number(as.position_x || 0) - Number(bs.position_x || 0));
   });
-  $('dashboardEmpty').style.display = components.length ? 'none' : '';
-  $('dashboardCanvas').querySelectorAll('.dashboard-component-card, .dashboard-drop-placeholder').forEach((node) => node.remove());
-  components.forEach((component) => {
-    const source = state.activeComponents.find((item) => item.id === component.componentId) || {};
-    const layout = component.layout || {};
+
+  sorted.forEach(component => {
+    const source  = state.activeComponents.find(item => item.id === component.componentId) || {};
+    const col     = clamp(Number(source.position_x ?? 0), 0, DB_COLS - 1);
+    const row     = Math.max(0, Number(source.position_y ?? 0));
+    const colSpan = clamp(Number(source.width  || 6), 1, DB_COLS - col);
+    const rowSpan = Math.max(2, Number(source.height || 3));
+
     const card = document.createElement('article');
     card.className = `dashboard-component-card dashboard-component-${component.type}`;
     if (!state.isEditMode) card.classList.add('view-mode');
     card.dataset.componentId = component.componentId;
-    const width = Number(layout.w || source.width || 6);
-    const start = clamp(Number(layout.x ?? source.position_x ?? 0) + 1, 1, 12);
-    const height = Math.max(layout.h || source.height || 3, 2);
-    const row = Math.max(0, Number(layout.y ?? source.position_y ?? 0));
-    const lastRefresh = state.lastRefreshAt ? state.lastRefreshAt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Not refreshed';
-    card.style.gridColumn = `${start} / span ${Math.min(width, 13 - start)}`;
-    card.style.gridRow = `${row + 1} / span ${height}`;
+
+    const geo = gridToPixels(canvas, col, row, colSpan, rowSpan);
+    applyCardGeometry(card, geo.left, geo.top, geo.width, geo.height);
+
+    const lastRefresh = state.lastRefreshAt
+      ? state.lastRefreshAt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+      : 'Not refreshed';
+
+    let toolbarHtml = '';
+    if (state.isEditMode) {
+      toolbarHtml = `
+        <button type="button" onclick="editComponent('${esc(component.componentId)}')" title="Component properties">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"></path><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"></path></svg>
+        </button>
+        <button type="button" onclick="cloneComponent('${esc(component.componentId)}')" title="Clone component">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+        </button>
+        <button type="button" class="danger" onclick="removeComponent('${esc(component.componentId)}')" title="Delete component">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+        </button>`;
+    } else {
+      toolbarHtml = `
+        <button type="button" onclick="refreshComponent('${esc(component.componentId)}')" title="Refresh component">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M23 4v6h-6"></path><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path></svg>
+        </button>
+        <button type="button" onclick="openSourceReport('${esc(source.report_id || component.reportId || '')}')" title="Open source report">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path><polyline points="15 3 21 3 21 9"></polyline><line x1="10" y1="14" x2="21" y2="3"></line></svg>
+        </button>
+        <button type="button" onclick="openComponentFullscreen('${esc(component.componentId)}')" title="Maximize">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"></path></svg>
+        </button>`;
+    }
+
+    let handlesHtml = '';
+    if (state.isEditMode) {
+      handlesHtml = `
+        <div class="dash-handle dash-handle-nw" onpointerdown="startComponentResize(event, '${esc(component.componentId)}', 'nw')"></div>
+        <div class="dash-handle dash-handle-n" onpointerdown="startComponentResize(event, '${esc(component.componentId)}', 'n')"></div>
+        <div class="dash-handle dash-handle-ne" onpointerdown="startComponentResize(event, '${esc(component.componentId)}', 'ne')"></div>
+        <div class="dash-handle dash-handle-e" onpointerdown="startComponentResize(event, '${esc(component.componentId)}', 'e')"></div>
+        <div class="dash-handle dash-handle-se" onpointerdown="startComponentResize(event, '${esc(component.componentId)}', 'se')"></div>
+        <div class="dash-handle dash-handle-s" onpointerdown="startComponentResize(event, '${esc(component.componentId)}', 's')"></div>
+        <div class="dash-handle dash-handle-sw" onpointerdown="startComponentResize(event, '${esc(component.componentId)}', 'sw')"></div>
+        <div class="dash-handle dash-handle-w" onpointerdown="startComponentResize(event, '${esc(component.componentId)}', 'w')"></div>
+      `;
+    }
+
     card.innerHTML = `
-      <div class="dashboard-component-header">
-        <div class="dashboard-component-drag" onpointerdown="startComponentDrag(event, '${esc(component.componentId)}')" title="Drag to move">
-          <h3>${esc(component.title || 'Component')}</h3>
+      <div class="dashboard-component-header" onpointerdown="startComponentDrag(event, '${esc(component.componentId)}')" title="Drag to move">
+        <div class="dashboard-component-drag">
+          <h3 onpointerdown="event.stopPropagation()" onclick="openSourceReport('${esc(source.report_id || component.reportId || '')}')" style="cursor:pointer" title="Open source report">${esc(component.title || 'Component')}</h3>
           <span>${esc(component.meta?.reportName || component.type || '')}</span>
           <small>Last refresh ${esc(lastRefresh)} ${component.meta?.cached ? '<b>Cached</b>' : ''}</small>
         </div>
-        <div class="dashboard-component-toolbar">
-          <button type="button" onclick="refreshComponent('${esc(component.componentId)}')" title="Refresh component">Refresh</button>
-          <button type="button" onclick="openSourceReport('${esc(source.report_id || component.reportId || '')}')" title="Open source report">Report</button>
-          <button type="button" onclick="openComponentFullscreen('${esc(component.componentId)}')" title="Fullscreen">Full</button>
-          <button type="button" class="edit-only" onclick="toggleComponentExpanded('${esc(component.componentId)}')" title="Expand component">Expand</button>
-          <button type="button" class="edit-only" onclick="editComponent('${esc(component.componentId)}')" title="Properties">Props</button>
-          <button type="button" class="edit-only" onclick="cloneComponent('${esc(component.componentId)}')" title="Clone component">Clone</button>
-          <button type="button" class="danger edit-only" onclick="removeComponent('${esc(component.componentId)}')" title="Delete component">Delete</button>
+        <div class="dashboard-component-toolbar" onpointerdown="event.stopPropagation()">
+          ${toolbarHtml}
         </div>
       </div>
       <div class="dashboard-component-body">${renderComponentBody(component)}</div>
-      ${state.isEditMode ? `<button type="button" class="dashboard-resize-handle" onpointerdown="startComponentResize(event, '${esc(component.componentId)}')" title="Resize component"></button>` : ''}
+      ${handlesHtml}
     `;
-    $('dashboardCanvas').appendChild(card);
+
+    canvas.appendChild(card);
   });
+
+  resizeCanvasHeight(canvas);
 }
+
+
+
 
 function renderComponentBody(component) {
   if (component.error) return `<div class="dashboard-component-error">${esc(component.error)}</div>`;
@@ -1500,7 +1740,155 @@ function esc(value) {
   }[char]));
 }
 
+
 function toggleAppSidebar() {
   document.body.classList.toggle('sidebar-collapsed');
   sessionStorage.setItem('reports_app_sidebar_collapsed', document.body.classList.contains('sidebar-collapsed') ? '1' : '0');
+}
+
+/* ===========================
+   PERSISTENCE / LAYOUT SAVE
+   =========================== */
+
+// Re-stack all components to prevent overlap — used after expand/clone.
+// Priority component keeps its current position; others are pushed below.
+function compactDashboardLayout(priorityId = '') {
+  const components = [...state.activeComponents].sort((a, b) => {
+    if (a.id === priorityId) return -1;
+    if (b.id === priorityId) return 1;
+    return (Number(a.position_y || 0) - Number(b.position_y || 0))
+        || (Number(a.position_x || 0) - Number(b.position_x || 0));
+  });
+  const occupied = new Map();
+  components.forEach(comp => {
+    const w = Math.max(1, Math.min(Number(comp.width || 6), DB_COLS));
+    const h = Math.max(2, Number(comp.height || 3));
+    let row = Math.max(0, Number(comp.position_y || 0));
+    let col = clamp(Number(comp.position_x || 0), 0, DB_COLS - w);
+    while (!gridSlotFree(occupied, col, row, w, h)) {
+      col++;
+      if (col > DB_COLS - w) { col = 0; row++; }
+    }
+    comp.position_x = col;
+    comp.position_y = row;
+    comp.width = w;
+    comp.height = h;
+    markOccupied(occupied, col, row, w, h);
+  });
+}
+
+function gridSlotFree(occupied, col, row, w, h) {
+  for (let y = row; y < row + h; y++) {
+    const set = occupied.get(y) || new Set();
+    for (let x = col; x < col + w; x++) if (set.has(x)) return false;
+  }
+  return true;
+}
+
+function markOccupied(occupied, col, row, w, h) {
+  for (let y = row; y < row + h; y++) {
+    if (!occupied.has(y)) occupied.set(y, new Set());
+    const set = occupied.get(y);
+    for (let x = col; x < col + w; x++) set.add(x);
+  }
+}
+
+
+async function persistComponentLayout(component) {
+  await api(`/api/dashboards/${state.activeDashboard.id}/components/${component.id}`, {
+    method: 'PATCH',
+    body: JSON.stringify({
+      positionX: Number(component.position_x || 0),
+      positionY: Number(component.position_y || 0),
+      width: Number(component.width || 6),
+      height: Number(component.height || 3)
+    })
+  });
+}
+
+
+function scheduleLayoutAutosave() {
+  clearTimeout(state.layoutAutosaveTimer);
+  state.layoutAutosaveTimer = setTimeout(persistAllComponentLayouts, 900);
+}
+
+async function persistAllComponentLayouts() {
+  if (!state.activeDashboard?.id || !state.activeComponents.length) return;
+  const button = $('saveDashboardBtn');
+  setBusy(button, true, 'Saving...');
+  try {
+    await Promise.all(state.activeComponents.map(component => persistComponentLayout(component)));
+    markSaved();
+    toast('Layout saved', 'ok');
+  } catch (err) {
+    toast(err.message || 'Could not auto-save layout', 'err');
+    updateDashboardEditControls();
+  } finally {
+    setBusy(button, false, 'Save');
+    updateDashboardEditControls();
+  }
+}
+
+function setComponentLoading(componentId, loading) {
+  const card = document.querySelector(`.dashboard-component-card[data-component-id="${cssEscape(componentId)}"]`);
+  card?.classList.toggle('loading', loading);
+}
+
+function clamp(value, min, max) {
+  return Math.max(min, Math.min(max, value));
+}
+
+function configureAutoRefresh(value) {
+  clearInterval(state.autoRefreshTimer);
+  state.autoRefreshTimer = null;
+  const seconds = Number(typeof value === 'number' ? value : $('dashboardAutoRefresh')?.value || 0);
+  if ($('dashboardAutoRefresh') && typeof value === 'number') $('dashboardAutoRefresh').value = String(value);
+  if (!seconds || !state.activeDashboard?.id) return;
+  state.autoRefreshTimer = setInterval(() => runDashboard({ skipCache: true }), seconds * 1000);
+  toast(`Dashboard will refresh every ${seconds / 60} minute${seconds === 60 ? '' : 's'}`, 'info');
+}
+
+function setDashboardEditMode(enabled) {
+  state.isEditMode = Boolean(enabled);
+  $('dashboardBuilderView')?.classList.toggle('dashboard-edit-mode', state.isEditMode);
+  updateDashboardEditControls();
+  renderDashboardCanvas();
+}
+
+function updateDashboardEditControls() {
+  const editButton = $('dashboardEditModeBtn');
+  if (editButton) {
+    editButton.textContent = state.isEditMode ? 'Done' : 'Edit';
+    editButton.classList.toggle('btn-primary', !state.isEditMode);
+    editButton.classList.toggle('btn-ghost', state.isEditMode);
+  }
+  ['addComponentBtn', 'dashboardFiltersBtn', 'dashboardPropertiesBtn', 'deleteDashboardBtn'].forEach((id) => {
+    const node = $(id);
+    if (node) node.disabled = !state.isEditMode;
+  });
+  const saveButton = $('saveDashboardBtn');
+  if (saveButton) saveButton.disabled = !state.isEditMode || !state.isDirty;
+}
+
+function cssEscape(value) {
+  if (window.CSS?.escape) return CSS.escape(String(value));
+  return String(value).replace(/"/g, '\\"');
+}
+
+async function toggleFavorite() {
+  if (!state.activeDashboard?.id) return toast('Save the dashboard first', 'info');
+  const dashboard = state.dashboards.find(item => item.id === state.activeDashboard.id);
+  const favorite = !dashboard?.is_favorite;
+  await api(`/api/dashboards/${state.activeDashboard.id}/favorite`, { method: favorite ? 'POST' : 'DELETE', body: favorite ? '{}' : undefined });
+  await loadDashboards();
+  toast(favorite ? 'Dashboard favorited' : 'Favorite removed', 'ok');
+}
+
+async function deleteDashboard() {
+  if (!state.activeDashboard?.id) return closeDashboard();
+  if (!confirm(`Delete "${state.activeDashboard.name}"?`)) return;
+  await api(`/api/dashboards/${state.activeDashboard.id}`, { method: 'DELETE' });
+  closeDashboard();
+  await loadDashboards();
+  toast('Dashboard deleted', 'ok');
 }

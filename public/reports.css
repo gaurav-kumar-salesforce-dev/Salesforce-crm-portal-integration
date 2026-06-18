@@ -1920,46 +1920,110 @@ body.reports-builder-mode .builder-left-scroll {
   font-weight: 800;
 }
 
+/* =======================================================
+   DASHBOARD CANVAS — position:absolute layout
+   ======================================================= */
 .dashboard-canvas {
-  display: grid;
-  grid-template-columns: repeat(12, minmax(0, 1fr));
-  grid-auto-rows: 82px;
-  grid-auto-flow: dense;
-  gap: 14px;
-  padding: 18px 24px 32px;
-  align-items: stretch;
+  position: relative;
+  padding: 18px 24px 48px;
+  min-height: 400px;
+  box-sizing: border-box;
+  width: 100%;
+  /* Grid background set dynamically by JS in edit mode */
+}
+
+/* Edit mode: JS sets background-image, background-size, background-position inline */
+.dashboard-builder-view.dashboard-edit-mode .dashboard-canvas {
+  /* Fallback — overridden by JS */
+  background-image:
+    linear-gradient(to right, rgba(215, 230, 248, 0.55) calc(100% - 14px), transparent calc(100% - 14px)),
+    linear-gradient(to bottom, rgba(215, 230, 248, 0.55) calc(100% - 14px), transparent calc(100% - 14px));
+  background-repeat: repeat;
+  background-position: 24px 18px;
 }
 
 .dashboard-empty {
-  grid-column: 1 / -1;
+  position: absolute;
+  inset: 18px 24px;
   display: flex;
   align-items: center;
   justify-content: center;
   min-height: 260px;
-  border: 1px dashed var(--border-dark);
-  border-radius: 6px;
+  border: 2px dashed var(--border-dark);
+  border-radius: 8px;
   color: var(--text-3);
-  background: var(--surface);
-  font-weight: 700;
+  font-size: 14px;
+  font-weight: 600;
 }
 
+/* Cards: position:absolute, placed by JS */
 .dashboard-component-card {
-  grid-column: span 6;
+  position: absolute;
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: 8px;
   background: var(--surface);
-  overflow: hidden;
-  box-shadow: var(--shadow-sm);
-  position: relative;
-  transition: box-shadow var(--dur-fast), border-color var(--dur-fast), transform var(--dur-fast), opacity var(--dur-fast);
+  overflow: visible;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.06), 0 1px 2px rgba(0,0,0,0.04);
   display: flex;
   flex-direction: column;
+  box-sizing: border-box;
+  transition: box-shadow 0.15s ease, border-color 0.15s ease;
+  /* GPU layer for smoother rendering */
+  will-change: auto;
 }
 
-.dashboard-component-card:hover,
-.dashboard-component-card.dragging {
+.dashboard-component-card:hover {
+  border-color: var(--border-darker);
+  box-shadow: 0 4px 12px rgba(0,0,0,0.10), 0 2px 4px rgba(0,0,0,0.06);
+}
+
+.dashboard-builder-view.dashboard-edit-mode .dashboard-component-card {
+  cursor: default;
+}
+
+.dashboard-builder-view.dashboard-edit-mode .dashboard-component-card:hover {
   border-color: var(--accent);
-  box-shadow: var(--shadow-md);
+  box-shadow: 0 0 0 2px rgba(1, 118, 211, 0.2), 0 4px 12px rgba(0,0,0,0.10);
+}
+
+/* -------------------------------------------------------
+   DRAG STATE — follow cursor exactly, GPU-accelerated
+   ------------------------------------------------------- */
+.dashboard-component-card.dragging {
+  z-index: 2000 !important;
+  opacity: 0.88;
+  /* Lift shadow like Salesforce */
+  box-shadow:
+    0 24px 48px rgba(1, 118, 211, 0.22),
+    0 12px 24px rgba(0, 0, 0, 0.18),
+    0 0 0 2px rgba(1, 118, 211, 0.4) !important;
+  border-color: var(--accent) !important;
+  border-radius: 8px !important;
+  /* No transitions during drag — card must follow cursor exactly */
+  transition: none !important;
+  cursor: grabbing !important;
+  pointer-events: none;
+  /* GPU compositing for buttery smooth movement */
+  will-change: left, top, width, height;
+  transform: scale(1.01);
+  transform-origin: center top;
+}
+
+/* -------------------------------------------------------
+   SNAP ANIMATION — spring easing when card lands on grid
+   ------------------------------------------------------- */
+.dashboard-component-card.snapping {
+  transition:
+    left 0.18s cubic-bezier(0.25, 0.46, 0.45, 0.94),
+    top  0.18s cubic-bezier(0.25, 0.46, 0.45, 0.94),
+    width  0.15s cubic-bezier(0.25, 0.46, 0.45, 0.94),
+    height 0.15s cubic-bezier(0.25, 0.46, 0.45, 0.94),
+    box-shadow 0.2s ease,
+    opacity 0.15s ease,
+    transform 0.18s ease !important;
+  will-change: left, top;
+  transform: scale(1);
+  opacity: 1;
 }
 
 .dashboard-component-card.loading::after {
@@ -1972,6 +2036,7 @@ body.reports-builder-mode .builder-left-scroll {
   color: var(--accent);
   font-weight: 900;
   z-index: 3;
+  border-radius: 8px;
 }
 
 .dashboard-component-card.loading::before {
@@ -1982,6 +2047,7 @@ body.reports-builder-mode .builder-left-scroll {
   background-size: 220% 100%;
   animation: dashboard-shimmer 1.2s linear infinite;
   z-index: 2;
+  border-radius: 8px;
 }
 
 @keyframes dashboard-shimmer {
@@ -2001,21 +2067,19 @@ body.reports-builder-mode .builder-left-scroll {
   align-items: flex-start;
   justify-content: space-between;
   gap: 12px;
-  padding: 12px 14px;
-  border-bottom: 1px solid var(--border);
-  background: var(--surface-2);
+  padding: 16px 16px 12px;
+  border-bottom: 1px solid var(--border-light);
+  background: var(--surface);
 }
 
-.dashboard-component-drag {
-  min-width: 0;
+.dashboard-builder-view.dashboard-edit-mode .dashboard-component-header {
   cursor: grab;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
 }
 
-.dashboard-component-card.view-mode .dashboard-component-drag {
-  cursor: default;
-}
-
-.dashboard-component-card.dragging .dashboard-component-drag {
+.dashboard-builder-view.dashboard-edit-mode .dashboard-component-card.dragging .dashboard-component-header {
   cursor: grabbing;
 }
 
@@ -2023,7 +2087,7 @@ body.reports-builder-mode .builder-left-scroll {
   margin: 0;
   color: var(--text-1);
   font-size: 15px;
-  font-weight: 900;
+  font-weight: 800;
 }
 
 .dashboard-component-header span {
@@ -2052,7 +2116,7 @@ body.reports-builder-mode .builder-left-scroll {
 .dashboard-component-toolbar {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 6px;
   opacity: 0;
   transition: opacity var(--dur-fast);
 }
@@ -2067,25 +2131,31 @@ body.reports-builder-mode .builder-left-scroll {
 }
 
 .dashboard-component-toolbar button {
-  min-height: 28px;
+  width: 32px;
+  height: 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   border: 1px solid var(--border);
   border-radius: 4px;
   background: var(--surface);
   color: var(--text-2);
   cursor: pointer;
-  padding: 0 8px;
+  padding: 0;
   font: inherit;
-  font-size: 12px;
-  font-weight: 800;
+  transition: all var(--dur-fast);
 }
 
 .dashboard-component-toolbar button:hover {
+  background: var(--surface-2);
   color: var(--accent);
-  border-color: var(--accent);
+  border-color: var(--accent-light);
 }
 
-.dashboard-component-toolbar button.danger {
+.dashboard-component-toolbar button.danger:hover {
   color: var(--danger);
+  border-color: var(--danger-light);
+  background: var(--danger-bg);
 }
 
 .dashboard-component-body {
@@ -2096,15 +2166,25 @@ body.reports-builder-mode .builder-left-scroll {
 }
 
 .dashboard-drop-placeholder {
-  border: 2px dashed var(--accent);
-  border-radius: 6px;
-  display: grid;
-  place-items: center;
-  color: var(--accent);
-  background: rgba(1, 118, 211, .08);
-  font-size: 13px;
-  font-weight: 900;
-  min-height: 120px;
+  position: absolute;
+  /* Salesforce-style: solid light blue fill + dashed border */
+  background: rgba(1, 118, 211, 0.06);
+  border: 2px dashed rgba(1, 118, 211, 0.5);
+  border-radius: 8px;
+  box-sizing: border-box;
+  pointer-events: none;
+  z-index: 900;
+  /* Smooth placeholder repositioning */
+  transition: left 0.08s ease, top 0.08s ease, width 0.08s ease, height 0.08s ease;
+}
+
+/* Animated ripple inside the drop zone */
+.dashboard-drop-placeholder::after {
+  content: '';
+  position: absolute;
+  inset: 6px;
+  border-radius: 5px;
+  background: rgba(1, 118, 211, 0.04);
 }
 
 .dashboard-kpi-value {
@@ -2218,21 +2298,54 @@ body.reports-builder-mode .builder-left-scroll {
   object-fit: contain;
 }
 
-.dashboard-resize-handle {
+/* =================================================================
+   RESIZE & CORNER HANDLES — Salesforce-style 8-point handles
+   ================================================================= */
+
+/* Base handle style — shown on all 4 corners + 4 edge midpoints */
+.dash-handle {
   position: absolute;
-  right: 4px;
-  bottom: 4px;
-  width: 18px;
-  height: 18px;
-  border: 0;
-  background: linear-gradient(135deg, transparent 45%, var(--text-3) 46% 54%, transparent 55%),
-    linear-gradient(135deg, transparent 62%, var(--text-3) 63% 70%, transparent 71%);
-  cursor: nwse-resize;
+  width: 9px;
+  height: 9px;
+  background: #fff;
+  border: 2px solid var(--accent);
+  border-radius: 2px;
   opacity: 0;
+  z-index: 30;
+  transition: opacity 0.12s ease;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+  box-sizing: border-box;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
 }
 
-.dashboard-component-card:hover .dashboard-resize-handle {
-  opacity: 0.75;
+.dashboard-builder-view.dashboard-edit-mode .dashboard-component-card:hover .dash-handle,
+.dashboard-builder-view.dashboard-edit-mode .dashboard-component-card.selected .dash-handle,
+.dashboard-builder-view.dashboard-edit-mode .dashboard-component-card.dragging .dash-handle {
+  opacity: 1;
+}
+
+.dashboard-builder-view.dashboard-edit-mode .dashboard-component-card.selected {
+  border-color: var(--accent) !important;
+  box-shadow: 0 0 0 2px rgba(1, 118, 211, 0.45), 0 4px 12px rgba(0,0,0,0.15) !important;
+}
+
+/* Corner positions */
+.dash-handle-nw { top: -5px;  left: -5px;  cursor: nwse-resize; }
+.dash-handle-ne { top: -5px;  right: -5px; cursor: nesw-resize; }
+.dash-handle-sw { bottom: -5px; left: -5px;  cursor: nesw-resize; }
+.dash-handle-se { bottom: -5px; right: -5px; cursor: nwse-resize; }
+
+/* Edge midpoint positions */
+.dash-handle-n  { top: -5px;    left: 50%; transform: translateX(-50%); cursor: ns-resize;   }
+.dash-handle-s  { bottom: -5px; left: 50%; transform: translateX(-50%); cursor: ns-resize;   }
+.dash-handle-e  { right: -5px;  top:  50%; transform: translateY(-50%); cursor: ew-resize;   }
+.dash-handle-w  { left: -5px;   top:  50%; transform: translateY(-50%); cursor: ew-resize;   }
+
+/* Keep old resize handle hidden (replaced by .dash-handle-se) */
+.dashboard-resize-handle {
+  display: none;
 }
 
 .dashboard-bars {
@@ -2377,7 +2490,8 @@ body.reports-builder-mode .builder-left-scroll {
 
 .dashboard-table-wrap {
   overflow: auto;
-  max-height: 100%;
+  flex: 1;
+  min-height: 0;
 }
 
 .dashboard-table {
@@ -2407,10 +2521,15 @@ body.reports-builder-mode .builder-left-scroll {
   overflow: hidden;
 }
 
+.dashboard-component-table .dashboard-component-body {
+  overflow: hidden;
+}
+
 .dashboard-table-shell {
-  display: grid;
-  grid-template-rows: minmax(0, 1fr) auto;
+  display: flex;
+  flex-direction: column;
   height: 100%;
+  min-height: 0;
 }
 
 .dashboard-table-pager {
@@ -2422,6 +2541,7 @@ body.reports-builder-mode .builder-left-scroll {
   color: var(--text-3);
   font-size: 12px;
   font-weight: 800;
+  flex-shrink: 0;
 }
 
 .dashboard-table-pager button {
@@ -2444,7 +2564,7 @@ body.reports-builder-mode .builder-left-scroll {
 .dashboard-component-fullscreen {
   position: fixed;
   inset: 0;
-  z-index: 80;
+  z-index: 9999; /* Ensure modal is on top of sidebar (200) and topbar */
   display: grid;
   place-items: center;
   padding: 24px;
@@ -2466,6 +2586,7 @@ body.reports-builder-mode .builder-left-scroll {
 .dashboard-component-fullscreen-header {
   display: flex;
   justify-content: space-between;
+  align-items: center;
   gap: 14px;
   padding: 14px 18px;
   border-bottom: 1px solid var(--border);
@@ -2484,29 +2605,38 @@ body.reports-builder-mode .builder-left-scroll {
 
 .dashboard-component-fullscreen-header button {
   border: 1px solid var(--border-dark);
-  border-radius: 5px;
+  border-radius: 4px;
   background: var(--surface);
-  color: var(--text-2);
+  color: var(--text-1);
   font: inherit;
-  font-weight: 800;
+  font-size: 13px;
+  font-weight: 600;
+  padding: 6px 14px;
   cursor: pointer;
+  transition: all var(--dur-fast);
+}
+
+.dashboard-component-fullscreen-header button:hover {
+  background: var(--surface-2);
+  border-color: var(--border-darker);
 }
 
 .dashboard-component-fullscreen-body {
   min-height: 0;
-  overflow: auto;
   padding: 18px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden; /* Scroll inside table/chart shell instead of body */
 }
 
-@media (max-width: 1100px) {
-  .dashboard-canvas {
-    grid-template-columns: repeat(6, minmax(0, 1fr));
-  }
+.dashboard-component-fullscreen-body > * {
+  flex: 1;
+  min-height: 0;
+  height: 100%;
+}
 
-  .dashboard-component-card {
-    grid-column: 1 / -1 !important;
-  }
-
+@media (max-width: 900px) {
+  /* On small screens, stack cards and use JS to render single-column */
   .dashboard-chart-shell {
     grid-template-columns: 1fr;
   }
