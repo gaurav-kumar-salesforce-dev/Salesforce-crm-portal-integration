@@ -71,6 +71,18 @@ function createDashboardsRouter({ checkAuth, deps }) {
     res.json(await dashboardService.runDashboard(req.params.id, req.user, deps, req.body || {}));
   }));
 
+  router.post('/:id/components/:componentId/run', asyncHandler(async (req, res) => {
+    res.json({
+      component: await dashboardService.runDashboardComponentById(
+        req.params.id,
+        req.params.componentId,
+        req.user,
+        deps,
+        req.body || {}
+      )
+    });
+  }));
+
   router.get('/:id/components', asyncHandler(async (req, res) => {
     await dashboardService.getDashboardForUser(req.params.id, req.user);
     res.json({ components: await dashboardService.listComponents(req.params.id) });

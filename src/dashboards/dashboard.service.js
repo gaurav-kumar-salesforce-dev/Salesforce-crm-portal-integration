@@ -3,6 +3,8 @@ const reportService = require('../reports/report.service');
 const crypto = require('crypto');
 
 const COMPONENT_TYPES = new Set(['kpi', 'chart', 'table', 'gauge', 'rich_text', 'image']);
+const DASHBOARD_CACHE_TTL_MS = 5 * 60 * 1000;
+const COMPONENT_CACHE_TTL_MS = 5 * 60 * 1000;
 
 async function listDashboards(user, query = {}) {
   const search = String(query.search || '').trim();
@@ -302,6 +304,7 @@ async function updateDashboard(dashboardId, user, payload) {
     .select('*')
     .single();
   if (error) throw error;
+  await invalidateDashboardCache(dashboardId);
   return data;
 }
 
@@ -340,8 +343,9 @@ async function cloneDashboard(dashboardId, user, payload = {}) {
         width: component.width,
         height: component.height
       })));
-    if (componentError) throw componentError;
+  if (componentError) throw componentError;
   }
+  await invalidateDashboardCache(clone.id);
   return clone;
 }
 
@@ -352,6 +356,7 @@ async function deleteDashboard(dashboardId, user) {
     .update({ deleted_at: new Date().toISOString() })
     .eq('id', dashboardId);
   if (error) throw error;
+  await invalidateDashboardCache(dashboardId);
 }
 
 async function listComponents(dashboardId) {
@@ -378,6 +383,7 @@ async function addComponent(dashboardId, user, payload) {
     .single();
   if (error) throw error;
   await touchDashboard(dashboardId);
+  await invalidateDashboardCache(dashboardId);
   return data;
 }
 
@@ -393,6 +399,7 @@ async function updateComponent(dashboardId, componentId, user, payload) {
     .single();
   if (error) throw error;
   await touchDashboard(dashboardId);
+  await invalidateDashboardCache(dashboardId, componentId);
   return data;
 }
 
@@ -405,40 +412,139 @@ async function deleteComponent(dashboardId, componentId, user) {
     .eq('dashboard_id', dashboardId);
   if (error) throw error;
   await touchDashboard(dashboardId);
+  await invalidateDashboardCache(dashboardId, componentId);
 }
 
 async function runDashboard(dashboardId, user, deps, options = {}) {
+  const startedAt = Date.now();
   const dashboard = await getDashboardForUser(dashboardId, user);
   const components = await listComponents(dashboardId);
-  const cacheKey = dashboardCacheKey(dashboard, components, user);
+  const globalFilters = Array.isArray(options.filters)
+    ? options.filters
+    : (Array.isArray(dashboard.filters) ? dashboard.filters : []);
+  const cacheKey = dashboardCacheKey(dashboard, components, user, globalFilters);
   const cached = options.skipCache ? null : await getDashboardCache(cacheKey);
-  if (cached) return { ...cached, cached: true };
+  if (cached) {
+    await logDashboardExecution({
+      dashboardId,
+      userId: user.id,
+      cacheHit: true,
+      bypassCache: Boolean(options.skipCache),
+      totalMs: Date.now() - startedAt,
+      componentsTotal: components.length,
+      componentsCached: components.length,
+      componentsFailed: 0,
+      filters: globalFilters
+    });
+    return { ...cached, cached: true };
+  }
 
-  const globalFilters = Array.isArray(dashboard.filters) ? dashboard.filters : [];
   const rendered = await Promise.all(components.map(async (component) => {
-    try {
-      if (component.component_type === 'rich_text' || component.component_type === 'image') {
-        return renderComponent(component, null);
-      }
-      const result = await reportService.runReport(component.report_id, user, deps, {
-        previewMode: true,
-        dashboardMode: true,
-        skipCache: false,
-        additionalFilters: globalFilters
-      });
-      return renderComponent(component, result);
-    } catch (error) {
+    return runDashboardComponent(dashboard, component, user, deps, {
+      ...options,
+      filters: globalFilters,
+      skipCache: Boolean(options.skipCache)
+    });
+  }));
+  const componentsCached = rendered.filter((component) => component?.meta?.componentCacheHit).length;
+  const componentsFailed = rendered.filter((component) => component?.error).length;
+  const result = {
+    dashboard,
+    components: rendered,
+    cached: false,
+    metrics: {
+      componentsTotal: components.length,
+      componentsCached,
+      componentsFailed,
+      totalMs: Date.now() - startedAt
+    }
+  };
+  await setDashboardCache(cacheKey, dashboardId, user.id, result);
+  await logDashboardExecution({
+    dashboardId,
+    userId: user.id,
+    cacheHit: false,
+    bypassCache: Boolean(options.skipCache),
+    totalMs: Date.now() - startedAt,
+    componentsTotal: components.length,
+    componentsCached,
+    componentsFailed,
+    filters: globalFilters
+  });
+  return result;
+}
+
+async function runDashboardComponentById(dashboardId, componentId, user, deps, options = {}) {
+  const dashboard = await getDashboardForUser(dashboardId, user);
+  const components = await listComponents(dashboardId);
+  const component = components.find((item) => item.id === componentId);
+  if (!component) throw notFound('Dashboard component not found.');
+  const filters = Array.isArray(options.filters)
+    ? options.filters
+    : (Array.isArray(dashboard.filters) ? dashboard.filters : []);
+  const rendered = await runDashboardComponent(dashboard, component, user, deps, {
+    ...options,
+    filters,
+    skipCache: Boolean(options.skipCache)
+  });
+  await invalidateDashboardResultCache(dashboardId);
+  return rendered;
+}
+
+async function runDashboardComponent(dashboard, component, user, deps, options = {}) {
+  const startedAt = Date.now();
+  try {
+    if (component.component_type === 'rich_text' || component.component_type === 'image') {
+      return renderComponent(component, null);
+    }
+
+    const filters = Array.isArray(options.filters) ? options.filters : [];
+    const cacheKey = componentCacheKey(dashboard, component, user, filters);
+    const cached = options.skipCache ? null : await getComponentCache(cacheKey);
+    if (cached) {
       return {
-        componentId: component.id,
-        type: component.component_type,
-        title: component.title,
-        error: error.message || 'Could not run component'
+        ...cached,
+        meta: {
+          ...(cached.meta || {}),
+          componentCacheHit: true,
+          refreshedAt: cached.meta?.refreshedAt || new Date().toISOString()
+        }
       };
     }
-  }));
-  const result = { dashboard, components: rendered, cached: false };
-  await setDashboardCache(cacheKey, dashboardId, user.id, result);
-  return result;
+
+    const result = await reportService.runReport(component.report_id, user, deps, {
+      previewMode: true,
+      dashboardMode: true,
+      skipCache: false,
+      additionalFilters: filters,
+      dashboardId: dashboard.id,
+      componentId: component.id
+    });
+    const rendered = renderComponent(component, result);
+    rendered.meta = {
+      ...(rendered.meta || {}),
+      componentCacheHit: false,
+      refreshedAt: new Date().toISOString(),
+      totalMs: Date.now() - startedAt
+    };
+    await setComponentCache(cacheKey, dashboard.id, component.id, user.id, filters, rendered);
+    return rendered;
+  } catch (error) {
+    await logReportMetric({
+      dashboardId: dashboard.id,
+      componentId: component.id,
+      userId: user.id,
+      totalMs: Date.now() - startedAt,
+      error
+    });
+    return {
+      componentId: component.id,
+      type: component.component_type,
+      title: component.title,
+      layout: componentLayout(component),
+      error: error.message || 'Could not run component'
+    };
+  }
 }
 
 async function getDashboardCache(cacheKey) {
@@ -463,17 +569,58 @@ async function setDashboardCache(cacheKey, dashboardId, userId, result) {
       dashboard_id: dashboardId,
       user_id: userId,
       result,
-      expires_at: new Date(Date.now() + 5 * 60 * 1000).toISOString()
+      expires_at: new Date(Date.now() + DASHBOARD_CACHE_TTL_MS).toISOString()
     }, { onConflict: 'cache_key' })
     .then(() => null, () => null);
 }
 
-function dashboardCacheKey(dashboard, components, user) {
+async function getComponentCache(cacheKey) {
+  const { data, error } = await supabase
+    .from('dashboard_component_cache')
+    .select('result, expires_at')
+    .eq('cache_key', cacheKey)
+    .maybeSingle();
+  if (error || !data) return null;
+  if (new Date(data.expires_at).getTime() < Date.now()) {
+    await supabase.from('dashboard_component_cache').delete().eq('cache_key', cacheKey).then(() => null, () => null);
+    return null;
+  }
+  return data.result;
+}
+
+async function setComponentCache(cacheKey, dashboardId, componentId, userId, filters, result) {
+  await supabase
+    .from('dashboard_component_cache')
+    .upsert({
+      cache_key: cacheKey,
+      dashboard_id: dashboardId,
+      component_id: componentId,
+      user_id: userId,
+      filter_hash: hashObject(filters || []),
+      result,
+      expires_at: new Date(Date.now() + COMPONENT_CACHE_TTL_MS).toISOString(),
+      updated_at: new Date().toISOString()
+    }, { onConflict: 'cache_key' })
+    .then(() => null, () => null);
+}
+
+async function invalidateDashboardCache(dashboardId, componentId = null) {
+  await invalidateDashboardResultCache(dashboardId);
+  let query = supabase.from('dashboard_component_cache').delete().eq('dashboard_id', dashboardId);
+  if (componentId) query = query.eq('component_id', componentId);
+  await query.then(() => null, () => null);
+}
+
+async function invalidateDashboardResultCache(dashboardId) {
+  await supabase.from('dashboard_cache').delete().eq('dashboard_id', dashboardId).then(() => null, () => null);
+}
+
+function dashboardCacheKey(dashboard, components, user, filters = []) {
   return crypto.createHash('sha256')
     .update(JSON.stringify({
       dashboardId: dashboard.id,
       updatedAt: dashboard.updated_at,
-      filters: dashboard.filters || [],
+      filters,
       components: components.map((component) => ({
         id: component.id,
         reportId: component.report_id,
@@ -485,6 +632,27 @@ function dashboardCacheKey(dashboard, components, user) {
       isSystemAdmin: Boolean(user.isSystemAdmin)
     }))
     .digest('hex');
+}
+
+function componentCacheKey(dashboard, component, user, filters = []) {
+  return crypto.createHash('sha256')
+    .update(JSON.stringify({
+      dashboardId: dashboard.id,
+      dashboardUpdatedAt: dashboard.updated_at,
+      componentId: component.id,
+      componentUpdatedAt: component.updated_at,
+      reportId: component.report_id,
+      config: component.config || {},
+      filters,
+      userId: user.id,
+      role: user.role,
+      isSystemAdmin: Boolean(user.isSystemAdmin)
+    }))
+    .digest('hex');
+}
+
+function hashObject(value) {
+  return crypto.createHash('sha256').update(JSON.stringify(value || null)).digest('hex');
 }
 
 async function setFavorite(dashboardId, user, isFavorite) {
@@ -718,6 +886,46 @@ function readPath(row, path) {
   return String(path || '').split('.').reduce((value, key) => value?.[key], row);
 }
 
+async function logDashboardExecution({
+  dashboardId,
+  userId,
+  cacheHit,
+  bypassCache,
+  totalMs,
+  componentsTotal,
+  componentsCached,
+  componentsFailed,
+  filters,
+  error
+}) {
+  await supabase.from('dashboard_execution_history').insert({
+    dashboard_id: dashboardId,
+    user_id: userId,
+    status: error ? 'error' : 'success',
+    cache_hit: Boolean(cacheHit),
+    bypass_cache: Boolean(bypassCache),
+    total_ms: Number.isFinite(Number(totalMs)) ? Number(totalMs) : null,
+    components_total: Number(componentsTotal || 0),
+    components_cached: Number(componentsCached || 0),
+    components_failed: Number(componentsFailed || 0),
+    filters: Array.isArray(filters) ? filters : [],
+    error_message: error?.message || null
+  }).then(() => null, () => null);
+}
+
+async function logReportMetric({ dashboardId, componentId, userId, totalMs, error }) {
+  await supabase.from('report_execution_metrics').insert({
+    dashboard_id: dashboardId,
+    component_id: componentId,
+    user_id: userId,
+    execution_type: 'component',
+    cache_hit: false,
+    total_ms: Number.isFinite(Number(totalMs)) ? Number(totalMs) : null,
+    status: error ? 'error' : 'success',
+    error_message: error?.message || null
+  }).then(() => null, () => null);
+}
+
 function badRequest(message) {
   const error = new Error(message);
   error.statusCode = 400;
@@ -755,5 +963,6 @@ module.exports = {
   updateComponent,
   deleteComponent,
   runDashboard,
+  runDashboardComponentById,
   setFavorite
 };

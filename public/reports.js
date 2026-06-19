@@ -282,6 +282,12 @@ async function api(path, options = {}) {
     window.location.href = '/';
     throw new Error('Login required');
   }
+  const method = String(options.method || 'GET').toUpperCase();
+  const cacheKey = browserCacheKey(path);
+  if (method === 'GET' && cacheKey && !options.skipBrowserCache) {
+    const cached = browserCacheGet(cacheKey);
+    if (cached) return cached;
+  }
   const res = await fetch(path, {
     ...options,
     headers: {
@@ -293,7 +299,52 @@ async function api(path, options = {}) {
   const text = await res.text();
   const data = text ? JSON.parse(text) : {};
   if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
+  if (method === 'GET' && cacheKey) browserCacheSet(cacheKey, data);
+  if (method !== 'GET') browserCacheInvalidate(path);
   return data;
+}
+
+function browserCacheKey(path) {
+  const cleanPath = String(path || '');
+  const cacheable = [
+    '/api/reports',
+    '/api/reports/folders',
+    '/api/reports/metadata',
+    '/api/dashboards'
+  ];
+  if (!cacheable.some((prefix) => cleanPath === prefix || cleanPath.startsWith(`${prefix}/`) || cleanPath.startsWith(`${prefix}?`))) return '';
+  if (cleanPath.includes('/run') || cleanPath.includes('/preview') || cleanPath.includes('/export')) return '';
+  return `saasray:v1:${cleanPath}`;
+}
+
+function browserCacheGet(key) {
+  try {
+    const item = JSON.parse(sessionStorage.getItem(key) || 'null');
+    if (!item || Date.now() > item.expiresAt) {
+      sessionStorage.removeItem(key);
+      return null;
+    }
+    return item.value;
+  } catch (err) {
+    return null;
+  }
+}
+
+function browserCacheSet(key, value, ttlMs = 60 * 1000) {
+  try {
+    sessionStorage.setItem(key, JSON.stringify({ value, expiresAt: Date.now() + ttlMs }));
+  } catch (err) {
+    // Browser storage is an optimization only.
+  }
+}
+
+function browserCacheInvalidate(path) {
+  const scopes = String(path || '').startsWith('/api/dashboards')
+    ? ['saasray:v1:/api/dashboards']
+    : ['saasray:v1:/api/reports', 'saasray:v1:/api/dashboards'];
+  Object.keys(sessionStorage).forEach((key) => {
+    if (scopes.some((scope) => key.startsWith(scope))) sessionStorage.removeItem(key);
+  });
 }
 
 async function loadFolders() {

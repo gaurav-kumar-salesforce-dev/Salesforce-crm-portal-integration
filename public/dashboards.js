@@ -194,6 +194,12 @@ async function api(path, options = {}) {
     window.location.href = '/';
     throw new Error('Login required');
   }
+  const method = String(options.method || 'GET').toUpperCase();
+  const cacheKey = browserCacheKey(path);
+  if (method === 'GET' && cacheKey && !options.skipBrowserCache) {
+    const cached = browserCacheGet(cacheKey);
+    if (cached) return cached;
+  }
   const res = await fetch(path, {
     ...options,
     headers: {
@@ -205,7 +211,49 @@ async function api(path, options = {}) {
   const text = await res.text();
   const data = text ? JSON.parse(text) : {};
   if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
+  if (method === 'GET' && cacheKey) browserCacheSet(cacheKey, data);
+  if (method !== 'GET') browserCacheInvalidate(path);
   return data;
+}
+
+function browserCacheKey(path) {
+  const cleanPath = String(path || '');
+  const cacheable = [
+    '/api/dashboards',
+    '/api/dashboards/folders',
+    '/api/reports'
+  ];
+  if (!cacheable.some((prefix) => cleanPath === prefix || cleanPath.startsWith(`${prefix}/`) || cleanPath.startsWith(`${prefix}?`))) return '';
+  if (cleanPath.includes('/run')) return '';
+  return `saasray:v1:${cleanPath}`;
+}
+
+function browserCacheGet(key) {
+  try {
+    const item = JSON.parse(sessionStorage.getItem(key) || 'null');
+    if (!item || Date.now() > item.expiresAt) {
+      sessionStorage.removeItem(key);
+      return null;
+    }
+    return item.value;
+  } catch (err) {
+    return null;
+  }
+}
+
+function browserCacheSet(key, value, ttlMs = 60 * 1000) {
+  try {
+    sessionStorage.setItem(key, JSON.stringify({ value, expiresAt: Date.now() + ttlMs }));
+  } catch (err) {
+    // Browser storage is an optimization only.
+  }
+}
+
+function browserCacheInvalidate(path) {
+  const scope = String(path || '').startsWith('/api/reports') ? 'saasray:v1:/api/reports' : 'saasray:v1:/api/dashboards';
+  Object.keys(sessionStorage).forEach((key) => {
+    if (key.startsWith(scope)) sessionStorage.removeItem(key);
+  });
 }
 
 async function loadDashboards() {
@@ -917,7 +965,24 @@ async function removeComponent(componentId) {
 async function refreshComponent(componentId) {
   if (!state.activeDashboard?.id) return;
   setComponentLoading(componentId, true);
-  await runDashboard({ skipCache: true });
+  try {
+    const data = await api(`/api/dashboards/${state.activeDashboard.id}/components/${componentId}/run`, {
+      method: 'POST',
+      body: JSON.stringify({ skipCache: true })
+    });
+    const rendered = data.component;
+    state.renderedComponents = state.renderedComponents.map((component) => (
+      component.componentId === componentId ? rendered : component
+    ));
+    if (!state.renderedComponents.some((component) => component.componentId === componentId)) {
+      state.renderedComponents.push(rendered);
+    }
+    state.lastRefreshAt = new Date();
+    renderDashboardCanvas();
+  } catch (err) {
+    toast(err.message, 'err');
+    setComponentLoading(componentId, false);
+  }
 }
 
 async function reloadActiveDashboardAndRun() {

@@ -916,6 +916,7 @@
     .modal-body {
       padding: 22px;
       overflow-y: auto;
+      overflow-x: auto;
       flex: 1;
     }
 
@@ -1013,6 +1014,7 @@
     /* ── PERMISSION MATRIX ───────────────────────────── */
     .perm-matrix {
       width: 100%;
+      min-width: 550px;
       border-collapse: collapse;
       font-size: 12px;
     }
@@ -1507,8 +1509,24 @@
       .page-header { flex-direction: column; align-items: stretch; gap: 12px; }
       .page-header .btn { align-self: flex-start; }
       .modal { max-width: 95vw; max-height: 85vh; border-radius: 14px; }
-      .modal-body { padding: 18px; }
+      .modal-body { padding: 18px; overflow-x: auto !important; }
       .user-info-grid { grid-template-columns: 1fr; }
+      .toolbar { flex-wrap: wrap !important; gap: 10px !important; }
+      .toolbar-right { margin-left: 0 !important; width: 100% !important; justify-content: flex-start !important; }
+      #owdBody, #sharingBody, #fieldSecurityBody, #orgRolesBody, #publicGroupsBody, #psgroupsBody { overflow-x: auto !important; }
+      #owdBody table, #sharingBody table, #fieldSecurityBody table { min-width: 700px; }
+      .perm-matrix { display: table !important; width: 100% !important; min-width: 550px; }
+      #psg-permsets-list { grid-template-columns: 1fr !important; }
+      .org-role-row { flex-wrap: wrap; }
+      .org-role-row > div:last-child {
+        width: 100% !important;
+        padding: 8px 16px 8px 56px !important;
+        justify-content: flex-start !important;
+        margin-top: -4px;
+      }
+    }
+    @media (max-width: 600px) {
+      .topbar-right > div > div:not(.admin-avatar) { display: none !important; }
     }
     @media (max-width: 480px) {
       .stats-row { grid-template-columns: 1fr; gap: 8px; }

@@ -343,33 +343,53 @@ async function shareReport(reportId, user, payload) {
 }
 
 async function runReport(reportId, user, deps, options = {}) {
-  const report = await getReportForUser(reportId, user);
-  const hydrated = await hydrateReport(report);
-  if (Array.isArray(options.additionalFilters) && options.additionalFilters.length) {
-    hydrated.definition = {
-      ...hydrated.definition,
-      filters: [...(hydrated.definition.filters || []), ...options.additionalFilters]
-    };
+  let report = null;
+  try {
+    report = await getReportForUser(reportId, user);
+    const hydrated = await hydrateReport(report);
+    if (Array.isArray(options.additionalFilters) && options.additionalFilters.length) {
+      hydrated.definition = {
+        ...hydrated.definition,
+        filters: [...(hydrated.definition.filters || []), ...options.additionalFilters]
+      };
+    }
+    const result = await runTabularReport(hydrated, user, deps, options);
+    await logExecution(report.id, user.id, result, null, options);
+    return result;
+  } catch (error) {
+    await logExecution(report?.id || reportId, user.id, null, error, options);
+    throw error;
   }
-  const result = await runTabularReport(hydrated, user, deps, options);
-  await logExecution(report.id, user.id, result, null);
-  return result;
 }
 
 async function runAdhocReport(user, deps, payload) {
   const definition = normalizeReportDefinition(payload);
-  return runTabularReport({ name: 'Preview', definition: await hydrateDefinition(definition) }, user, deps, {
-    previewMode: true,
-    skipCache: false
-  });
+  try {
+    const result = await runTabularReport({ name: 'Preview', definition: await hydrateDefinition(definition) }, user, deps, {
+      previewMode: true,
+      skipCache: false
+    });
+    await logExecution(null, user.id, result, null, { previewMode: true, adhoc: true });
+    return result;
+  } catch (error) {
+    await logExecution(null, user.id, null, error, { previewMode: true, adhoc: true });
+    throw error;
+  }
 }
 
 async function runDraftReport(user, deps, payload) {
   const definition = normalizeReportDefinition(payload);
-  return runTabularReport({ name: 'Run Report', definition: await hydrateDefinition(definition) }, user, deps, {
-    previewMode: false,
-    skipCache: false
-  });
+  try {
+    const result = await runTabularReport({ name: 'Run Report', definition: await hydrateDefinition(definition) }, user, deps, {
+      previewMode: false,
+      skipCache: false
+    });
+    await logExecution(null, user.id, result, null, { draftRun: true });
+    return result;
+  } catch (error) {
+    await logExecution(null, user.id, null, error, { draftRun: true });
+    throw error;
+  }
 }
 
 async function exportReportCsv(reportId, user, deps) {
@@ -575,10 +595,20 @@ async function getExportJob(jobId, user) {
 async function processExportJob(jobId, user, deps) {
   await supabase
     .from('report_export_jobs')
-    .update({ status: 'running', started_at: new Date().toISOString(), updated_at: new Date().toISOString() })
+    .update({
+      status: 'running',
+      started_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+      progress: 10
+    })
     .eq('id', jobId);
   try {
     const job = await getExportJob(jobId, user);
+    await supabase
+      .from('report_export_jobs')
+      .update({ attempts: Number(job.attempts || 0) + 1, updated_at: new Date().toISOString() })
+      .eq('id', jobId)
+      .then(() => null, () => null);
     const file = job.format === 'xlsx'
       ? await exportReportXlsx(job.report_id, user, deps)
       : await exportReportCsv(job.report_id, user, deps);
@@ -592,17 +622,42 @@ async function processExportJob(jobId, user, deps) {
         file_name: file.filename,
         result_text: resultText,
         finished_at: new Date().toISOString(),
-        updated_at: new Date().toISOString()
+        updated_at: new Date().toISOString(),
+        progress: 100
       })
       .eq('id', jobId);
   } catch (error) {
+    const { data: failedJob } = await supabase
+      .from('report_export_jobs')
+      .select('attempts, max_attempts')
+      .eq('id', jobId)
+      .maybeSingle();
+    const attempts = Number(failedJob?.attempts || 0);
+    const maxAttempts = Number(failedJob?.max_attempts || 3);
+    if (attempts < maxAttempts) {
+      await supabase
+        .from('report_export_jobs')
+        .update({
+          status: 'queued',
+          error_message: error.message || 'Export retry scheduled',
+          last_error_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+          progress: 0
+        })
+        .eq('id', jobId)
+        .then(() => null, () => null);
+      setTimeout(() => processExportJob(jobId, user, deps).catch(() => null), Math.min(30000, 1000 * Math.pow(2, attempts)));
+      return;
+    }
     await supabase
       .from('report_export_jobs')
       .update({
         status: 'failed',
         error_message: error.message || 'Export failed',
+        last_error_at: new Date().toISOString(),
         finished_at: new Date().toISOString(),
-        updated_at: new Date().toISOString()
+        updated_at: new Date().toISOString(),
+        progress: 100
       })
       .eq('id', jobId);
   }
@@ -688,7 +743,7 @@ function normalizeSchedule(payload, user, options = {}) {
   return patch;
 }
 
-async function logExecution(reportId, userId, result, error) {
+async function logExecution(reportId, userId, result, error, options = {}) {
   await supabase.from('report_execution_logs').insert({
     report_id: reportId,
     user_id: userId,
@@ -696,6 +751,30 @@ async function logExecution(reportId, userId, result, error) {
     row_count: result?.rows?.length || 0,
     duration_ms: result?.timings?.totalMs || null,
     error_message: error?.message || null
+  }).then(() => null, () => null);
+
+  await supabase.from('report_execution_metrics').insert({
+    report_id: reportId || null,
+    dashboard_id: options.dashboardId || options.dashboard_id || null,
+    component_id: options.componentId || options.component_id || null,
+    user_id: userId,
+    execution_type: options.dashboardMode ? 'component' : (options.exportMode ? 'export' : (options.previewMode ? 'preview' : 'report')),
+    cache_hit: Boolean(result?.cached),
+    bypass_cache: Boolean(options.skipCache),
+    sf_ms: Number.isFinite(Number(result?.timings?.salesforceMs)) ? Number(result.timings.salesforceMs) : null,
+    security_ms: Number.isFinite(Number(result?.timings?.securityMs)) ? Number(result.timings.securityMs) : null,
+    total_ms: Number.isFinite(Number(result?.timings?.totalMs)) ? Number(result.timings.totalMs) : null,
+    rows_returned: Number(result?.totalSize || result?.rows?.length || 0),
+    rows_processed: Number(result?.sourceRowCount || result?.rows?.length || result?.totalSize || 0),
+    soql: result?.soql || null,
+    status: error ? 'error' : 'success',
+    error_message: error?.message || null,
+    metadata: {
+      cache: reportCache.snapshotStats(),
+      reportType: result?.reportType || null,
+      salesforceTotalSize: result?.salesforceTotalSize || null,
+      done: result?.done ?? null
+    }
   }).then(() => null, () => null);
 }
 
