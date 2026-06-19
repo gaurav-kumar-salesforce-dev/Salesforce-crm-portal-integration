@@ -140,28 +140,48 @@
                 <div class="report-title-row">
                   <input id="reportName" class="report-title-input" placeholder="Untitled Report">
                   <span class="object-chip" id="objectChip">Object</span>
-                  <span class="draft-indicator" id="draftIndicator">Saved</span>
                 </div>
                 <textarea id="reportDescription" class="report-desc-input" placeholder="Optional description" rows="1"></textarea>
               </div>
               <div class="builder-buttons">
+                <span class="draft-indicator" id="draftIndicator">Saved</span>
                 <button class="btn btn-ghost btn-add-chart" id="addChartBtn" title="Add Chart">
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="12" width="4" height="9" rx="1"/><rect x="10" y="7" width="4" height="14" rx="1"/><rect x="17" y="3" width="4" height="18" rx="1"/></svg>
                   Add Chart
                 </button>
                 <span style="width:1px;height:20px;background:var(--border-dark);margin:0 4px"></span>
-                <!-- Action buttons -->
-                <button class="btn btn-ghost" id="cloneReportBtn">Clone</button>
-                <button class="btn btn-ghost" id="favoriteReportBtn">Favorite</button>
-                <button class="btn btn-ghost" id="exportReportBtn">Export CSV</button>
-                <button class="btn btn-ghost" id="exportExcelBtn">Export Excel</button>
-                <button class="btn btn-ghost" id="asyncExportBtn">Async Export</button>
-                <button class="btn btn-ghost" id="scheduleReportBtn">Schedule</button>
-                <button class="btn btn-ghost" id="deleteReportBtn">Delete</button>
-                <button class="btn btn-ghost" id="saveRunReportBtn">Save & Run</button>
                 <button class="btn btn-ghost" id="saveReportBtn">Save</button>
-                <button class="btn btn-ghost" id="closeBuilderBtn">Close</button>
                 <button class="btn btn-primary" id="runFullReportBtn">Run</button>
+
+                <!-- Actions Dropdown Trigger -->
+                <div class="actions-dropdown-container">
+                  <button type="button" class="btn btn-icon-only actions-dropdown-trigger" id="reportActionsBtn" title="More Actions">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="1"/><circle cx="12" cy="5" r="1"/><circle cx="12" cy="19" r="1"/></svg>
+                  </button>
+                  <div class="actions-dropdown-menu" id="reportActionsMenu">
+                    <button type="button" class="actions-item" id="actionReportFavorite"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>Favorite</button>
+                    <button type="button" class="actions-item" id="actionReportClone"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>Clone</button>
+                    <button type="button" class="actions-item danger" id="actionReportDelete"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path><line x1="10" y1="11" x2="10" y2="17"></line><line x1="14" y1="11" x2="14" y2="17"></line></svg>Delete</button>
+                    <span class="dropdown-divider"></span>
+                    <button type="button" class="actions-item" id="actionReportExportCSV"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>Export CSV</button>
+                    <button type="button" class="actions-item" id="actionReportExportExcel"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>Export Excel</button>
+                    <button type="button" class="actions-item" id="actionReportAsyncExport"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>Async Export</button>
+                    <button type="button" class="actions-item" id="actionReportSchedule"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect><line x1="16" y1="2" x2="16" y2="6"></line><line x1="8" y1="2" x2="8" y2="6"></line><line x1="3" y1="10" x2="21" y2="10"></line></svg>Schedule</button>
+                    <button type="button" class="actions-item" id="actionReportPrint"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 6 2 18 2 18 9"></polyline><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"></path><rect x="6" y="14" width="12" height="8"></rect></svg>Print</button>
+                  </div>
+                </div>
+
+                <!-- Keep originally bound elements hidden to prevent breaking listener JS -->
+                <button class="btn btn-ghost" id="cloneReportBtn" style="display:none">Clone</button>
+                <button class="btn btn-ghost" id="favoriteReportBtn" style="display:none">Favorite</button>
+                <button class="btn btn-ghost" id="exportReportBtn" style="display:none">Export CSV</button>
+                <button class="btn btn-ghost" id="exportExcelBtn" style="display:none">Export Excel</button>
+                <button class="btn btn-ghost" id="asyncExportBtn" style="display:none">Async Export</button>
+                <button class="btn btn-ghost" id="scheduleReportBtn" style="display:none">Schedule</button>
+                <button class="btn btn-ghost" id="deleteReportBtn" style="display:none">Delete</button>
+                <button class="btn btn-ghost" id="saveRunReportBtn" style="display:none">Save & Run</button>
+
+                <button class="btn btn-ghost" id="closeBuilderBtn">Close</button>
               </div>
             </div>
 

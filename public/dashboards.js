@@ -88,6 +88,60 @@ function bindEvents() {
   $('saveComponentBtn').addEventListener('click', saveComponentFromModal);
   $('cloneComponentFromModalBtn')?.addEventListener('click', cloneComponentFromModal);
   $('deleteComponentFromModalBtn')?.addEventListener('click', deleteComponentFromModal);
+
+  // Actions dropdown logic
+  const dropdownTrigger = $('dashboardActionsBtn');
+  const dropdownMenu = $('dashboardActionsMenu');
+  if (dropdownTrigger && dropdownMenu) {
+    dropdownTrigger.addEventListener('click', (e) => {
+      e.stopPropagation();
+      dropdownMenu.classList.toggle('show');
+    });
+    document.addEventListener('click', (e) => {
+      if (!e.target.closest('.actions-dropdown-container')) {
+        dropdownMenu.classList.remove('show');
+      }
+    });
+  }
+
+  $('actionDashboardFilters')?.addEventListener('click', () => {
+    dropdownMenu?.classList.remove('show');
+    $('dashboardFiltersBtn')?.click();
+  });
+  $('actionDashboardProperties')?.addEventListener('click', () => {
+    dropdownMenu?.classList.remove('show');
+    $('dashboardPropertiesBtn')?.click();
+  });
+  $('actionDashboardFavorite')?.addEventListener('click', () => {
+    dropdownMenu?.classList.remove('show');
+    $('favoriteDashboardBtn')?.click();
+  });
+  $('actionDashboardClone')?.addEventListener('click', () => {
+    dropdownMenu?.classList.remove('show');
+    if (!state.activeDashboard?.id) return toast('Save the dashboard first', 'info');
+    cloneDashboard(state.activeDashboard.id);
+  });
+  $('actionDashboardDelete')?.addEventListener('click', () => {
+    dropdownMenu?.classList.remove('show');
+    $('deleteDashboardBtn')?.click();
+  });
+  $('actionDashboardExport')?.addEventListener('click', () => {
+    dropdownMenu?.classList.remove('show');
+    toast('Dashboard export is not implemented in the backend', 'info');
+  });
+  $('actionDashboardSchedule')?.addEventListener('click', () => {
+    dropdownMenu?.classList.remove('show');
+    toast('Dashboard subscription schedule is not implemented in the backend', 'info');
+  });
+  $('actionDashboardShare')?.addEventListener('click', () => {
+    dropdownMenu?.classList.remove('show');
+    toast('Dashboard sharing is not implemented in the backend', 'info');
+  });
+  $('actionDashboardPrint')?.addEventListener('click', () => {
+    dropdownMenu?.classList.remove('show');
+    window.print();
+  });
+
   document.addEventListener('pointermove', handleDashboardPointerMove);
   document.addEventListener('pointerup', handleDashboardPointerUp);
   document.addEventListener('click', (event) => {
@@ -579,18 +633,36 @@ async function saveDashboard() {
   };
   if (!payload.name) return toast('Dashboard name is required', 'err');
   const button = $('saveDashboardBtn');
+  
+  // Set draft indicator to Saving...
+  const indicator = $('dashboardDraftIndicator');
+  if (indicator) {
+    indicator.textContent = 'Saving...';
+    indicator.className = 'draft-indicator saving';
+  }
   setBusy(button, true, 'Saving...');
+
   try {
     const data = state.activeDashboard
       ? await api(`/api/dashboards/${state.activeDashboard.id}`, { method: 'PATCH', body: JSON.stringify(payload) })
       : await api('/api/dashboards', { method: 'POST', body: JSON.stringify(payload) });
     state.activeDashboard = data.dashboard;
     window.history.replaceState(null, '', `#dashboard/${state.activeDashboard.id}`);
+    
+    // Explicitly persist all layout positions
+    if (state.activeComponents.length) {
+      await Promise.all(state.activeComponents.map(component => persistComponentLayout(component)));
+    }
+
     await loadDashboards();
     markSaved();
     toast('Dashboard saved', 'ok');
   } catch (err) {
     toast(err.message, 'err');
+    if (indicator) {
+      indicator.textContent = 'Unsaved changes';
+      indicator.className = 'draft-indicator dirty';
+    }
   } finally {
     setBusy(button, false, 'Save');
     updateDashboardEditControls();
@@ -664,14 +736,30 @@ function removeDashboardFilter(index) {
 }
 
 function renderDashboardFilters() {
-  if (!$('dashboardGlobalFilters')) return;
-  $('dashboardGlobalFilters').innerHTML = state.filters.length
-    ? state.filters.map((filter, index) => `
+  const container = $('dashboardGlobalFilters');
+  if (!container) return;
+  if (state.filters.length) {
+    container.innerHTML = state.filters.map((filter, index) => `
       <span class="field-pill">${esc(filter.field)} ${esc(filter.operator)} ${esc(filter.value)}
         <button onclick="removeDashboardFilter(${index})">&times;</button>
       </span>
-    `).join('')
-    : '<span class="muted">No dashboard global filters.</span>';
+    `).join('');
+  } else {
+    if (state.isEditMode) {
+      container.innerHTML = `
+        <div class="empty-filters-banner">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"></polygon></svg>
+          <div class="empty-filters-text">
+            <strong>Add Global Filters</strong>
+            <span>Global filters let users filter all components in the dashboard by a shared field.</span>
+          </div>
+          <button type="button" class="btn btn-ghost btn-sm" onclick="$('dashboardFiltersBtn')?.click()">+ Add Filter</button>
+        </div>
+      `;
+    } else {
+      container.innerHTML = '<span class="muted">No dashboard global filters.</span>';
+    }
+  }
 }
 
 function openComponentModal(component = null) {
@@ -1128,7 +1216,6 @@ function handleDashboardPointerUp(event) {
   }
 
   markDirty();
-  scheduleLayoutAutosave();
 }
 
 /* ================================================
@@ -1281,15 +1368,27 @@ function renderDashboardCanvas() {
     const geo = gridToPixels(canvas, col, row, colSpan, rowSpan);
     applyCardGeometry(card, geo.left, geo.top, geo.width, geo.height);
 
-    const lastRefresh = state.lastRefreshAt
-      ? state.lastRefreshAt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-      : 'Not refreshed';
+    const asOfTime = state.lastRefreshAt
+      ? `As of ${state.lastRefreshAt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
+      : 'As of Not refreshed';
+
+    const reportName = component.meta?.reportName || source.report_name || 'Source Report';
+    const hasReport = !!(source.report_id || component.reportId);
 
     let toolbarHtml = '';
     if (state.isEditMode) {
+      const isExpanded = colSpan >= 12;
+      const expandCollapseTitle = isExpanded ? 'Collapse width' : 'Expand width';
+      const expandCollapseIcon = isExpanded
+        ? `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 14h6v6M10 14L3 21M20 10h-6V4M14 10l7-7"/></svg>`
+        : `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></svg>`;
+
       toolbarHtml = `
         <button type="button" onclick="editComponent('${esc(component.componentId)}')" title="Component properties">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"></path><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"></path></svg>
+        </button>
+        <button type="button" onclick="toggleComponentExpanded('${esc(component.componentId)}')" title="${expandCollapseTitle}">
+          ${expandCollapseIcon}
         </button>
         <button type="button" onclick="cloneComponent('${esc(component.componentId)}')" title="Clone component">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
@@ -1324,12 +1423,23 @@ function renderDashboardCanvas() {
       `;
     }
 
+    const subtitleHtml = hasReport
+      ? `<a class="dashboard-component-subtitle" onpointerdown="event.stopPropagation()" onclick="openSourceReport('${esc(source.report_id || component.reportId || '')}')" title="View Source Report: ${esc(reportName)}">${esc(reportName)}</a>`
+      : `<span class="dashboard-component-subtitle" style="color:var(--text-3); cursor:default; text-decoration:none;">No source report</span>`;
+
+    const badgeHtml = component.meta?.cached
+      ? `<span class="cached-badge">Cached</span>`
+      : '';
+
     card.innerHTML = `
       <div class="dashboard-component-header" onpointerdown="startComponentDrag(event, '${esc(component.componentId)}')" title="Drag to move">
         <div class="dashboard-component-drag">
-          <h3 onpointerdown="event.stopPropagation()" onclick="openSourceReport('${esc(source.report_id || component.reportId || '')}')" style="cursor:pointer" title="Open source report">${esc(component.title || 'Component')}</h3>
-          <span>${esc(component.meta?.reportName || component.type || '')}</span>
-          <small>Last refresh ${esc(lastRefresh)} ${component.meta?.cached ? '<b>Cached</b>' : ''}</small>
+          <h3 class="dashboard-component-title" onpointerdown="event.stopPropagation()">${esc(component.title || 'Component')}</h3>
+          ${subtitleHtml}
+          <div class="dashboard-component-meta">
+            <span>${esc(asOfTime)}</span>
+            ${badgeHtml}
+          </div>
         </div>
         <div class="dashboard-component-toolbar" onpointerdown="event.stopPropagation()">
           ${toolbarHtml}
@@ -1366,15 +1476,58 @@ function renderKpi(component) {
   const value = Number(component.value || 0);
   const target = component.config?.target == null ? null : Number(component.config.target);
   const variance = target == null ? null : value - target;
-  const status = variance == null ? 'neutral' : variance >= 0 ? 'good' : variance >= -(target * 0.1) ? 'warn' : 'bad';
-  const arrow = variance == null ? '-' : variance >= 0 ? 'up' : 'down';
-  return `<div class="dashboard-kpi dashboard-kpi-${status}">
-    <div class="dashboard-kpi-value">${esc(formatNumber(value))}</div>
-    <div class="dashboard-kpi-caption">${esc(component.config?.subtitle || component.meta?.reportType || 'report')}</div>
-    ${target == null ? '' : `<div class="dashboard-kpi-target">Target ${esc(formatNumber(target))}</div>`}
-    <div class="dashboard-kpi-trend">${esc(arrow === 'up' ? 'Up' : arrow === 'down' ? 'Down' : 'No target')} ${variance == null ? '' : esc(formatNumber(Math.abs(variance)))}</div>
-    ${component.config?.description ? `<p>${esc(component.config.description)}</p>` : ''}
-  </div>`;
+  const percentDiff = (target != null && target !== 0) ? Math.round((variance / target) * 100) : null;
+  
+  let status = 'neutral';
+  let arrowIcon = '';
+  let statusPillClass = 'status-neutral';
+  let statusLabel = '';
+  
+  if (variance != null) {
+    if (variance >= 0) {
+      status = 'good';
+      statusPillClass = 'status-good';
+      arrowIcon = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5"></line><polyline points="5 12 12 5 19 12"></polyline></svg>`;
+      statusLabel = `+${formatNumber(variance)} (${percentDiff >= 0 ? '+' : ''}${percentDiff}%)`;
+    } else if (variance >= -(target * 0.1)) {
+      status = 'warn';
+      statusPillClass = 'status-warn';
+      arrowIcon = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><polyline points="19 12 12 19 5 12"></polyline></svg>`;
+      statusLabel = `${formatNumber(variance)} (${percentDiff}%)`;
+    } else {
+      status = 'bad';
+      statusPillClass = 'status-bad';
+      arrowIcon = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><polyline points="19 12 12 19 5 12"></polyline></svg>`;
+      statusLabel = `${formatNumber(variance)} (${percentDiff}%)`;
+    }
+  }
+
+  const caption = component.config?.subtitle || component.meta?.reportType || 'Total';
+  const description = component.config?.description ? `<div class="kpi-description">${esc(component.config.description)}</div>` : '';
+  const targetHtml = target == null
+    ? ''
+    : `<div class="kpi-target-label">Target: <span class="kpi-target-val">${esc(formatNumber(target))}</span></div>`;
+
+  const trendHtml = variance == null
+    ? ''
+    : `<div class="kpi-status-pill ${statusPillClass}">
+        ${arrowIcon}
+        <span>${esc(statusLabel)}</span>
+       </div>`;
+
+  return `
+    <div class="kpi-card-inner">
+      <div class="kpi-caption-top">${esc(caption)}</div>
+      <div class="kpi-value-container">
+        <span class="kpi-value-num">${esc(formatNumber(value))}</span>
+        ${trendHtml}
+      </div>
+      <div class="kpi-footer-row">
+        ${targetHtml}
+        ${description}
+      </div>
+    </div>
+  `;
 }
 
 function renderDashboardTable(component) {
@@ -1544,7 +1697,6 @@ function toggleComponentExpanded(componentId) {
   compactDashboardLayout(componentId);
   renderDashboardCanvas();
   markDirty();
-  scheduleLayoutAutosave();
 }
 
 function openComponentFullscreen(componentId) {
@@ -1580,15 +1732,21 @@ function dashboardIdFromHash() {
 
 function markDirty() {
   state.isDirty = true;
-  $('dashboardDraftIndicator').textContent = 'Unsaved changes';
-  $('dashboardDraftIndicator').classList.add('dirty');
+  const indicator = $('dashboardDraftIndicator');
+  if (indicator) {
+    indicator.textContent = 'Unsaved changes';
+    indicator.className = 'draft-indicator dirty';
+  }
   updateDashboardEditControls();
 }
 
 function markSaved() {
   state.isDirty = false;
-  $('dashboardDraftIndicator').textContent = 'Saved';
-  $('dashboardDraftIndicator').classList.remove('dirty');
+  const indicator = $('dashboardDraftIndicator');
+  if (indicator) {
+    indicator.textContent = 'Saved';
+    indicator.className = 'draft-indicator';
+  }
   updateDashboardEditControls();
 }
 

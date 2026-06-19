@@ -179,6 +179,55 @@ function bindEvents() {
   $('asyncExportBtn')?.addEventListener('click', asyncExportReport);
   $('scheduleReportBtn')?.addEventListener('click', scheduleReport);
   $('deleteReportBtn').addEventListener('click', deleteReport);
+
+  // Actions dropdown logic for Reports
+  const reportActionsBtn = $('reportActionsBtn');
+  const reportActionsMenu = $('reportActionsMenu');
+  if (reportActionsBtn && reportActionsMenu) {
+    reportActionsBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      reportActionsMenu.classList.toggle('show');
+    });
+    document.addEventListener('click', (e) => {
+      if (!e.target.closest('.actions-dropdown-container')) {
+        reportActionsMenu.classList.remove('show');
+      }
+    });
+  }
+
+  $('actionReportFavorite')?.addEventListener('click', () => {
+    reportActionsMenu?.classList.remove('show');
+    $('favoriteReportBtn')?.click();
+  });
+  $('actionReportClone')?.addEventListener('click', () => {
+    reportActionsMenu?.classList.remove('show');
+    $('cloneReportBtn')?.click();
+  });
+  $('actionReportDelete')?.addEventListener('click', () => {
+    reportActionsMenu?.classList.remove('show');
+    $('deleteReportBtn')?.click();
+  });
+  $('actionReportExportCSV')?.addEventListener('click', () => {
+    reportActionsMenu?.classList.remove('show');
+    $('exportReportBtn')?.click();
+  });
+  $('actionReportExportExcel')?.addEventListener('click', () => {
+    reportActionsMenu?.classList.remove('show');
+    $('exportExcelBtn')?.click();
+  });
+  $('actionReportAsyncExport')?.addEventListener('click', () => {
+    reportActionsMenu?.classList.remove('show');
+    $('asyncExportBtn')?.click();
+  });
+  $('actionReportSchedule')?.addEventListener('click', () => {
+    reportActionsMenu?.classList.remove('show');
+    $('scheduleReportBtn')?.click();
+  });
+  $('actionReportPrint')?.addEventListener('click', () => {
+    reportActionsMenu?.classList.remove('show');
+    window.print();
+  });
+
   $('addBucketFieldBtn')?.addEventListener('click', addBucketField);
   $('addRowFormulaBtn')?.addEventListener('click', addRowFormula);
   $('addSummaryFormulaBtn')?.addEventListener('click', addSummaryFormula);
@@ -731,6 +780,11 @@ async function saveReport(options = {}) {
     visibility: 'private'
   };
   const button = $('saveReportBtn');
+  const indicator = $('draftIndicator');
+  if (!options.silent && indicator) {
+    indicator.textContent = 'Saving...';
+    indicator.className = 'draft-indicator saving';
+  }
   if (!options.silent) setBusy(button, true, 'Saving...');
   try {
     const data = state.activeReport
@@ -743,6 +797,10 @@ async function saveReport(options = {}) {
     return data.report;
   } catch (err) {
     if (!options.silent) toast(err.message, 'err');
+    if (!options.silent && indicator) {
+      indicator.textContent = 'Unsaved changes';
+      indicator.className = 'draft-indicator dirty';
+    }
     return null;
   } finally {
     if (!options.silent) setBusy(button, false, 'Save');
@@ -1971,14 +2029,27 @@ function removeFilter(index) {
 
 function renderFilters() {
   syncFilterValueState();
-  $('activeFilters').innerHTML = state.filters.length
-    ? state.filters.map((filter, index) => `
+  const container = $('activeFilters');
+  if (!container) return;
+  
+  if (state.filters.length) {
+    container.innerHTML = state.filters.map((filter, index) => `
       <span class="field-pill">
         ${esc(labelForField(filter.field))} ${esc(operatorLabel(filter.operator))}${filter.value ? ` ${esc(filter.value)}` : ''}
         <button onclick="removeFilter(${index})">&times;</button>
       </span>
-    `).join('')
-    : '<span class="muted">No filters. All records allowed by security are included in preview.</span>';
+    `).join('');
+  } else {
+    container.innerHTML = `
+      <div class="empty-filters-banner">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"></polygon></svg>
+        <div class="empty-filters-text">
+          <strong>Add Filters</strong>
+          <span>Filter this report to focus only on records that match your specific criteria.</span>
+        </div>
+      </div>
+    `;
+  }
 }
 
 function addCrossFilter() {
@@ -2006,14 +2077,24 @@ function removeCrossFilter(index) {
 function renderCrossFilters() {
   const target = $('crossFilterChips');
   if (!target) return;
-  target.innerHTML = state.crossFilters.length
-    ? state.crossFilters.map((filter, index) => `
+  if (state.crossFilters.length) {
+    target.innerHTML = state.crossFilters.map((filter, index) => `
       <span class="field-pill metadata-pill">
         ${esc(crossFilterLabel(filter))}
         ${metadataActions('editCrossFilter', 'duplicateCrossFilter', 'removeCrossFilter', index)}
       </span>
-    `).join('')
-    : '';
+    `).join('');
+  } else {
+    target.innerHTML = `
+      <div class="empty-filters-banner">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"></polygon></svg>
+        <div class="empty-filters-text">
+          <strong>Add Cross Filters</strong>
+          <span>Cross filters let you filter a report by the relationship between parent and child objects.</span>
+        </div>
+      </div>
+    `;
+  }
 }
 
 function openCrossFilterModal(index = null) {
@@ -2881,7 +2962,7 @@ function markDirty() {
   const indicator = $('draftIndicator');
   if (indicator) {
     indicator.textContent = 'Unsaved changes';
-    indicator.classList.add('dirty');
+    indicator.className = 'draft-indicator dirty';
   }
 }
 
@@ -2890,7 +2971,7 @@ function markSaved() {
   const indicator = $('draftIndicator');
   if (indicator) {
     indicator.textContent = 'Saved';
-    indicator.classList.remove('dirty');
+    indicator.className = 'draft-indicator';
   }
 }
 

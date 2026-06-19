@@ -128,25 +128,42 @@
             <div class="report-title-row">
               <input id="dashboardName" class="report-title-input" placeholder="Untitled Dashboard">
               <span class="object-chip">Dashboard</span>
-              <span class="draft-indicator" id="dashboardDraftIndicator">Saved</span>
             </div>
             <textarea id="dashboardDescription" class="report-desc-input" placeholder="Optional description" rows="1"></textarea>
           </div>
           <div class="builder-buttons">
+            <span class="draft-indicator" id="dashboardDraftIndicator">Saved</span>
             <button class="btn btn-primary" id="dashboardEditModeBtn">Edit</button>
             <button class="btn btn-ghost" id="addComponentBtn">+ Add Component</button>
-            <button class="btn btn-ghost" id="dashboardFiltersBtn">Global Filters</button>
-            <button class="btn btn-ghost" id="dashboardPropertiesBtn">Properties</button>
             <button class="btn btn-ghost" id="refreshDashboardRunBtn">Refresh</button>
-            <select class="dashboard-auto-refresh" id="dashboardAutoRefresh">
-              <option value="0">Auto Refresh Off</option>
-              <option value="60">Every 1 min</option>
-              <option value="300">Every 5 min</option>
-              <option value="900">Every 15 min</option>
-            </select>
-            <button class="btn btn-ghost" id="favoriteDashboardBtn">Favorite</button>
-            <button class="btn btn-ghost" id="deleteDashboardBtn">Delete</button>
             <button class="btn btn-ghost" id="saveDashboardBtn">Save</button>
+            
+            <!-- Actions Dropdown Trigger -->
+            <div class="actions-dropdown-container">
+              <button type="button" class="btn btn-icon-only actions-dropdown-trigger" id="dashboardActionsBtn" title="More Actions">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="1"/><circle cx="12" cy="5" r="1"/><circle cx="12" cy="19" r="1"/></svg>
+              </button>
+              <div class="actions-dropdown-menu" id="dashboardActionsMenu">
+                <button type="button" class="actions-item" id="actionDashboardFilters"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"></polygon></svg>Global Filters</button>
+                <button type="button" class="actions-item" id="actionDashboardProperties"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.1a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>Properties</button>
+                <button type="button" class="actions-item" id="actionDashboardFavorite"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>Favorite</button>
+                <button type="button" class="actions-item" id="actionDashboardClone"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>Clone</button>
+                <button type="button" class="actions-item danger" id="actionDashboardDelete"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path><line x1="10" y1="11" x2="10" y2="17"></line><line x1="14" y1="11" x2="14" y2="17"></line></svg>Delete</button>
+                <span class="dropdown-divider"></span>
+                <button type="button" class="actions-item" id="actionDashboardExport"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>Export</button>
+                <button type="button" class="actions-item" id="actionDashboardSchedule"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect><line x1="16" y1="2" x2="16" y2="6"></line><line x1="8" y1="2" x2="8" y2="6"></line><line x1="3" y1="10" x2="21" y2="10"></line></svg>Schedule</button>
+                <button type="button" class="actions-item" id="actionDashboardShare"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="18" cy="5" r="3"></circle><circle cx="6" cy="12" r="3"></circle><circle cx="18" cy="19" r="3"></circle><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"></line><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"></line></svg>Share</button>
+                <button type="button" class="actions-item" id="actionDashboardPrint"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 6 2 18 2 18 9"></polyline><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"></path><rect x="6" y="14" width="12" height="8"></rect></svg>Print</button>
+              </div>
+            </div>
+
+            <!-- Keep originally bound elements hidden to prevent breaking listener JS -->
+            <button class="btn btn-ghost" id="dashboardFiltersBtn" style="display:none">Global Filters</button>
+            <button class="btn btn-ghost" id="dashboardPropertiesBtn" style="display:none">Properties</button>
+            <select class="dashboard-auto-refresh" id="dashboardAutoRefresh" style="display:none"><option value="0">Auto Refresh Off</option></select>
+            <button class="btn btn-ghost" id="favoriteDashboardBtn" style="display:none">Favorite</button>
+            <button class="btn btn-ghost" id="deleteDashboardBtn" style="display:none">Delete</button>
+
             <button class="btn btn-ghost" id="closeDashboardBtn">Close</button>
           </div>
         </div>
