@@ -557,6 +557,9 @@ let sfListViews = [];
 let searchTimer = null;
 let globalTimer = null;
 let lookupTimer = null;
+const CLIENT_CACHE_TTL_MS = 30 * 1000;
+const crmListCache = new Map();
+const apiInFlightRequests = new Map();
 let editingRecord = null;
 let deletingRecord = null;
 let currentUser = null;
@@ -912,6 +915,121 @@ async function api(path, options = {}) {
   }
 
   return data;
+}
+
+function cloneCacheValue(value) {
+  try {
+    return structuredClone(value);
+  } catch {
+    return JSON.parse(JSON.stringify(value));
+  }
+}
+
+function currentScrollPosition() {
+  return window.scrollY || document.documentElement.scrollTop || document.body.scrollTop || 0;
+}
+
+function crmListCachePrefix(objectName) {
+  return `crm:list:${objectName}:`;
+}
+
+function crmListCacheKey({ objectName, path, search, viewId, sort, page = 1, pageSize = RENDER_CHUNK_SIZE }) {
+  return [
+    crmListCachePrefix(objectName),
+    `path=${path}`,
+    `view=${viewId || "all"}`,
+    `search=${search || ""}`,
+    `sort=${sort?.field || ""}:${sort?.direction || "asc"}`,
+    `page=${page}`,
+    `size=${pageSize}`,
+  ].join("|");
+}
+
+function getCrmListCache(key) {
+  const entry = crmListCache.get(key);
+  if (!entry || Date.now() - entry.timestamp > CLIENT_CACHE_TTL_MS) {
+    if (entry) crmListCache.delete(key);
+    return null;
+  }
+  return cloneCacheValue(entry);
+}
+
+function setCrmListCache(key, entry) {
+  crmListCache.set(key, cloneCacheValue({ ...entry, timestamp: Date.now() }));
+}
+
+function refreshCrmCachePayload(entry) {
+  if (!entry?.payload) return;
+  entry.payload.records = cloneCacheValue(currentRecords || []);
+  entry.payload.nextRecordsUrl = nextRecordsUrl || null;
+  entry.payload.totalSize = totalRecords || currentRecords.length;
+  entry.payload.hiddenFields = Array.from(currentHiddenFields || []);
+  entry.payload.columns = cloneCacheValue(currentColumns || []);
+}
+
+function rememberCurrentListCacheState() {
+  if (!loadData.activeCacheKey || !crmListCache.has(loadData.activeCacheKey)) return;
+  const entry = crmListCache.get(loadData.activeCacheKey);
+  refreshCrmCachePayload(entry);
+  entry.scrollPosition = currentScrollPosition();
+  entry.selectedRecord = detailRecordState?.id || null;
+  entry.visibleRecordCount = visibleRecordCount;
+}
+
+function markCachedSelectedRecord(recordId) {
+  if (!loadData.activeCacheKey || !crmListCache.has(loadData.activeCacheKey)) return;
+  const entry = crmListCache.get(loadData.activeCacheKey);
+  refreshCrmCachePayload(entry);
+  entry.scrollPosition = currentScrollPosition();
+  entry.selectedRecord = recordId || null;
+  entry.visibleRecordCount = visibleRecordCount;
+}
+
+function invalidateCrmObjectCache(objectName) {
+  const prefix = crmListCachePrefix(objectName);
+  for (const key of crmListCache.keys()) {
+    if (key.startsWith(prefix)) crmListCache.delete(key);
+  }
+  for (const key of apiInFlightRequests.keys()) {
+    if (key.includes(`/api/${objectName}`)) apiInFlightRequests.delete(key);
+  }
+}
+
+function applyCrmListPayload(payload) {
+  currentRecords = payload.records || [];
+  nextRecordsUrl = payload.nextRecordsUrl || null;
+  totalRecords = payload.totalSize || currentRecords.length;
+  currentHiddenFields = new Set(payload.hiddenFields || []);
+  if (payload.columns) {
+    currentColumns = normalizeListViewColumns(payload.columns);
+  } else {
+    applyLocalView();
+  }
+  currentColumns = currentColumns.filter((field) => !currentHiddenFields.has(field));
+}
+
+async function fetchCrmListPayload(path, cacheKey, cacheMeta, forceRefresh = false) {
+  if (!forceRefresh) {
+    const cached = getCrmListCache(cacheKey);
+    if (cached) return { payload: cached.payload, fromCache: true, meta: cached };
+  }
+  if (!forceRefresh && apiInFlightRequests.has(cacheKey)) {
+    return apiInFlightRequests.get(cacheKey);
+  }
+  const request = api(path).then((payload) => {
+    if (payload && !payload.error) {
+      setCrmListCache(cacheKey, {
+        ...cacheMeta,
+        payload,
+        scrollPosition: 0,
+        selectedRecord: null,
+      });
+    }
+    return { payload, fromCache: false, meta: null };
+  });
+  apiInFlightRequests.set(cacheKey, request);
+  request.finally(() => apiInFlightRequests.delete(cacheKey));
+  return request;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1926,9 +2044,11 @@ async function handleListViewChange(value) {
   await loadData();
 }
 
-async function loadData() {
+async function loadData(options = {}) {
   const loadToken = Symbol("loadData");
   loadData.latestToken = loadToken;
+  rememberCurrentListCacheState();
+  const forceRefresh = Boolean(options.forceRefresh);
   const search = $("objSearch")?.value || "";
   const meta = OBJECT_META[currentObject];
   if (!meta || !canReadObject(currentObject)) {
@@ -1946,52 +2066,66 @@ async function loadData() {
 
   $("pageIcon").innerHTML = objectIcon(currentObject);
   $("pageTitle").textContent = getCurrentViewName();
-  $("pageSub").textContent =
-    `Loading ${meta.title.toLowerCase()} from Salesforce...`;
-  $("stateLoading").style.display = "flex";
-  $("stateError").style.display = "none";
-  $("tableCard").style.display = "none";
-  if ($("kanbanCard")) $("kanbanCard").style.display = "none";
-  updateViewToggle();
-
   try {
+    let path = "";
+    let cacheMeta = {
+      objectName: currentObject,
+      filters: { viewId: currentViewId },
+      page: 1,
+      pageSize: RENDER_CHUNK_SIZE,
+      sort: { ...sortState },
+      search,
+    };
     if (currentViewId.startsWith("sf:")) {
       const viewId = currentViewId.slice(3);
-      const data = await api(
-        `/api/${currentObject}/listviews/${viewId}/results`,
-      );
-      currentRecords = data.records || [];
-      nextRecordsUrl = data.nextRecordsUrl || null;
-      totalRecords = data.totalSize || currentRecords.length;
-      currentColumns = normalizeListViewColumns(data.columns);
-      currentHiddenFields = new Set(data.hiddenFields || []);
-      currentColumns = currentColumns.filter(field => !currentHiddenFields.has(field));
+      path = `/api/${currentObject}/listviews/${viewId}/results`;
     } else {
       const params = new URLSearchParams();
       if (search) params.set("search", search);
       const query = `?${params.toString()}`;
-      const data = await api(`/api/${currentObject}${query}`);
-      currentRecords = data.records || [];
-      nextRecordsUrl = data.nextRecordsUrl || null;
-      totalRecords = data.totalSize || currentRecords.length;
-      currentHiddenFields = new Set(data.hiddenFields || []);
-      applyLocalView();
-      currentColumns = currentColumns.filter(field => !currentHiddenFields.has(field));
+      path = `/api/${currentObject}${query}`;
     }
+    const cacheKey = crmListCacheKey({
+      objectName: currentObject,
+      path,
+      search,
+      viewId: currentViewId,
+      sort: sortState,
+    });
+    const cachedEntry = forceRefresh ? null : getCrmListCache(cacheKey);
+    if (!cachedEntry) {
+      $("pageSub").textContent =
+        `Loading ${meta.title.toLowerCase()} from Salesforce...`;
+      $("stateLoading").style.display = "flex";
+      $("stateError").style.display = "none";
+      $("tableCard").style.display = "none";
+      if ($("kanbanCard")) $("kanbanCard").style.display = "none";
+      updateViewToggle();
+    }
+    const result = cachedEntry
+      ? { payload: cachedEntry.payload, fromCache: true, meta: cachedEntry }
+      : await fetchCrmListPayload(path, cacheKey, cacheMeta, forceRefresh);
+    loadData.activeCacheKey = cacheKey;
+    applyCrmListPayload(result.payload || {});
 
     if (viewingDetail || loadData.latestToken !== loadToken) return;
 
-    visibleRecordCount = RENDER_CHUNK_SIZE;
+    visibleRecordCount = result.fromCache && result.meta?.visibleRecordCount
+      ? result.meta.visibleRecordCount
+      : RENDER_CHUNK_SIZE;
     applySort();
     await renderCurrentView();
     if (viewingDetail || loadData.latestToken !== loadToken) return;
     updatePagination();
     updateBadge(currentObject, totalRecords || currentRecords.length);
     updateRecordCounts();
-    await verifyListCountWhenSmall();
+    if (!result.fromCache) await verifyListCountWhenSmall();
     $("stateLoading").style.display = "none";
     applyPermissionGuards(currentObject);
     showActiveView();
+    if (result.fromCache && result.meta?.scrollPosition) {
+      requestAnimationFrame(() => window.scrollTo(0, result.meta.scrollPosition || 0));
+    }
     queueLazyLoadIfNeeded();
  } catch (err) {
     $('stateLoading').style.display = 'none';
@@ -2488,6 +2622,7 @@ async function loadMoreRecords() {
     updatePagination();
     updateBadge(currentObject, totalRecords || currentRecords.length);
     updateRecordCounts();
+    rememberCurrentListCacheState();
     return true;
   } catch (err) {
     toast(err.message, "err");
@@ -2507,6 +2642,7 @@ async function showMoreVisibleRecords() {
   await renderCurrentView();
   updatePagination();
   updateRecordCounts();
+  rememberCurrentListCacheState();
   if (visibleRecordCount >= currentRecords.length && nextRecordsUrl) {
     await loadMoreRecords();
   } else {
@@ -2637,6 +2773,7 @@ async function switchObject(objectName) {
     toast(`You do not have access to ${OBJECT_META[objectName]?.title || objectName}.`, "err");
     return;
   }
+  rememberCurrentListCacheState();
   if (viewingDetail) restoreListContent(false);
   currentObject = objectName;
   currentRecords = [];
@@ -3301,6 +3438,7 @@ function closeModal() {
 
 async function openRecordDetail(objectName, id) {
   if (!id || !OBJECT_META[objectName]) return;
+  markCachedSelectedRecord(id);
   if (!canReadObject(objectName)) {
     toast(`You do not have access to ${OBJECT_META[objectName]?.title || objectName}.`, "err");
     return;
@@ -6131,9 +6269,11 @@ async function refreshAfterSave(objectName, savedRecord, wasEditing) {
     applySort();
     await renderCurrentView();
     updateRecordCounts();
-    loadData().catch((err) => console.warn("Background refresh failed:", err.message));
+    invalidateCrmObjectCache(objectName);
+    loadData({ forceRefresh: true }).catch((err) => console.warn("Background refresh failed:", err.message));
   } else {
-    loadData().catch((err) => console.warn("Background refresh failed:", err.message));
+    invalidateCrmObjectCache(objectName);
+    loadData({ forceRefresh: true }).catch((err) => console.warn("Background refresh failed:", err.message));
   }
 }
 
@@ -6167,6 +6307,7 @@ async function saveRecord() {
         method: "PATCH",
         body: JSON.stringify(body),
       });
+      invalidateCrmObjectCache(objectName);
       Object.assign(savedRecord, body);
       toast("Record updated", "ok");
     } else {
@@ -6174,6 +6315,7 @@ async function saveRecord() {
         method: "POST",
         body: JSON.stringify(body),
       });
+      invalidateCrmObjectCache(objectName);
       if (result?.id) Object.assign(body, { Id: result.id });
       toast("Record created", "ok");
     }
@@ -6209,9 +6351,10 @@ async function confirmDelete() {
     await api(`/api/${currentObject}/${deletingRecord.Id}`, {
       method: "DELETE",
     });
+    invalidateCrmObjectCache(currentObject);
     toast("Record deleted", "ok");
     closeDeleteModal();
-    await loadData();
+    await loadData({ forceRefresh: true });
   } catch (err) {
     if (!err.alreadyToasted) {
       toast(err.message || 'Could not delete record. Please try again.', 'err', 10000);

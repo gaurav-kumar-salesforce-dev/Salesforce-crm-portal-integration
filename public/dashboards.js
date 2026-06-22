@@ -25,6 +25,10 @@ const state = {
   actionMenu: null
 };
 
+const CLIENT_CACHE_TTL_MS = 30 * 1000;
+const browserMemoryCache = new Map();
+const browserInFlightRequests = new Map();
+
 const $ = (id) => document.getElementById(id);
 
 document.addEventListener('DOMContentLoaded', async () => {
@@ -199,21 +203,28 @@ async function api(path, options = {}) {
   if (method === 'GET' && cacheKey && !options.skipBrowserCache) {
     const cached = browserCacheGet(cacheKey);
     if (cached) return cached;
+    if (browserInFlightRequests.has(cacheKey)) return browserInFlightRequests.get(cacheKey);
   }
-  const res = await fetch(path, {
+  const request = fetch(path, {
     ...options,
     headers: {
       'Content-Type': 'application/json',
       Authorization: `Bearer ${token}`,
       ...(options.headers || {})
     }
+  }).then(async (res) => {
+    const text = await res.text();
+    const data = text ? JSON.parse(text) : {};
+    if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
+    if (method === 'GET' && cacheKey) browserCacheSet(cacheKey, data);
+    if (method !== 'GET') browserCacheInvalidate(path);
+    return data;
   });
-  const text = await res.text();
-  const data = text ? JSON.parse(text) : {};
-  if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
-  if (method === 'GET' && cacheKey) browserCacheSet(cacheKey, data);
-  if (method !== 'GET') browserCacheInvalidate(path);
-  return data;
+  if (method === 'GET' && cacheKey) {
+    browserInFlightRequests.set(cacheKey, request);
+    request.finally(() => browserInFlightRequests.delete(cacheKey));
+  }
+  return request;
 }
 
 function browserCacheKey(path) {
@@ -229,34 +240,29 @@ function browserCacheKey(path) {
 }
 
 function browserCacheGet(key) {
-  try {
-    const item = JSON.parse(sessionStorage.getItem(key) || 'null');
-    if (!item || Date.now() > item.expiresAt) {
-      sessionStorage.removeItem(key);
-      return null;
-    }
-    return item.value;
-  } catch (err) {
+  const item = browserMemoryCache.get(key);
+  if (!item || Date.now() > item.expiresAt) {
+    if (item) browserMemoryCache.delete(key);
     return null;
   }
+  return item.value;
 }
 
 function browserCacheSet(key, value, ttlMs = 60 * 1000) {
-  try {
-    sessionStorage.setItem(key, JSON.stringify({ value, expiresAt: Date.now() + ttlMs }));
-  } catch (err) {
-    // Browser storage is an optimization only.
-  }
+  browserMemoryCache.set(key, { value, expiresAt: Date.now() + Math.min(ttlMs, CLIENT_CACHE_TTL_MS) });
 }
 
 function browserCacheInvalidate(path) {
   const scope = String(path || '').startsWith('/api/reports') ? 'saasray:v1:/api/reports' : 'saasray:v1:/api/dashboards';
-  Object.keys(sessionStorage).forEach((key) => {
-    if (key.startsWith(scope)) sessionStorage.removeItem(key);
-  });
+  for (const key of browserMemoryCache.keys()) {
+    if (key.startsWith(scope)) browserMemoryCache.delete(key);
+  }
+  for (const key of browserInFlightRequests.keys()) {
+    if (key.startsWith(scope)) browserInFlightRequests.delete(key);
+  }
 }
 
-async function loadDashboards() {
+async function loadDashboards(options = {}) {
   const q = ($('dashboardListSearch')?.value || $('dashboardSearch')?.value || '').trim();
   setPageBusy(true, 'Loading dashboards...');
   const params = new URLSearchParams();
@@ -265,7 +271,9 @@ async function loadDashboards() {
   if (state.folderId) params.set('folderId', state.folderId);
   params.set('sort', sortFieldForApi(state.sort));
   params.set('direction', state.direction);
-  const data = await api(`/api/dashboards?${params.toString()}`).finally(() => setPageBusy(false));
+  const data = await api(`/api/dashboards?${params.toString()}`, {
+    skipBrowserCache: Boolean(options.forceRefresh)
+  }).finally(() => setPageBusy(false));
   state.dashboards = data.dashboards || [];
   const count = state.dashboards.length;
   $('dashboardCount').textContent = `${count} ${count === 1 ? 'item' : 'items'}`;
@@ -287,7 +295,13 @@ async function loadReports() {
 }
 
 async function refreshDashboardHome() {
-  await Promise.all([loadFolders(), loadDashboards()]);
+  await Promise.all([
+    api('/api/dashboards/folders', { skipBrowserCache: true }).then((data) => {
+      state.folders = data.folders || [];
+      renderFolderTree();
+    }),
+    loadDashboards({ forceRefresh: true })
+  ]);
 }
 
 function syncDashboardSearchAndLoad(event) {
