@@ -3449,17 +3449,34 @@ app.post('/api/auth/forgot-password', async (req, res) => {
 
   // Always return success — never reveal whether email exists (security)
   const genericResponse = { success: true, message: 'If that email exists, a reset link has been sent.' };
+  const requestedEmail = String(email || '').toLowerCase().trim();
+  const requestId = crypto.randomBytes(4).toString('hex');
+  const maskEmail = (value = '') => value.replace(/^(.{2}).*(@.*)$/, '$1***$2');
+  const resetLog = (...args) => console.log(`[forgot-password:${requestId}]`, ...args);
 
   try {
+    resetLog('request received', { email: maskEmail(requestedEmail), ip: req.ip });
     // 1. Find user
-    const { data: user } = await supabase
+    const { data: user, error: lookupError } = await supabase
       .from('users')
       .select('id, name, email, is_active')
-      .eq('email', email.toLowerCase().trim())
+      .eq('email', requestedEmail)
       .single();
 
     // If no user or inactive — return generic success anyway (don't leak info)
-    if (!user || !user.is_active) return res.json(genericResponse);
+    if (lookupError && lookupError.code !== 'PGRST116') {
+      resetLog('user lookup failed', { code: lookupError.code, message: lookupError.message });
+      return res.json(genericResponse);
+    }
+    if (!user) {
+      resetLog('no portal user found; returning generic success');
+      return res.json(genericResponse);
+    }
+    if (!user.is_active) {
+      resetLog('portal user is inactive; returning generic success', { userId: user.id, email: maskEmail(user.email) });
+      return res.json(genericResponse);
+    }
+    resetLog('active portal user found', { userId: user.id, email: maskEmail(user.email) });
 
     // 2. Generate a secure random token
     const resetToken = crypto.randomBytes(32).toString('hex');
@@ -3485,9 +3502,19 @@ app.post('/api/auth/forgot-password', async (req, res) => {
     // 4. Send email via Resend
     const appUrl = process.env.APP_URL || `http://localhost:${PORT}`;
     const resetUrl = `${appUrl}/reset-password.html?token=${resetToken}`;
+    const fromEmail = process.env.FROM_EMAIL || 'SaaSRAY CRM <noreply@crm.saasray.com>';
 
-    await resend.emails.send({
-      from: process.env.FROM_EMAIL || 'noreply@yourdomain.com',
+    if (!process.env.RESEND_API_KEY) {
+      resetLog('RESEND_API_KEY is missing; email cannot be sent');
+      return res.json(genericResponse);
+    }
+
+    if (/onboarding@resend\.dev/i.test(fromEmail)) {
+      resetLog('warning: FROM_EMAIL uses onboarding@resend.dev; external recipients may not receive reset emails');
+    }
+
+    const sendResult = await resend.emails.send({
+      from: fromEmail,
       to: user.email,
       subject: 'SaaSRAY CRM — Reset Your Password',
       html: `
@@ -3579,6 +3606,21 @@ app.post('/api/auth/forgot-password', async (req, res) => {
       `
     });
 
+    if (sendResult?.error) {
+      resetLog('Resend rejected reset email', {
+        name: sendResult.error.name,
+        message: sendResult.error.message,
+        statusCode: sendResult.error.statusCode
+      });
+      return res.json(genericResponse);
+    }
+
+    resetLog('Resend accepted reset email', {
+      messageId: sendResult?.data?.id || sendResult?.id || null,
+      from: fromEmail,
+      to: maskEmail(user.email)
+    });
+
     // 5. Audit log
     await writeAuditLog({
       userId: user.id,
@@ -3591,7 +3633,7 @@ app.post('/api/auth/forgot-password', async (req, res) => {
     res.json(genericResponse);
 
   } catch (err) {
-    console.error('Forgot password error:', err.message);
+    console.error(`[forgot-password:${requestId}] error:`, err.message);
     // Still return generic success — don't leak errors to attacker
     res.json(genericResponse);
   }
