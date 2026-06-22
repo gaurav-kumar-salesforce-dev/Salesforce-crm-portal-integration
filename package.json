@@ -3,6 +3,9 @@
   "version": "1.0.0",
   "description": "Salesforce CRM Manager - Full Integration App",
   "main": "server.js",
+  "engines": {
+    "node": "20.x"
+  },
   "scripts": {
     "start": "node server.js",
     "dev": "nodemon server.js"
