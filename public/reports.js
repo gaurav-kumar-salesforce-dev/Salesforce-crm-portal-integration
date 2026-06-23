@@ -46,6 +46,10 @@ const state = {
   showGrandTotal: true
 };
 
+const CLIENT_CACHE_TTL_MS = 30 * 1000;
+const browserMemoryCache = new Map();
+const browserInFlightRequests = new Map();
+
 const $ = (id) => document.getElementById(id);
 
 document.addEventListener('DOMContentLoaded', async () => {
@@ -66,7 +70,7 @@ function bindEvents() {
   $('newReportBtn').addEventListener('click', newReport);
   $('newFolderBtn')?.addEventListener('click', () => openFolderModal());
   $('newReportTypeBtn')?.addEventListener('click', openReportTypeModal);
-  $('refreshReportsBtn').addEventListener('click', loadReports);
+  $('refreshReportsBtn').addEventListener('click', () => loadReports({ forceRefresh: true }));
   $('reportSearch').addEventListener('input', debounce(syncReportSearchAndLoad, 250));
   $('reportListSearch')?.addEventListener('input', debounce(syncReportSearchAndLoad, 250));
   $('toggleReportSidebarBtn')?.addEventListener('click', toggleReportSidebar);
@@ -287,21 +291,28 @@ async function api(path, options = {}) {
   if (method === 'GET' && cacheKey && !options.skipBrowserCache) {
     const cached = browserCacheGet(cacheKey);
     if (cached) return cached;
+    if (browserInFlightRequests.has(cacheKey)) return browserInFlightRequests.get(cacheKey);
   }
-  const res = await fetch(path, {
+  const request = fetch(path, {
     ...options,
     headers: {
       'Content-Type': 'application/json',
       Authorization: `Bearer ${token}`,
       ...(options.headers || {})
     }
+  }).then(async (res) => {
+    const text = await res.text();
+    const data = text ? JSON.parse(text) : {};
+    if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
+    if (method === 'GET' && cacheKey) browserCacheSet(cacheKey, data);
+    if (method !== 'GET') browserCacheInvalidate(path);
+    return data;
   });
-  const text = await res.text();
-  const data = text ? JSON.parse(text) : {};
-  if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
-  if (method === 'GET' && cacheKey) browserCacheSet(cacheKey, data);
-  if (method !== 'GET') browserCacheInvalidate(path);
-  return data;
+  if (method === 'GET' && cacheKey) {
+    browserInFlightRequests.set(cacheKey, request);
+    request.finally(() => browserInFlightRequests.delete(cacheKey));
+  }
+  return request;
 }
 
 function browserCacheKey(path) {
@@ -318,33 +329,28 @@ function browserCacheKey(path) {
 }
 
 function browserCacheGet(key) {
-  try {
-    const item = JSON.parse(sessionStorage.getItem(key) || 'null');
-    if (!item || Date.now() > item.expiresAt) {
-      sessionStorage.removeItem(key);
-      return null;
-    }
-    return item.value;
-  } catch (err) {
+  const item = browserMemoryCache.get(key);
+  if (!item || Date.now() > item.expiresAt) {
+    if (item) browserMemoryCache.delete(key);
     return null;
   }
+  return item.value;
 }
 
 function browserCacheSet(key, value, ttlMs = 60 * 1000) {
-  try {
-    sessionStorage.setItem(key, JSON.stringify({ value, expiresAt: Date.now() + ttlMs }));
-  } catch (err) {
-    // Browser storage is an optimization only.
-  }
+  browserMemoryCache.set(key, { value, expiresAt: Date.now() + Math.min(ttlMs, CLIENT_CACHE_TTL_MS) });
 }
 
 function browserCacheInvalidate(path) {
   const scopes = String(path || '').startsWith('/api/dashboards')
     ? ['saasray:v1:/api/dashboards']
     : ['saasray:v1:/api/reports', 'saasray:v1:/api/dashboards'];
-  Object.keys(sessionStorage).forEach((key) => {
-    if (scopes.some((scope) => key.startsWith(scope))) sessionStorage.removeItem(key);
-  });
+  for (const key of browserMemoryCache.keys()) {
+    if (scopes.some((scope) => key.startsWith(scope))) browserMemoryCache.delete(key);
+  }
+  for (const key of browserInFlightRequests.keys()) {
+    if (scopes.some((scope) => key.startsWith(scope))) browserInFlightRequests.delete(key);
+  }
 }
 
 async function loadFolders() {
@@ -445,7 +451,7 @@ function selectedReportType() {
   return state.reportTypes.find((type) => type.id === id) || null;
 }
 
-async function loadReports() {
+async function loadReports(options = {}) {
   const q = ($('reportListSearch')?.value || $('reportSearch')?.value || '').trim();
   const params = new URLSearchParams();
   if (q) params.set('search', q);
@@ -453,7 +459,9 @@ async function loadReports() {
   if (!state.selectedFolderId && state.reportView) params.set('view', state.reportView);
   showReportsLoading();
   try {
-    const data = await api(`/api/reports${params.toString() ? `?${params.toString()}` : ''}`);
+    const data = await api(`/api/reports${params.toString() ? `?${params.toString()}` : ''}`, {
+      skipBrowserCache: Boolean(options.forceRefresh)
+    });
     state.reports = data.reports || [];
     const count = state.reports.length;
     if ($('reportCount')) $('reportCount').textContent = `${count} ${count === 1 ? 'item' : 'items'}`;

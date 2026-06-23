@@ -557,6 +557,12 @@ let sfListViews = [];
 let searchTimer = null;
 let globalTimer = null;
 let lookupTimer = null;
+const CLIENT_CACHE_TTL_MS = 30 * 1000;
+const crmListCache = new Map();
+const apiInFlightRequests = new Map();
+const crmBackgroundRefreshes = new Map();
+const crmPageStates = new Map();
+let restoringCrmHistory = false;
 let editingRecord = null;
 let deletingRecord = null;
 let currentUser = null;
@@ -574,6 +580,7 @@ const kanbanPicklistCache = {};
 let listContentHtml = "";
 let viewingDetail = false;
 let detailRecordState = null;
+let selectedListRecordId = null;
 let lastToastKey = "";
 let lastToastAt = 0;
 let activeCampaign = null;
@@ -914,6 +921,328 @@ async function api(path, options = {}) {
   return data;
 }
 
+function cloneCacheValue(value) {
+  try {
+    return structuredClone(value);
+  } catch {
+    return JSON.parse(JSON.stringify(value));
+  }
+}
+
+function currentScrollPosition() {
+  return window.scrollY || document.documentElement.scrollTop || document.body.scrollTop || 0;
+}
+
+function crmListCachePrefix(objectName) {
+  return `crm:list:${objectName}:`;
+}
+
+function crmListCacheKey({ objectName, path, search, viewId, sort, page = 1, pageSize = RENDER_CHUNK_SIZE }) {
+  return [
+    crmListCachePrefix(objectName),
+    `path=${path}`,
+    `view=${viewId || "all"}`,
+    `search=${search || ""}`,
+    `sort=${sort?.field || ""}:${sort?.direction || "asc"}`,
+    `page=${page}`,
+    `size=${pageSize}`,
+  ].join("|");
+}
+
+function getCrmListCache(key) {
+  const entry = crmListCache.get(key);
+  if (!entry || Date.now() - entry.timestamp > CLIENT_CACHE_TTL_MS) {
+    if (entry) crmListCache.delete(key);
+    return null;
+  }
+  return cloneCacheValue(entry);
+}
+
+function setCrmListCache(key, entry) {
+  crmListCache.set(key, cloneCacheValue({ ...entry, timestamp: Date.now() }));
+}
+
+function peekCrmListCache(key) {
+  const entry = crmListCache.get(key);
+  return entry ? cloneCacheValue(entry) : null;
+}
+
+function normalizeCrmPayloadForCompare(payload = {}) {
+  return {
+    records: payload.records || [],
+    nextRecordsUrl: payload.nextRecordsUrl || null,
+    totalSize: payload.totalSize || (payload.records || []).length,
+    hiddenFields: payload.hiddenFields || [],
+    columns: payload.columns || null,
+  };
+}
+
+function sameCrmPayload(left, right) {
+  return JSON.stringify(normalizeCrmPayloadForCompare(left)) ===
+    JSON.stringify(normalizeCrmPayloadForCompare(right));
+}
+
+function showBackgroundRefreshIndicator(show) {
+  const pageSub = $("pageSub");
+  if (!pageSub) return;
+  pageSub.classList.toggle("is-refreshing", Boolean(show));
+  const existing = pageSub.querySelector(".mini-refresh-indicator");
+  if (!show) {
+    existing?.remove();
+    return;
+  }
+  if (!existing) {
+    pageSub.insertAdjacentHTML(
+      "beforeend",
+      ' <span class="mini-refresh-indicator">Refreshing...</span>',
+    );
+  }
+}
+
+function refreshCrmCachePayload(entry) {
+  if (!entry?.payload) return;
+  entry.payload.records = cloneCacheValue(currentRecords || []);
+  entry.payload.nextRecordsUrl = nextRecordsUrl || null;
+  entry.payload.totalSize = totalRecords || currentRecords.length;
+  entry.payload.hiddenFields = Array.from(currentHiddenFields || []);
+  entry.payload.columns = cloneCacheValue(currentColumns || []);
+}
+
+function rememberCurrentListCacheState() {
+  if (!loadData.activeCacheKey || !crmListCache.has(loadData.activeCacheKey)) return;
+  const entry = crmListCache.get(loadData.activeCacheKey);
+  refreshCrmCachePayload(entry);
+  entry.scrollPosition = currentScrollPosition();
+  entry.selectedRecord = selectedListRecordId || detailRecordState?.id || null;
+  entry.visibleRecordCount = visibleRecordCount;
+}
+
+function markCachedSelectedRecord(recordId) {
+  selectedListRecordId = recordId || null;
+  if (!loadData.activeCacheKey || !crmListCache.has(loadData.activeCacheKey)) return;
+  const entry = crmListCache.get(loadData.activeCacheKey);
+  refreshCrmCachePayload(entry);
+  entry.scrollPosition = currentScrollPosition();
+  entry.selectedRecord = recordId || null;
+  entry.visibleRecordCount = visibleRecordCount;
+}
+
+function cloneSetValues(setValue) {
+  return Array.from(setValue || []);
+}
+
+function currentCrmSearch() {
+  return $("objSearch")?.value || "";
+}
+
+function setActiveNavObject(objectName) {
+  document.querySelectorAll(".nav-item[data-obj]").forEach((item) => {
+    item.classList.toggle("active", item.dataset.obj === objectName);
+  });
+}
+
+function crmObjectFromLocation() {
+  const hash = decodeURIComponent(window.location.hash || "");
+  const match = hash.match(/^#(?:object=)?([A-Za-z]+)$/);
+  const objectName = match?.[1];
+  return objectName && OBJECT_META[objectName] ? objectName : null;
+}
+
+function initialReadableObject() {
+  const requested = crmObjectFromLocation();
+  if (requested && canReadObject(requested)) return requested;
+  return firstReadableNavObject() || currentObject;
+}
+
+function writeCrmHistory(objectName, replace = false) {
+  if (!objectName || !OBJECT_META[objectName]) return;
+  const hash = `#object=${encodeURIComponent(objectName)}`;
+  if (window.location.hash === hash && history.state?.crmObject === objectName) return;
+  const method = replace ? "replaceState" : "pushState";
+  history[method]({ ...(history.state || {}), crmObject: objectName }, "", hash);
+}
+
+function captureCrmPageState(objectName = currentObject) {
+  if (!objectName || !OBJECT_META[objectName] || !$("content")) return;
+  rememberCurrentListCacheState();
+  crmPageStates.set(objectName, {
+    timestamp: Date.now(),
+    objectName,
+    contentHtml: $("content").innerHTML,
+    search: currentCrmSearch(),
+    currentRecords: cloneCacheValue(currentRecords || []),
+    currentColumns: cloneCacheValue(currentColumns || []),
+    currentHiddenFields: cloneSetValues(currentHiddenFields),
+    currentViewId,
+    sfListViews: cloneCacheValue(sfListViews || []),
+    sortState: cloneCacheValue(sortState || { field: null, direction: "asc" }),
+    totalRecords,
+    nextRecordsUrl,
+    visibleRecordCount,
+    currentViewMode,
+    loadingMoreRecords: false,
+    scrollPosition: currentScrollPosition(),
+    selectedRecord: selectedListRecordId || detailRecordState?.id || null,
+    activeCacheKey: loadData.activeCacheKey || "",
+    listContentHtml,
+    viewingDetail,
+    detailRecordState: cloneCacheValue(detailRecordState || null),
+  });
+}
+
+function restoreCrmPageState(objectName) {
+  const state = crmPageStates.get(objectName);
+  if (!state || Date.now() - state.timestamp > CLIENT_CACHE_TTL_MS) return false;
+  if (state.activeCacheKey && !getCrmListCache(state.activeCacheKey)) return false;
+
+  currentObject = objectName;
+  currentRecords = cloneCacheValue(state.currentRecords || []);
+  currentColumns = cloneCacheValue(state.currentColumns || []);
+  currentHiddenFields = new Set(state.currentHiddenFields || []);
+  currentViewId = state.currentViewId || "all";
+  sfListViews = cloneCacheValue(state.sfListViews || []);
+  sortState = cloneCacheValue(state.sortState || { field: null, direction: "asc" });
+  totalRecords = state.totalRecords || 0;
+  nextRecordsUrl = state.nextRecordsUrl || null;
+  visibleRecordCount = state.visibleRecordCount || RENDER_CHUNK_SIZE;
+  currentViewMode = state.currentViewMode || "table";
+  loadingMoreRecords = false;
+  listContentHtml = state.listContentHtml || listContentHtml;
+  viewingDetail = Boolean(state.viewingDetail);
+  detailRecordState = cloneCacheValue(state.detailRecordState || null);
+  selectedListRecordId = state.selectedRecord || null;
+  loadData.activeCacheKey = state.activeCacheKey || "";
+
+  $("content").innerHTML = state.contentHtml;
+  const searchInput = $("objSearch");
+  if (searchInput) searchInput.value = state.search || "";
+  const select = $("listViewSelect");
+  if (select) select.value = currentViewId;
+  setActiveNavObject(objectName);
+  applyObjectNavGuards();
+  updateViewToggle();
+  showActiveView();
+  applyPermissionGuards(objectName);
+  updatePagination();
+  updateRecordCounts();
+  observeLazySentinel();
+  requestAnimationFrame(() => window.scrollTo(0, state.scrollPosition || 0));
+  queueLazyLoadIfNeeded();
+  return true;
+}
+
+async function restoreCrmObjectFromHistory(objectName) {
+  if (!objectName || !OBJECT_META[objectName] || !canReadObject(objectName)) return;
+  restoringCrmHistory = true;
+  try {
+    await switchObject(objectName);
+  } finally {
+    restoringCrmHistory = false;
+  }
+}
+
+function invalidateCrmObjectCache(objectName) {
+  const prefix = crmListCachePrefix(objectName);
+  for (const key of crmListCache.keys()) {
+    if (key.startsWith(prefix)) crmListCache.delete(key);
+  }
+  crmPageStates.delete(objectName);
+  for (const key of apiInFlightRequests.keys()) {
+    if (key.includes(`/api/${objectName}`)) apiInFlightRequests.delete(key);
+  }
+  for (const key of crmBackgroundRefreshes.keys()) {
+    if (key.startsWith(prefix)) crmBackgroundRefreshes.delete(key);
+  }
+}
+
+function applyCrmListPayload(payload) {
+  currentRecords = payload.records || [];
+  nextRecordsUrl = payload.nextRecordsUrl || null;
+  totalRecords = payload.totalSize || currentRecords.length;
+  currentHiddenFields = new Set(payload.hiddenFields || []);
+  if (payload.columns) {
+    currentColumns = normalizeListViewColumns(payload.columns);
+  } else {
+    applyLocalView();
+  }
+  currentColumns = currentColumns.filter((field) => !currentHiddenFields.has(field));
+}
+
+async function fetchCrmListPayload(path, cacheKey, cacheMeta, forceRefresh = false) {
+  if (!forceRefresh) {
+    const cached = getCrmListCache(cacheKey);
+    if (cached) return { payload: cached.payload, fromCache: true, meta: cached };
+  }
+  if (!forceRefresh && apiInFlightRequests.has(cacheKey)) {
+    return apiInFlightRequests.get(cacheKey);
+  }
+  const request = api(path).then((payload) => {
+    if (payload && !payload.error) {
+      setCrmListCache(cacheKey, {
+        ...cacheMeta,
+        payload,
+        scrollPosition: 0,
+        selectedRecord: null,
+      });
+    }
+    return { payload, fromCache: false, meta: null };
+  });
+  apiInFlightRequests.set(cacheKey, request);
+  request.finally(() => apiInFlightRequests.delete(cacheKey));
+  return request;
+}
+
+async function refreshCrmListInBackground(path, cacheKey, cacheMeta) {
+  if (crmBackgroundRefreshes.has(cacheKey)) return crmBackgroundRefreshes.get(cacheKey);
+  const previousEntry = peekCrmListCache(cacheKey);
+  const request = api(path)
+    .then(async (payload) => {
+      if (!payload || payload.error) return;
+      const previousPayload = previousEntry?.payload || null;
+      const activeView = loadData.activeCacheKey === cacheKey && !viewingDetail;
+      const previousColumns = cloneCacheValue(currentColumns || []);
+      const scrollPosition = activeView ? currentScrollPosition() : previousEntry?.scrollPosition || 0;
+      const visibleCount = activeView ? visibleRecordCount : previousEntry?.visibleRecordCount || RENDER_CHUNK_SIZE;
+      const selectedRecord = activeView
+        ? selectedListRecordId || detailRecordState?.id || null
+        : previousEntry?.selectedRecord || null;
+
+      setCrmListCache(cacheKey, {
+        ...cacheMeta,
+        payload,
+        scrollPosition,
+        selectedRecord,
+        visibleRecordCount: visibleCount,
+      });
+
+      if (!activeView || sameCrmPayload(previousPayload, payload)) return;
+
+      applyCrmListPayload(payload);
+      visibleRecordCount = visibleCount;
+      applySort();
+      if (currentViewMode === "kanban") {
+        await renderKanban();
+      } else {
+        patchRenderedTableRows(previousColumns);
+      }
+      updatePagination();
+      updateBadge(currentObject, totalRecords || currentRecords.length);
+      updateRecordCounts();
+      applyPermissionGuards(currentObject);
+      captureCrmPageState(currentObject);
+    })
+    .catch((err) => {
+      console.warn("Background refresh failed:", err.message || err);
+    })
+    .finally(() => {
+      crmBackgroundRefreshes.delete(cacheKey);
+      showBackgroundRefreshIndicator(false);
+    });
+  crmBackgroundRefreshes.set(cacheKey, request);
+  showBackgroundRefreshIndicator(true);
+  return request;
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // BLOCK C — LOGIN PAGE
 // Add these functions. They show/hide the login overlay.
@@ -1067,7 +1396,8 @@ async function completePortalLogin(data) {
   setStoredPerms(data.permissions || {});
   window.portalUser = data.user;
   applyAllPermissionGuards();
-  currentObject = firstReadableNavObject() || currentObject;
+  currentObject = initialReadableObject();
+  writeCrmHistory(currentObject, true);
 
   hideLoginPage();
 
@@ -1926,9 +2256,11 @@ async function handleListViewChange(value) {
   await loadData();
 }
 
-async function loadData() {
+async function loadData(options = {}) {
   const loadToken = Symbol("loadData");
   loadData.latestToken = loadToken;
+  rememberCurrentListCacheState();
+  const forceRefresh = Boolean(options.forceRefresh);
   const search = $("objSearch")?.value || "";
   const meta = OBJECT_META[currentObject];
   if (!meta || !canReadObject(currentObject)) {
@@ -1946,53 +2278,73 @@ async function loadData() {
 
   $("pageIcon").innerHTML = objectIcon(currentObject);
   $("pageTitle").textContent = getCurrentViewName();
-  $("pageSub").textContent =
-    `Loading ${meta.title.toLowerCase()} from Salesforce...`;
-  $("stateLoading").style.display = "flex";
-  $("stateError").style.display = "none";
-  $("tableCard").style.display = "none";
-  if ($("kanbanCard")) $("kanbanCard").style.display = "none";
-  updateViewToggle();
-
   try {
+    let path = "";
+    let cacheMeta = {
+      objectName: currentObject,
+      filters: { viewId: currentViewId },
+      page: 1,
+      pageSize: RENDER_CHUNK_SIZE,
+      sort: { ...sortState },
+      search,
+    };
     if (currentViewId.startsWith("sf:")) {
       const viewId = currentViewId.slice(3);
-      const data = await api(
-        `/api/${currentObject}/listviews/${viewId}/results`,
-      );
-      currentRecords = data.records || [];
-      nextRecordsUrl = data.nextRecordsUrl || null;
-      totalRecords = data.totalSize || currentRecords.length;
-      currentColumns = normalizeListViewColumns(data.columns);
-      currentHiddenFields = new Set(data.hiddenFields || []);
-      currentColumns = currentColumns.filter(field => !currentHiddenFields.has(field));
+      path = `/api/${currentObject}/listviews/${viewId}/results`;
     } else {
       const params = new URLSearchParams();
       if (search) params.set("search", search);
       const query = `?${params.toString()}`;
-      const data = await api(`/api/${currentObject}${query}`);
-      currentRecords = data.records || [];
-      nextRecordsUrl = data.nextRecordsUrl || null;
-      totalRecords = data.totalSize || currentRecords.length;
-      currentHiddenFields = new Set(data.hiddenFields || []);
-      applyLocalView();
-      currentColumns = currentColumns.filter(field => !currentHiddenFields.has(field));
+      path = `/api/${currentObject}${query}`;
     }
+    const cacheKey = crmListCacheKey({
+      objectName: currentObject,
+      path,
+      search,
+      viewId: currentViewId,
+      sort: sortState,
+    });
+    const cachedEntry = forceRefresh
+      ? peekCrmListCache(cacheKey)
+      : getCrmListCache(cacheKey);
+    if (!cachedEntry) {
+      $("pageSub").textContent =
+        `Loading ${meta.title.toLowerCase()} from Salesforce...`;
+      $("stateLoading").style.display = "flex";
+      $("stateError").style.display = "none";
+      $("tableCard").style.display = "none";
+      if ($("kanbanCard")) $("kanbanCard").style.display = "none";
+      updateViewToggle();
+    }
+    const result = cachedEntry
+      ? { payload: cachedEntry.payload, fromCache: true, meta: cachedEntry }
+      : await fetchCrmListPayload(path, cacheKey, cacheMeta, forceRefresh);
+    loadData.activeCacheKey = cacheKey;
+    applyCrmListPayload(result.payload || {});
 
     if (viewingDetail || loadData.latestToken !== loadToken) return;
 
-    visibleRecordCount = RENDER_CHUNK_SIZE;
+    visibleRecordCount = result.fromCache && result.meta?.visibleRecordCount
+      ? result.meta.visibleRecordCount
+      : RENDER_CHUNK_SIZE;
     applySort();
     await renderCurrentView();
     if (viewingDetail || loadData.latestToken !== loadToken) return;
     updatePagination();
     updateBadge(currentObject, totalRecords || currentRecords.length);
     updateRecordCounts();
-    await verifyListCountWhenSmall();
+    if (!result.fromCache) await verifyListCountWhenSmall();
     $("stateLoading").style.display = "none";
     applyPermissionGuards(currentObject);
     showActiveView();
+    if (result.fromCache && result.meta?.scrollPosition) {
+      requestAnimationFrame(() => window.scrollTo(0, result.meta.scrollPosition || 0));
+    }
     queueLazyLoadIfNeeded();
+    captureCrmPageState(currentObject);
+    if (cachedEntry) {
+      refreshCrmListInBackground(path, cacheKey, cacheMeta);
+    }
  } catch (err) {
     $('stateLoading').style.display = 'none';
     $('stateError').style.display   = 'flex';
@@ -2122,28 +2474,7 @@ function renderTable() {
   }
 
   const rowHtml = recordsToRender
-    .map(
-      (record) => `
-    <tr onclick="openRecordDetail('${currentObject}', '${record.Id}')">
-      ${currentColumns.map((field) => `<td class="${fieldColumnClass(field)}">${formatValue(field, getValue(record, field), record)}</td>`).join("")}
-      ${showActions ? `<td class="actions-col">
-        <div class="row-acts">
-          ${canDo(currentObject, "can_edit") ? `<button class="row-action edit" title="Edit" aria-label="Edit" onclick="event.stopPropagation(); openEdit('${record.Id}')">
-            <svg viewBox="0 0 20 20" width="15" height="15" fill="currentColor">
-              <path d="M13.586 3.586a2 2 0 112.828 2.828l-.793.793-2.828-2.828.793-.793z"/>
-              <path d="M11.379 5.793L3 14.172V17h2.828l8.379-8.379-2.828-2.828z"/>
-            </svg>
-          </button>` : ''}
-          ${canDo(currentObject, "can_delete") ? `<button class="row-action del" title="Delete" aria-label="Delete" onclick="event.stopPropagation(); openDelete('${record.Id}')">
-            <svg viewBox="0 0 20 20" width="15" height="15" fill="currentColor">
-              <path fill-rule="evenodd" d="M8 2a1 1 0 00-.894.553L6.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-2.382l-.724-1.447A1 1 0 0012 2H8zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm5-1a1 1 0 00-1 1v6a1 1 0 102 0V8a1 1 0 00-1-1z" clip-rule="evenodd"/>
-            </svg>
-          </button>` : ''}
-        </div>
-      </td>` : ''}
-    </tr>
-  `,
-    )
+    .map((record) => renderTableRowHtml(record, showActions))
     .join("");
   const canLoadMore =
     nextRecordsUrl || visibleRecordCount < currentRecords.length;
@@ -2155,6 +2486,94 @@ function renderTable() {
       </td>
     </tr>
   `;
+  observeLazySentinel();
+}
+
+function renderTableRowHtml(record, showActions) {
+  return `
+    <tr class="${selectedListRecordId === record.Id ? "selected-row" : ""}" data-record-id="${escapeHtml(record.Id)}" onclick="openRecordDetail('${currentObject}', '${escapeJs(record.Id)}')">
+      ${currentColumns.map((field) => `<td class="${fieldColumnClass(field)}">${formatValue(field, getValue(record, field), record)}</td>`).join("")}
+      ${showActions ? `<td class="actions-col">
+        <div class="row-acts">
+          ${canDo(currentObject, "can_edit") ? `<button class="row-action edit" title="Edit" aria-label="Edit" onclick="event.stopPropagation(); openEdit('${escapeJs(record.Id)}')">
+            <svg viewBox="0 0 20 20" width="15" height="15" fill="currentColor">
+              <path d="M13.586 3.586a2 2 0 112.828 2.828l-.793.793-2.828-2.828.793-.793z"/>
+              <path d="M11.379 5.793L3 14.172V17h2.828l8.379-8.379-2.828-2.828z"/>
+            </svg>
+          </button>` : ''}
+          ${canDo(currentObject, "can_delete") ? `<button class="row-action del" title="Delete" aria-label="Delete" onclick="event.stopPropagation(); openDelete('${escapeJs(record.Id)}')">
+            <svg viewBox="0 0 20 20" width="15" height="15" fill="currentColor">
+              <path fill-rule="evenodd" d="M8 2a1 1 0 00-.894.553L6.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-2.382l-.724-1.447A1 1 0 0012 2H8zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm5-1a1 1 0 00-1 1v6a1 1 0 102 0V8a1 1 0 00-1-1z" clip-rule="evenodd"/>
+            </svg>
+          </button>` : ''}
+        </div>
+      </td>` : ''}
+    </tr>
+  `;
+}
+
+function patchRenderedTableRows(previousColumns = currentColumns) {
+  const table = $("dataTable");
+  const tbody = $("tbody");
+  if (
+    viewingDetail ||
+    currentViewMode !== "table" ||
+    !table ||
+    !tbody ||
+    JSON.stringify(previousColumns || []) !== JSON.stringify(currentColumns || [])
+  ) {
+    renderTable();
+    return;
+  }
+
+  const recordsToRender = getRecordsToRender();
+  const showActions = canDo(currentObject, "can_edit") || canDo(currentObject, "can_delete");
+  const columnCount = currentColumns.length + (showActions ? 1 : 0);
+  const sentinel = $("lazyLoadSentinel");
+
+  if (!recordsToRender.length) {
+    renderTable();
+    return;
+  }
+
+  const existingRows = new Map(
+    [...tbody.querySelectorAll("tr[data-record-id]")].map((row) => [
+      row.dataset.recordId,
+      row,
+    ]),
+  );
+  const nextIds = new Set(recordsToRender.map((record) => record.Id));
+  const anchor = sentinel || null;
+
+  recordsToRender.forEach((record) => {
+    const nextHtml = renderTableRowHtml(record, showActions).trim();
+    const existing = existingRows.get(record.Id);
+    if (existing) {
+      if (existing.outerHTML.trim() !== nextHtml) {
+        existing.outerHTML = nextHtml;
+      }
+      const row = tbody.querySelector(`tr[data-record-id="${CSS.escape(record.Id)}"]`);
+      if (row) tbody.insertBefore(row, anchor);
+      return;
+    }
+    const template = document.createElement("template");
+    template.innerHTML = nextHtml;
+    tbody.insertBefore(template.content.firstElementChild, anchor);
+  });
+
+  existingRows.forEach((row, id) => {
+    if (!nextIds.has(id)) row.remove();
+  });
+
+  if (sentinel) {
+    const canLoadMore = nextRecordsUrl || visibleRecordCount < currentRecords.length;
+    sentinel.className = "lazy-load-row";
+    sentinel.innerHTML = `
+      <td colspan="${columnCount}">
+        ${loadingMoreRecords ? "Loading more records..." : canLoadMore ? "Scroll to load more records" : "All loaded"}
+      </td>
+    `;
+  }
   observeLazySentinel();
 }
 
@@ -2177,6 +2596,7 @@ async function setViewMode(mode) {
   await renderCurrentView();
   updatePagination();
   showActiveView();
+  captureCrmPageState(currentObject);
 }
 
 function showActiveView() {
@@ -2286,7 +2706,7 @@ function renderKanbanCard(record) {
   const value = record[field] || "Unspecified";
 
   return `
-    <article class="kanban-item" draggable="true" data-id="${escapeHtml(record.Id)}"
+    <article class="kanban-item ${selectedListRecordId === record.Id ? "selected-row" : ""}" draggable="true" data-id="${escapeHtml(record.Id)}"
       ondragstart="handleKanbanDragStart(event, '${escapeJs(record.Id)}')"
       onclick="openRecordDetail('${currentObject}', '${escapeJs(record.Id)}')">
       <div class="kanban-item-top">
@@ -2488,6 +2908,7 @@ async function loadMoreRecords() {
     updatePagination();
     updateBadge(currentObject, totalRecords || currentRecords.length);
     updateRecordCounts();
+    rememberCurrentListCacheState();
     return true;
   } catch (err) {
     toast(err.message, "err");
@@ -2507,6 +2928,7 @@ async function showMoreVisibleRecords() {
   await renderCurrentView();
   updatePagination();
   updateRecordCounts();
+  rememberCurrentListCacheState();
   if (visibleRecordCount >= currentRecords.length && nextRecordsUrl) {
     await loadMoreRecords();
   } else {
@@ -2615,6 +3037,7 @@ function sortBy(field) {
   };
   applySort();
   renderCurrentView();
+  captureCrmPageState(currentObject);
 }
 
 function applySort() {
@@ -2637,7 +3060,13 @@ async function switchObject(objectName) {
     toast(`You do not have access to ${OBJECT_META[objectName]?.title || objectName}.`, "err");
     return;
   }
+  captureCrmPageState(currentObject);
+  if (!restoringCrmHistory) writeCrmHistory(objectName);
   if (viewingDetail) restoreListContent(false);
+  if (restoreCrmPageState(objectName)) {
+    closeSidebar();
+    return;
+  }
   currentObject = objectName;
   currentRecords = [];
   totalRecords = 0;
@@ -2647,10 +3076,9 @@ async function switchObject(objectName) {
   currentViewId = "all";
   currentViewMode = "table";
   sortState = { field: null, direction: "asc" };
+  selectedListRecordId = null;
   $("objSearch").value = "";
-  document.querySelectorAll(".nav-item").forEach((item) => {
-    item.classList.toggle("active", item.dataset.obj === objectName);
-  });
+  setActiveNavObject(objectName);
   closeSidebar();
   await loadListViews();
   await loadData();
@@ -2661,12 +3089,12 @@ function restoreListContent(shouldLoad = true) {
   $("content").innerHTML = listContentHtml;
   viewingDetail = false;
   detailRecordState = null;
-  document.querySelectorAll(".nav-item").forEach((item) => {
-    item.classList.toggle("active", item.dataset.obj === currentObject);
-  });
+  setActiveNavObject(currentObject);
   if (shouldLoad) {
     renderListViewSelect();
     loadData();
+  } else {
+    captureCrmPageState(currentObject);
   }
 }
 
@@ -3301,6 +3729,7 @@ function closeModal() {
 
 async function openRecordDetail(objectName, id) {
   if (!id || !OBJECT_META[objectName]) return;
+  markCachedSelectedRecord(id);
   if (!canReadObject(objectName)) {
     toast(`You do not have access to ${OBJECT_META[objectName]?.title || objectName}.`, "err");
     return;
@@ -3338,9 +3767,7 @@ async function openRecordDetail(objectName, id) {
       fields,
       recordAccess: data.recordAccess || { allowed: true, accessLevel: "read" },
     };
-    document.querySelectorAll(".nav-item").forEach((item) => {
-      item.classList.toggle("active", item.dataset.obj === objectName);
-    });
+    setActiveNavObject(objectName);
     renderRecordDetailPage(
       objectName,
       record,
@@ -3362,6 +3789,7 @@ async function openRecordDetail(objectName, id) {
         loadRecordActivity(objectName, id),
       ]);
     }
+    captureCrmPageState(objectName);
   } catch (err) {
     $("content").innerHTML = `
       <div class="state-box error-state">
@@ -3468,6 +3896,7 @@ function showSideTab(name) {
   ) {
     loadChatterFeed();
   }
+  captureCrmPageState(currentObject);
 }
 
 function renderConfiguredDetailSections(
@@ -4209,6 +4638,7 @@ function showRecordTab(name) {
   $("recordDetailsPanel").style.display = name === "details" ? "block" : "none";
   $("tabRelatedBtn").classList.toggle("active", name === "related");
   $("tabDetailsBtn").classList.toggle("active", name === "details");
+  captureCrmPageState(currentObject);
 }
 
 function editCurrentDetailRecord() {
@@ -6131,9 +6561,11 @@ async function refreshAfterSave(objectName, savedRecord, wasEditing) {
     applySort();
     await renderCurrentView();
     updateRecordCounts();
-    loadData().catch((err) => console.warn("Background refresh failed:", err.message));
+    invalidateCrmObjectCache(objectName);
+    loadData({ forceRefresh: true }).catch((err) => console.warn("Background refresh failed:", err.message));
   } else {
-    loadData().catch((err) => console.warn("Background refresh failed:", err.message));
+    invalidateCrmObjectCache(objectName);
+    loadData({ forceRefresh: true }).catch((err) => console.warn("Background refresh failed:", err.message));
   }
 }
 
@@ -6167,6 +6599,7 @@ async function saveRecord() {
         method: "PATCH",
         body: JSON.stringify(body),
       });
+      invalidateCrmObjectCache(objectName);
       Object.assign(savedRecord, body);
       toast("Record updated", "ok");
     } else {
@@ -6174,6 +6607,7 @@ async function saveRecord() {
         method: "POST",
         body: JSON.stringify(body),
       });
+      invalidateCrmObjectCache(objectName);
       if (result?.id) Object.assign(body, { Id: result.id });
       toast("Record created", "ok");
     }
@@ -6209,9 +6643,10 @@ async function confirmDelete() {
     await api(`/api/${currentObject}/${deletingRecord.Id}`, {
       method: "DELETE",
     });
+    invalidateCrmObjectCache(currentObject);
     toast("Record deleted", "ok");
     closeDeleteModal();
-    await loadData();
+    await loadData({ forceRefresh: true });
   } catch (err) {
     if (!err.alreadyToasted) {
       toast(err.message || 'Could not delete record. Please try again.', 'err', 10000);
@@ -6400,6 +6835,18 @@ window.addEventListener("resize", () => {
   queueLazyLoadIfNeeded();
 });
 window.addEventListener("scroll", handleLazyScroll, { passive: true });
+window.addEventListener("popstate", () => {
+  const objectName = history.state?.crmObject || crmObjectFromLocation();
+  if (objectName && objectName !== currentObject) {
+    restoreCrmObjectFromHistory(objectName);
+  }
+});
+window.addEventListener("focus", () => {
+  if (viewingDetail || !loadData.activeCacheKey || !getCrmListCache(loadData.activeCacheKey)) return;
+  loadData({ forceRefresh: true }).catch((err) =>
+    console.warn("Background refresh failed:", err.message || err),
+  );
+});
 
 document.addEventListener("DOMContentLoaded", async () => {
   listContentHtml = $("content").innerHTML;
@@ -6431,7 +6878,8 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   // Token exists — load cached perms immediately (so UI guards work instantly)
   window.userPerms = getStoredPerms();
-  currentObject = firstReadableNavObject() || currentObject;
+  currentObject = initialReadableObject();
+  writeCrmHistory(currentObject, true);
   applyAllPermissionGuards();
 
   // Then boot the app normally
@@ -6445,7 +6893,8 @@ document.addEventListener("DOMContentLoaded", async () => {
           if (me) {
             setStoredPerms(me.permissions || {});
             window.portalUser = me;
-            currentObject = firstReadableNavObject() || currentObject;
+            currentObject = initialReadableObject();
+            writeCrmHistory(currentObject, true);
             applyAllPermissionGuards();
           }
         } catch {

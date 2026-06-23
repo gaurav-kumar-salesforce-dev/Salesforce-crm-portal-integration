@@ -849,6 +849,30 @@ body {
   white-space: nowrap;
 }
 
+.mini-refresh-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: 8px;
+  color: var(--text-3);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.mini-refresh-indicator::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  border: 2px solid rgba(1, 118, 211, 0.25);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: miniRefreshSpin 0.7s linear infinite;
+}
+
+@keyframes miniRefreshSpin {
+  to { transform: rotate(360deg); }
+}
+
 /* ═══════════════════════════════════════════════════════════
    STATES
 ═══════════════════════════════════════════════════════════ */
@@ -989,6 +1013,14 @@ body {
 }
 
 .data-table tbody tr:hover { background: #F5F8FF; }
+
+.data-table tbody tr.selected-row td {
+  background: #EAF4FF;
+}
+
+.data-table tbody tr.selected-row td:first-child {
+  box-shadow: inset 3px 0 0 var(--accent);
+}
 
 .data-table .lazy-load-row td {
   padding: 16px;
@@ -1172,6 +1204,11 @@ body {
   transform: translateY(-1px);
   box-shadow: var(--shadow-md);
   border-color: var(--accent);
+}
+
+.kanban-item.selected-row {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(1, 118, 211, 0.16), var(--shadow-sm);
 }
 
 .kanban-item:active { cursor: grabbing; }
@@ -5246,6 +5283,14 @@ html[data-theme="dark"] .data-table td {
 html[data-theme="dark"] .data-table tbody tr:hover {
   background: rgba(11, 126, 208, 0.06);
   box-shadow: inset 3px 0 0 #0b7ed0;
+}
+
+html[data-theme="dark"] .data-table tbody tr.selected-row td {
+  background: rgba(11, 126, 208, 0.12);
+}
+
+html[data-theme="dark"] .kanban-item.selected-row {
+  box-shadow: 0 0 0 2px rgba(75, 159, 232, 0.25), var(--shadow-sm);
 }
 
 html[data-theme="dark"] .cell-button-link,
