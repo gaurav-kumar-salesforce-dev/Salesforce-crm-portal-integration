@@ -790,6 +790,12 @@
       transform: translateY(-1px);
     }
 
+    .action-icon-btn.invite {
+      color: var(--accent);
+      background: var(--accent-soft);
+      border-color: rgba(1, 118, 211, .22);
+    }
+
     .action-icon-btn:disabled {
       cursor: wait;
       opacity: .6;
@@ -2510,9 +2516,11 @@
               <input class="form-ctrl" id="u-email" type="email" placeholder="jane@company.com">
             </div>
             <div class="form-group span-2" id="u-pw-group">
-              <label class="form-label">Password <span class="req">*</span></label>
-              <input class="form-ctrl" id="u-password" type="password" placeholder="Temporary password">
-              <p class="form-hint">User will be required to change this on first login.</p>
+              <label class="form-label">Account Setup</label>
+              <input id="u-password" type="hidden">
+              <div style="background:var(--accent-soft);border:1px solid rgba(1,118,211,.18);border-radius:8px;padding:12px;font-size:13px;color:var(--text-secondary)">
+                A secure setup email will be sent after this user is created. The user verifies the account and creates their own password.
+              </div>
             </div>
             <div class="form-group span-2" id="u-edit-note" style="display:none">
               <div
@@ -3136,6 +3144,7 @@
         const busyLabel = pendingUserActionLabels[u.id] || 'Working';
         const profileLabel = u.isSystemAdmin ? 'System Administrator' : (u.profile?.name || '-');
         const orgRoleLabel = u.orgRoleName || u.org_role_name || '-';
+        const canResendInvite = !isSelf && u.isActive && userNeedsInvitation(u);
 
         return `
     <tr id="user-row-${u.id}" class="user-row ${isBusy ? 'busy' : ''}">
@@ -3170,6 +3179,9 @@
             ${!u.isActive ? `<button class="action-icon-btn status activate" onclick="toggleUserActive('${u.id}','${esc(u.name)}',true)" title="Activate user" aria-label="Activate ${esc(u.name)}">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M20 6 9 17l-5-5"/><circle cx="12" cy="12" r="9"/></svg>
             </button>` : ''}
+            ${canResendInvite ? `<button class="action-icon-btn invite" onclick="resendInvitation('${u.id}')" title="Resend invitation" aria-label="Resend invitation to ${esc(u.name)}">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M4 4h16v16H4z"/><path d="m22 6-10 7L2 6"/><path d="M16 16h4"/><path d="M18 14v4"/></svg>
+            </button>` : ''}
             ${!isSelf ? `<button class="action-icon-btn delete" onclick="deleteUser('${u.id}')" title="Delete user" aria-label="Delete ${esc(u.name)}">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v5"/><path d="M14 11v5"/></svg>
             </button>` : ''}
@@ -3179,6 +3191,16 @@
     </tr>`;
       }).join('');
     };
+
+    function userNeedsInvitation(user = {}) {
+      if (user.needsInvitation === true) return true;
+      if (!user.emailVerifiedAt) return true;
+      if (!user.passwordCreatedAt) return true;
+      if (!user.setupCompletedAt) return true;
+      if (user.mustChangePw) return true;
+      if (user.invitationExpiresAt && new Date(user.invitationExpiresAt) < new Date()) return true;
+      return false;
+    }
 
   function filterUsers() {
   const q         = $('userSearch').value.toLowerCase();
@@ -3355,7 +3377,6 @@
       const password = editingUserId ? $('u-password-edit').value : $('u-password').value;
 
       if (!name || !email) return toast('Name and email are required', 'err');
-      if (!editingUserId && !password) return toast('Password is required for new users', 'err');
 
             $('userSaveBtn').disabled = true;
             try {
@@ -3394,12 +3415,11 @@
           toast('User updated', 'ok');
         } else {
           const orgRoleId = $('u-org-role')?.value || null;
-          await api('/api/portal/users', {
+          const created = await api('/api/portal/users', {
             method: 'POST',
             body: JSON.stringify({
               name,
               email,
-              password,
               profileId,
               orgRoleId,
               profileImage: userProfileImageDraft,
@@ -3407,7 +3427,10 @@
               permissionSetGroupIds: userPSGroupsSelected.map(g => g.id)
             })
           });
-          toast('User created — they can now log in', 'ok');
+          toast(
+            created.warning || 'User created. Invitation sent successfully.',
+            created.warning ? 'info' : 'ok'
+          );
         }
         closeUserModal();
         await loadUsers();
@@ -3451,6 +3474,22 @@
     }
 
     // ── TABS inside user modal ────────────────────────────
+    async function resendInvitation(id) {
+      pendingUserActions.add(id);
+      pendingUserActionLabels[id] = 'Sending invite';
+      renderUsers(allUsers);
+      try {
+        await api(`/api/portal/users/${id}/resend-invitation`, { method: 'POST' });
+        toast('Invitation sent successfully.', 'ok');
+        await loadUsers();
+      } catch (e) {
+        pendingUserActions.delete(id);
+        delete pendingUserActionLabels[id];
+        renderUsers(allUsers);
+        toast(e.message || 'Unable to send invitation. Please try again.', 'err');
+      }
+    }
+
     function deleteUser(id) {
       const user = allUsers.find(u => u.id === id);
       if (!user) return;

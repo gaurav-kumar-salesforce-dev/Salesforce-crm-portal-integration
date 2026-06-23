@@ -16,6 +16,7 @@ const {
 } = require('./db');
 const { createReportsRouter } = require('./src/reports/report.routes');
 const { createDashboardsRouter } = require('./src/dashboards/dashboard.routes');
+const { sendWelcomeUserInvitation } = require('./src/email/email.service');
 
 const JWT_SECRET = process.env.JWT_SECRET;
 const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '8h';
@@ -23,10 +24,149 @@ const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '8h';
 const { Resend } = require('resend');
 const resend = new Resend(process.env.RESEND_API_KEY);
 
+const INVITATION_TOKEN_TYPE = 'user_invitation';
+const PASSWORD_RESET_TOKEN_TYPE = 'password_reset';
+const SETUP_TOKEN_TTL_MS = 60 * 60 * 1000;
+
 const app = express();
 app.set('trust proxy', true);
 app.use(express.json({ limit: process.env.JSON_BODY_LIMIT || '25mb' }));
 app.use(express.static(path.join(__dirname, 'public')));
+
+function normalizeAppUrl(req) {
+  const configured = process.env.APP_URL || `${req.protocol}://${req.get('host')}`;
+  return String(configured).replace(/\/+$/, '');
+}
+
+function createSecureToken() {
+  return crypto.randomBytes(32).toString('hex');
+}
+
+function hashToken(token) {
+  return crypto.createHash('sha256').update(token).digest('hex');
+}
+
+async function getPortalUserInvitationContext(userId) {
+  const { data: user, error } = await supabase
+    .from('users')
+    .select('id, email, name, role, org_role_id, must_change_pw, invitation_expires_at, email_verified_at, password_created_at, setup_completed_at')
+    .eq('id', userId)
+    .single();
+
+  if (error || !user) {
+    throw error || new Error('User not found');
+  }
+
+  let roleName = user.role || 'Not assigned';
+
+  if (user.org_role_id) {
+    const { data: orgRole } = await supabase
+      .from('org_roles')
+      .select('name')
+      .eq('id', user.org_role_id)
+      .maybeSingle();
+    if (orgRole?.name) roleName = orgRole.name;
+  }
+
+  const { data: profileAssignment } = await supabase
+    .from('user_profile_assignments')
+    .select('profiles(name)')
+    .eq('user_id', userId)
+    .maybeSingle();
+
+  const profileName = profileAssignment?.profiles?.name;
+
+  return {
+    user,
+    roleName: roleName || profileName || 'Not assigned'
+  };
+}
+
+function needsInvitation(user = {}) {
+  if (!user.email_verified_at) return true;
+  if (!user.password_created_at) return true;
+  if (!user.setup_completed_at) return true;
+  if (user.must_change_pw) return true;
+  if (user.invitation_expires_at && new Date(user.invitation_expires_at) < new Date()) return true;
+  return false;
+}
+
+async function revokeActiveSetupTokens(userId) {
+  const nowIso = new Date().toISOString();
+  const { error } = await supabase
+    .from('password_reset_tokens')
+    .update({ revoked_at: nowIso })
+    .eq('user_id', userId)
+    .eq('token_type', INVITATION_TOKEN_TYPE)
+    .eq('used', false)
+    .is('revoked_at', null);
+
+  if (error) throw error;
+}
+
+async function createSetupToken(userId, adminUserId) {
+  const rawToken = createSecureToken();
+  const expiresAt = new Date(Date.now() + SETUP_TOKEN_TTL_MS);
+
+  await revokeActiveSetupTokens(userId);
+
+  const { error } = await supabase
+    .from('password_reset_tokens')
+    .insert({
+      user_id: userId,
+      token_hash: hashToken(rawToken),
+      expires_at: expiresAt.toISOString(),
+      used: false,
+      token_type: INVITATION_TOKEN_TYPE,
+      created_by: adminUserId || null
+    });
+
+  if (error) throw error;
+
+  return { rawToken, expiresAt };
+}
+
+async function sendPortalUserInvitation({ userId, adminUser, req, auditAction }) {
+  const { user, roleName } = await getPortalUserInvitationContext(userId);
+  const { rawToken, expiresAt } = await createSetupToken(userId, adminUser?.id);
+  const appUrl = normalizeAppUrl(req);
+  const setupUrl = `${appUrl}/reset-password.html?token=${encodeURIComponent(rawToken)}`;
+
+  const sendResult = await sendWelcomeUserInvitation({
+    name: user.name,
+    email: user.email,
+    roleName,
+    appUrl,
+    setupUrl,
+    expiresText: '1 hour'
+  });
+
+  const nowIso = new Date().toISOString();
+  await supabase
+    .from('users')
+    .update({
+      invitation_sent_at: nowIso,
+      invitation_expires_at: expiresAt.toISOString(),
+      updated_at: nowIso
+    })
+    .eq('id', user.id);
+
+  await writeAuditLog({
+    userId: adminUser?.id || user.id,
+    userEmail: adminUser?.email || user.email,
+    userRole: adminUser?.role || 'system',
+    action: auditAction,
+    payload: {
+      invitedUserId: user.id,
+      invitedEmail: user.email,
+      expiresAt: expiresAt.toISOString(),
+      messageId: sendResult?.id || null
+    },
+    ipAddress: req.ip
+  });
+
+  return { expiresAt, messageId: sendResult?.id || null };
+}
 
 // Verifies JWT on every request. Attaches req.user = { id, email, role, name }
 async function checkAuth(req, res, next) {
@@ -3488,7 +3628,8 @@ app.post('/api/auth/forgot-password', async (req, res) => {
     await supabase
       .from('password_reset_tokens')
       .delete()
-      .eq('user_id', user.id);
+      .eq('user_id', user.id)
+      .eq('token_type', PASSWORD_RESET_TOKEN_TYPE);
 
     await supabase
       .from('password_reset_tokens')
@@ -3496,7 +3637,8 @@ app.post('/api/auth/forgot-password', async (req, res) => {
         user_id: user.id,
         token_hash: tokenHash,
         expires_at: expiresAt.toISOString(),
-        used: false
+        used: false,
+        token_type: PASSWORD_RESET_TOKEN_TYPE
       });
 
     // 4. Send email via Resend
@@ -3662,11 +3804,11 @@ app.post('/api/auth/reset-password', async (req, res) => {
     // 2. Find the token in DB
     const { data: resetRecord } = await supabase
       .from('password_reset_tokens')
-      .select('user_id, expires_at, used')
+      .select('user_id, expires_at, used, token_type, revoked_at')
       .eq('token_hash', tokenHash)
       .single();
 
-    if (!resetRecord) {
+    if (!resetRecord || resetRecord.revoked_at) {
       return res.status(400).json({ error: 'Invalid or expired reset link. Please request a new one.' });
     }
 
@@ -3687,6 +3829,9 @@ app.post('/api/auth/reset-password', async (req, res) => {
       .update({
         password_hash: passwordHash,
         must_change_pw: false,
+        email_verified_at: new Date().toISOString(),
+        password_created_at: new Date().toISOString(),
+        setup_completed_at: new Date().toISOString(),
         updated_at: new Date().toISOString()
       })
       .eq('id', resetRecord.user_id);
@@ -3694,14 +3839,29 @@ app.post('/api/auth/reset-password', async (req, res) => {
     // 5. Mark token as used (so it can't be reused)
     await supabase
       .from('password_reset_tokens')
-      .update({ used: true })
+      .update({ used: true, used_at: new Date().toISOString() })
       .eq('token_hash', tokenHash);
 
     // 6. Audit log
+    if (resetRecord.token_type === INVITATION_TOKEN_TYPE) {
+      await writeAuditLog({
+        userId: resetRecord.user_id,
+        userRole: 'system',
+        action: 'INVITATION_VERIFIED',
+        ipAddress: req.ip
+      });
+      await writeAuditLog({
+        userId: resetRecord.user_id,
+        userRole: 'system',
+        action: 'PASSWORD_CREATED',
+        ipAddress: req.ip
+      });
+    }
+
     await writeAuditLog({
       userId: resetRecord.user_id,
       userRole: 'system',
-      action: 'password_reset',
+      action: resetRecord.token_type === INVITATION_TOKEN_TYPE ? 'user_setup_password' : 'password_reset',
       ipAddress: req.ip
     });
 
@@ -3724,19 +3884,26 @@ app.get('/api/auth/verify-reset-token', async (req, res) => {
 
   try {
     const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from('password_reset_tokens')
-      .select('user_id, expires_at, used, users(name, email)')
+      .select('user_id, expires_at, used, token_type, revoked_at')
       .eq('token_hash', tokenHash)
       .single();
 
-    if (!data || data.used || new Date(data.expires_at) < new Date()) {
+    if (error || !data || data.used || data.revoked_at || new Date(data.expires_at) < new Date()) {
       return res.json({ valid: false, error: 'Invalid or expired reset link' });
     }
 
-    res.json({ valid: true, name: data.users?.name || '' });
+    const { data: user } = await supabase
+      .from('users')
+      .select('name')
+      .eq('id', data.user_id)
+      .maybeSingle();
+
+    res.json({ valid: true, name: user?.name || '', tokenType: data.token_type || PASSWORD_RESET_TOKEN_TYPE });
 
   } catch (err) {
+    console.error('Verify reset token error:', err.message);
     res.json({ valid: false, error: 'Invalid reset link' });
   }
 });
@@ -3924,8 +4091,8 @@ app.post('/api/portal/users', checkAuth, checkRole('admin'), async (req, res) =>
     permissionSetGroupIds
   } = req.body || {};
 
-  if (!email || !name || !password) {
-    return res.status(400).json({ error: 'Email, name, and password are required' });
+  if (!email || !name) {
+    return res.status(400).json({ error: 'Email and name are required' });
   }
 
   const validRoles = ['system_administrator', 'admin', 'manager', 'employee', 'readonly'];
@@ -3939,7 +4106,7 @@ app.post('/api/portal/users', checkAuth, checkRole('admin'), async (req, res) =>
   }
 
   try {
-    const passwordHash = await bcrypt.hash(password, 12);
+    const passwordHash = await bcrypt.hash(createSecureToken(), 12);
 
     const { data: newUser, error } = await supabase
       .from('users')
@@ -3952,9 +4119,12 @@ app.post('/api/portal/users', checkAuth, checkRole('admin'), async (req, res) =>
         profile_image: normalizeProfileImage(profileImage),
         is_active: true,
         must_change_pw: true,
+        email_verified_at: null,
+        password_created_at: null,
+        setup_completed_at: null,
         created_by: req.user.id
       })
-      .select('id, email, name, role, org_role_id, profile_image')
+      .select('id, email, name, role, org_role_id, profile_image, must_change_pw, invitation_sent_at, invitation_expires_at, email_verified_at, password_created_at, setup_completed_at')
       .single();
 
     if (error) {
@@ -4002,7 +4172,21 @@ app.post('/api/portal/users', checkAuth, checkRole('admin'), async (req, res) =>
       ipAddress: req.ip
     });
 
-    res.status(201).json({ success: true, user: newUser });
+    let invitation = null;
+    let warning = null;
+    try {
+      invitation = await sendPortalUserInvitation({
+        userId: newUser.id,
+        adminUser: req.user,
+        req,
+        auditAction: 'USER_INVITED'
+      });
+    } catch (inviteErr) {
+      warning = 'User created, but the invitation email could not be sent. Use Resend Invitation from the user row.';
+      console.error('[user-invitation] create user email failed:', inviteErr.message);
+    }
+
+    res.status(201).json({ success: true, user: newUser, invitation, warning });
   } catch (err) {
     console.error('POST /api/portal/users error:', err.message);
     res.status(err.statusCode || 500).json({ error: err.statusCode ? err.message : 'Could not create user' });
@@ -4011,6 +4195,31 @@ app.post('/api/portal/users', checkAuth, checkRole('admin'), async (req, res) =>
 
 
 // PATCH /api/portal/users/:id — update user (admin+ only)
+// POST /api/portal/users/:id/resend-invitation - generate and send a fresh setup link
+app.post('/api/portal/users/:id/resend-invitation', checkAuth, checkRole('admin'), async (req, res) => {
+  const { id } = req.params;
+
+  try {
+    const { user } = await getPortalUserInvitationContext(id);
+
+    if (!needsInvitation(user)) {
+      return res.status(409).json({ error: 'This user has already completed account setup.' });
+    }
+
+    const invitation = await sendPortalUserInvitation({
+      userId: id,
+      adminUser: req.user,
+      req,
+      auditAction: 'INVITATION_RESENT'
+    });
+
+    res.json({ success: true, invitation });
+  } catch (err) {
+    console.error('POST /api/portal/users/:id/resend-invitation error:', err.message);
+    res.status(500).json({ error: 'Unable to send invitation. Please try again.' });
+  }
+});
+
 app.patch('/api/portal/users/:id', checkAuth, checkRole('admin'), async (req, res) => {
   const { id } = req.params;
   const { role, isActive, profileId, mustChangePw, email, name, password, permissionSetIds, profileImage } = req.body || {};
@@ -4061,6 +4270,9 @@ app.patch('/api/portal/users/:id', checkAuth, checkRole('admin'), async (req, re
       }
       updates.password_hash  = await bcrypt.hash(password, 12);
       updates.must_change_pw = false;
+      updates.email_verified_at = new Date().toISOString();
+      updates.password_created_at = new Date().toISOString();
+      updates.setup_completed_at = new Date().toISOString();
     }
 
     // Apply user field updates
@@ -4587,14 +4799,23 @@ app.get('/api/portal/users', checkAuth, checkRole('admin'), async (req, res) => 
     const userIds = users.map((u) => u.id);
     let permissionSetsByUserId = {};
     let profileImagesByUserId = {};
+    let invitationStateByUserId = {};
 
     if (userIds.length) {
       const { data: imageRows, error: imageError } = await supabase
         .from('users')
-        .select('id, profile_image')
+        .select('id, profile_image, must_change_pw, invitation_sent_at, invitation_expires_at, email_verified_at, password_created_at, setup_completed_at')
         .in('id', userIds);
       if (imageError) throw imageError;
       profileImagesByUserId = Object.fromEntries((imageRows || []).map((row) => [row.id, row.profile_image || null]));
+      invitationStateByUserId = Object.fromEntries((imageRows || []).map((row) => [row.id, {
+        mustChangePw: row.must_change_pw,
+        invitationSentAt: row.invitation_sent_at,
+        invitationExpiresAt: row.invitation_expires_at,
+        emailVerifiedAt: row.email_verified_at,
+        passwordCreatedAt: row.password_created_at,
+        setupCompletedAt: row.setup_completed_at
+      }]));
 
       const { data: assignments, error: assignmentsError } = await supabase
         .from('user_permission_set_assignments')
@@ -4633,7 +4854,19 @@ app.get('/api/portal/users', checkAuth, checkRole('admin'), async (req, res) => 
         isSystemAdmin: u.is_system_admin || false,
         profileImage: profileImagesByUserId[u.id] || u.profile_image || null,
         isActive: u.is_active,
-        mustChangePw: u.must_change_pw,
+        mustChangePw: invitationStateByUserId[u.id]?.mustChangePw ?? u.must_change_pw,
+        invitationSentAt: invitationStateByUserId[u.id]?.invitationSentAt || null,
+        invitationExpiresAt: invitationStateByUserId[u.id]?.invitationExpiresAt || null,
+        emailVerifiedAt: invitationStateByUserId[u.id]?.emailVerifiedAt || null,
+        passwordCreatedAt: invitationStateByUserId[u.id]?.passwordCreatedAt || null,
+        setupCompletedAt: invitationStateByUserId[u.id]?.setupCompletedAt || null,
+        needsInvitation: needsInvitation({
+          must_change_pw: invitationStateByUserId[u.id]?.mustChangePw ?? u.must_change_pw,
+          invitation_expires_at: invitationStateByUserId[u.id]?.invitationExpiresAt,
+          email_verified_at: invitationStateByUserId[u.id]?.emailVerifiedAt,
+          password_created_at: invitationStateByUserId[u.id]?.passwordCreatedAt,
+          setup_completed_at: invitationStateByUserId[u.id]?.setupCompletedAt
+        }),
         createdAt: u.created_at,
         lastLoginAt: u.last_login_at,
         org_role_id: u.org_role_id || null,
