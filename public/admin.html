@@ -1630,7 +1630,9 @@
   <!-- ── SIDEBAR ──────────────────────────────────────────── -->
   <aside class="sidebar">
     <div class="sidebar-brand">
-      <img src="/images/logo.png" alt="SaaSRAY CRM" class="sidebar-logo">
+      <a href="/" title="Go to CRM Home" style="display:flex;align-items:center;text-decoration:none;">
+        <img src="/images/logo.png" alt="SaaSRAY CRM" class="sidebar-logo">
+      </a>
       <span class="brand-badge" style="margin-left: 8px;">ADMIN</span>
     </div>
 
@@ -2809,12 +2811,46 @@
     let pendingUserActions = new Set();
     let pendingUserActionLabels = {};
     const invitationResendCooldowns = {};
+    let invitationCooldownTimer = null;
     let confirmCallback = null;
     let confirmLoadingLabel = 'Working...';
 
     const SF_OBJECTS = ['Account', 'Contact', 'Opportunity', 'Lead', 'Case', 'Campaign', 'Task', 'Event'];
 
     function getToken() { return localStorage.getItem('saasray_token'); }
+
+    function clearPendingUserAction(id) {
+      pendingUserActions.delete(id);
+      delete pendingUserActionLabels[id];
+    }
+
+    function refreshUsersTableView() {
+      if ($('userSearch') && $('profileFilter') && $('statusFilter')) {
+        filterUsers();
+      } else {
+        renderUsers(allUsers);
+      }
+    }
+
+    function startInvitationCooldownTicker() {
+      if (invitationCooldownTimer) return;
+      invitationCooldownTimer = setInterval(() => {
+        const now = Date.now();
+        let hasActiveCooldown = false;
+        Object.keys(invitationResendCooldowns).forEach(id => {
+          if ((invitationResendCooldowns[id] || 0) > now) {
+            hasActiveCooldown = true;
+          } else {
+            delete invitationResendCooldowns[id];
+          }
+        });
+        refreshUsersTableView();
+        if (!hasActiveCooldown) {
+          clearInterval(invitationCooldownTimer);
+          invitationCooldownTimer = null;
+        }
+      }, 1000);
+    }
 
     async function api(path, options = {}) {
       const token = getToken();
@@ -3595,13 +3631,18 @@
       try {
         await api(`/api/portal/users/${id}/resend-invitation`, { method: 'POST' });
         invitationResendCooldowns[id] = Date.now() + 60000;
+        clearPendingUserAction(id);
+        startInvitationCooldownTicker();
+        refreshUsersTableView();
         toast('Invitation sent. Resend is paused for 60 seconds to prevent duplicate emails.', 'ok');
-        await loadUsers();
-        setTimeout(() => renderUsers(allUsers), 60000);
+        try {
+          await loadUsers();
+        } catch (refreshError) {
+          toast('Invitation sent, but the users list could not refresh automatically. Please click Refresh.', 'err');
+        }
       } catch (e) {
-        pendingUserActions.delete(id);
-        delete pendingUserActionLabels[id];
-        renderUsers(allUsers);
+        clearPendingUserAction(id);
+        refreshUsersTableView();
         toast(e.message || 'Unable to send invitation. Please try again.', 'err');
       }
     }
@@ -3618,11 +3659,16 @@
           renderUsers(allUsers);
           try {
             await api(`/api/portal/users/${id}/cancel-invitation`, { method: 'POST' });
+            clearPendingUserAction(id);
+            renderUsers(allUsers);
             toast('Invitation cancelled. Existing setup links can no longer be used.', 'ok');
-            await loadUsers();
+            try {
+              await loadUsers();
+            } catch (refreshError) {
+              toast('Invitation cancelled, but the users list could not refresh automatically. Please click Refresh.', 'err');
+            }
           } catch (e) {
-            pendingUserActions.delete(id);
-            delete pendingUserActionLabels[id];
+            clearPendingUserAction(id);
             renderUsers(allUsers);
             toast(e.message || 'Unable to cancel invitation. Please try again.', 'err');
           }
