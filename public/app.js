@@ -562,6 +562,7 @@ const crmListCache = new Map();
 const apiInFlightRequests = new Map();
 const crmBackgroundRefreshes = new Map();
 const crmPageStates = new Map();
+const objectFieldMetadataCache = new Map();
 let restoringCrmHistory = false;
 let editingRecord = null;
 let deletingRecord = null;
@@ -602,6 +603,7 @@ let modalPresetValues = {};
 let savingRecord = false;
 let supabaseAuthClient = null;
 let supabaseAuthClientPromise = null;
+let listViewDraft = null;
 
 // Token storage helpers
 function getAuthToken() {
@@ -694,6 +696,150 @@ function uniqueKanbanValues(values, objectName = currentObject) {
 
 function objectLocalViews() {
   return getLocalViews()[currentObject] || [];
+}
+
+function cleanListViewLabel(label) {
+  return String(label || "")
+    .replace(/^\s*(Salesforce|Portal)\s*[-:]\s*/i, "")
+    .trim();
+}
+
+function humanizeFieldLabel(field) {
+  return String(field || "")
+    .replace(/\./g, " ")
+    .replace(/__c$/i, "")
+    .replace(/Id$/, "")
+    .replace(/([a-z])([A-Z])/g, "$1 $2")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+async function loadObjectFields(objectName = currentObject) {
+  if (objectFieldMetadataCache.has(objectName)) {
+    return objectFieldMetadataCache.get(objectName);
+  }
+  const fallback = [...new Set([...(OBJECT_META[objectName]?.columns || []), ...(OBJECT_META[objectName]?.editable || [])])]
+    .map((name) => ({ name, label: humanizeFieldLabel(name), type: "string" }));
+  try {
+    const data = await api(`/api/${objectName}/fields`);
+    const fields = (data.fields || fallback)
+      .filter((field) => field?.name && field.name !== "Id" && !String(field.name).includes("attributes"))
+      .map((field) => ({
+        ...field,
+        label: cleanListViewLabel(field.label || humanizeFieldLabel(field.name)),
+      }))
+      .sort((a, b) => a.label.localeCompare(b.label));
+    objectFieldMetadataCache.set(objectName, fields.length ? fields : fallback);
+  } catch {
+    objectFieldMetadataCache.set(objectName, fallback);
+  }
+  return objectFieldMetadataCache.get(objectName);
+}
+
+function getCachedObjectFields(objectName = currentObject) {
+  return objectFieldMetadataCache.get(objectName) || [
+    ...new Set([...(OBJECT_META[objectName]?.columns || []), ...(OBJECT_META[objectName]?.editable || [])]),
+  ].map((name) => ({ name, label: humanizeFieldLabel(name), type: "string" }));
+}
+
+function fieldMetaFor(field, objectName = currentObject) {
+  const fields = getCachedObjectFields(objectName);
+  return fields.find((item) => item.name === field) || null;
+}
+
+function getCurrentLocalView() {
+  if (!currentViewId.startsWith("local:")) return null;
+  return objectLocalViews().find((item) => item.id === currentViewId.slice(6)) || null;
+}
+
+function normalizePortalColumns(columns, objectName = currentObject) {
+  const hidden = currentHiddenFields || new Set();
+  const valid = new Set(getCachedObjectFields(objectName).map((field) => field.name));
+  const fallback = OBJECT_META[objectName]?.columns || [];
+  const source = columns?.length ? columns : fallback;
+  const seen = new Set();
+  return source.filter((field) => {
+    if (!field || field === "Id" || String(field).includes("attributes")) return false;
+    if (hidden.has(field) || seen.has(field)) return false;
+    if (valid.size && !valid.has(field) && !String(field).includes(".")) return false;
+    seen.add(field);
+    return true;
+  });
+}
+
+function fieldTypeFor(field) {
+  const type = String(fieldMetaFor(field)?.type || "").toLowerCase();
+  if (type) return type;
+  if (/date|time/i.test(field)) return "date";
+  if (/amount|revenue|count|number|employees|probability|percent/i.test(field)) return "number";
+  if (/email/i.test(field)) return "email";
+  if (/phone|mobile/i.test(field)) return "phone";
+  if (/url|website/i.test(field)) return "url";
+  return "string";
+}
+
+function operatorOptionsForField(field) {
+  const type = fieldTypeFor(field);
+  if (["currency", "double", "int", "integer", "percent", "number"].includes(type)) {
+    return ["equals", "not_equals", "gt", "gte", "lt", "lte", "between", "blank", "not_blank"];
+  }
+  if (["date", "datetime", "time"].includes(type)) {
+    return ["equals", "before", "after", "today", "yesterday", "last_7_days", "last_30_days", "this_month", "last_month", "blank", "not_blank"];
+  }
+  if (type === "boolean") return ["true", "false", "blank", "not_blank"];
+  return ["equals", "not_equals", "contains", "not_contains", "starts_with", "ends_with", "blank", "not_blank"];
+}
+
+function operatorLabel(operator) {
+  return ({
+    equals: "equals",
+    not_equals: "not equal to",
+    contains: "contains",
+    not_contains: "does not contain",
+    starts_with: "starts with",
+    ends_with: "ends with",
+    gt: "greater than",
+    gte: "greater or equal",
+    lt: "less than",
+    lte: "less or equal",
+    between: "between",
+    before: "before",
+    after: "after",
+    today: "today",
+    yesterday: "yesterday",
+    last_7_days: "last 7 days",
+    last_30_days: "last 30 days",
+    this_month: "this month",
+    last_month: "last month",
+    blank: "is blank",
+    not_blank: "is not blank",
+    true: "is true",
+    false: "is false",
+  })[operator] || operator;
+}
+
+function viewSignatureForCache(view) {
+  if (!view) return "";
+  return JSON.stringify({
+    columns: view.columns || [],
+    filters: view.filters || [],
+    filterLogic: view.filterLogic || "AND",
+    pageSize: view.pageSize || RENDER_CHUNK_SIZE,
+    sort: view.sort || null,
+    version: view.version || 1,
+  });
+}
+
+function persistCurrentLocalViewPatch(patch) {
+  const view = getCurrentLocalView();
+  if (!view) return;
+  const views = getLocalViews();
+  const list = views[currentObject] || [];
+  const index = list.findIndex((item) => item.id === view.id);
+  if (index < 0) return;
+  list[index] = { ...list[index], ...patch, updatedAt: new Date().toISOString() };
+  views[currentObject] = list;
+  setLocalViews(views);
 }
 
 function objectIcon(objectName, record = null) {
@@ -852,10 +998,7 @@ function setValue(body, field, value) {
 }
 
 function labelFor(field) {
-  return field
-    .replace(/\./g, " ")
-    .replace(/Id$/, "")
-    .replace(/([a-z])([A-Z])/g, "$1 $2");
+  return fieldMetaFor(field)?.label || humanizeFieldLabel(field);
 }
 
 function escapeHtml(value) {
@@ -937,11 +1080,12 @@ function crmListCachePrefix(objectName) {
   return `crm:list:${objectName}:`;
 }
 
-function crmListCacheKey({ objectName, path, search, viewId, sort, page = 1, pageSize = RENDER_CHUNK_SIZE }) {
+function crmListCacheKey({ objectName, path, search, viewId, sort, viewSignature = "", page = 1, pageSize = RENDER_CHUNK_SIZE }) {
   return [
     crmListCachePrefix(objectName),
     `path=${path}`,
     `view=${viewId || "all"}`,
+    `signature=${viewSignature || ""}`,
     `search=${search || ""}`,
     `sort=${sort?.field || ""}:${sort?.direction || "asc"}`,
     `page=${page}`,
@@ -1637,7 +1781,12 @@ function currentDetailCanEdit() {
 function formatValue(field, value, record = null) {
   if (value === null || value === undefined || value === "")
     return '<span class="cell-empty">-</span>';
-  if (field === "Amount" || field === "AnnualRevenue") {
+  const type = fieldTypeFor(field);
+  if (["currency", "double", "int", "integer", "percent", "number"].includes(type) || field === "Amount" || field === "AnnualRevenue") {
+    if (Number.isNaN(Number(value))) return escapeHtml(String(value));
+    if (type === "percent" || /probability|percent/i.test(field)) {
+      return `<span class="cell-number">${Number(value).toLocaleString()}%</span>`;
+    }
     return `<span class="cell-amount">${Number(value).toLocaleString(
       undefined,
       {
@@ -1647,9 +1796,22 @@ function formatValue(field, value, record = null) {
       },
     )}</span>`;
   }
-  if (field.includes("Date")) return new Date(value).toLocaleDateString();
+  if (["date", "datetime", "time"].includes(type) || field.includes("Date")) {
+    const date = new Date(value);
+    return Number.isNaN(date.getTime()) ? escapeHtml(String(value)) : date.toLocaleDateString();
+  }
   if (field === "Email")
     return `<a class="cell-email" href="mailto:${escapeHtml(value)}">${escapeHtml(value)}</a>`;
+  if (type === "phone") {
+    return `<a class="cell-email" href="tel:${escapeHtml(value)}">${escapeHtml(value)}</a>`;
+  }
+  if (type === "url") {
+    const url = /^https?:\/\//i.test(String(value)) ? String(value) : `https://${value}`;
+    return `<a class="cell-email" href="${escapeHtml(url)}" target="_blank" rel="noopener">${escapeHtml(value)}</a>`;
+  }
+  if (type === "boolean") {
+    return `<span class="badge ${value ? "badge-success" : "badge-neutral"}">${value ? "Yes" : "No"}</span>`;
+  }
   if (["Status", "StageName", "Priority", "Type"].includes(field)) {
     return `<span class="badge badge-neutral">${escapeHtml(value)}</span>`;
   }
@@ -1664,6 +1826,10 @@ function formatValue(field, value, record = null) {
   }
   if (field === "Name" || field === "CaseNumber") {
     return `<button class="cell-button-link" onclick="event.stopPropagation(); openRecordDetail('${currentObject}', '${record?.Id || ""}')">${escapeHtml(value)}</button>`;
+  }
+  if (typeof value === "object") {
+    if (value.Name) return escapeHtml(value.Name);
+    return escapeHtml(JSON.stringify(value));
   }
   return escapeHtml(String(value));
 }
@@ -2238,8 +2404,8 @@ function renderListViewSelect() {
   const locals = objectLocalViews();
   select.innerHTML = `
     <option value="all">All ${OBJECT_META[currentObject].title}</option>
-    ${sfListViews.map((view) => `<option value="sf:${view.id}">Salesforce: ${escapeHtml(view.label)}</option>`).join("")}
-    ${locals.map((view) => `<option value="local:${view.id}">Portal: ${escapeHtml(view.name)}</option>`).join("")}
+    ${sfListViews.map((view) => `<option value="sf:${view.id}">${escapeHtml(cleanListViewLabel(view.label))}</option>`).join("")}
+    ${locals.map((view) => `<option value="local:${view.id}">${escapeHtml(cleanListViewLabel(view.name))}</option>`).join("")}
   `;
   select.value = currentViewId;
   if (select.value !== currentViewId) {
@@ -2252,7 +2418,8 @@ async function handleListViewChange(value) {
   currentViewId = value;
   visibleRecordCount = RENDER_CHUNK_SIZE;
   nextRecordsUrl = null;
-  sortState = { field: null, direction: "asc" };
+  const localView = getCurrentLocalView();
+  sortState = localView?.sort || { field: null, direction: "asc" };
   await loadData();
 }
 
@@ -2275,6 +2442,7 @@ async function loadData(options = {}) {
   }
   currentColumns = meta.columns.slice();
   currentHiddenFields = new Set();
+  await loadObjectFields(currentObject);
 
   $("pageIcon").innerHTML = objectIcon(currentObject);
   $("pageTitle").textContent = getCurrentViewName();
@@ -2297,12 +2465,18 @@ async function loadData(options = {}) {
       const query = `?${params.toString()}`;
       path = `/api/${currentObject}${query}`;
     }
+    const localView = getCurrentLocalView();
+    const viewSignature = currentViewId.startsWith("local:") ? viewSignatureForCache(localView) : "";
+    if (localView?.pageSize) visibleRecordCount = Number(localView.pageSize) || RENDER_CHUNK_SIZE;
+    cacheMeta.filters.viewSignature = viewSignature;
     const cacheKey = crmListCacheKey({
       objectName: currentObject,
       path,
       search,
       viewId: currentViewId,
       sort: sortState,
+      viewSignature,
+      pageSize: localView?.pageSize || RENDER_CHUNK_SIZE,
     });
     const cachedEntry = forceRefresh
       ? peekCrmListCache(cacheKey)
@@ -2395,31 +2569,135 @@ function normalizeListViewColumns(columns) {
       (field) => field && field !== "Id" && !field.includes("attributes"),
     );
   return fields.length
-    ? [...new Set(fields)].slice(0, 8)
+    ? normalizePortalColumns([...new Set(fields)])
     : OBJECT_META[currentObject].columns.slice();
 }
 
 function getCurrentViewName() {
   if (currentViewId.startsWith("sf:")) {
     const view = sfListViews.find((item) => item.id === currentViewId.slice(3));
-    return view?.label || OBJECT_META[currentObject].title;
+    return cleanListViewLabel(view?.label || OBJECT_META[currentObject].title);
   }
   if (currentViewId.startsWith("local:")) {
     const view = objectLocalViews().find(
       (item) => item.id === currentViewId.slice(6),
     );
-    return view?.name || OBJECT_META[currentObject].title;
+    return cleanListViewLabel(view?.name || OBJECT_META[currentObject].title);
   }
   return OBJECT_META[currentObject].title;
 }
 
+function normalizeComparableValue(value) {
+  if (value === null || value === undefined) return "";
+  if (typeof value === "object") return value.Name || value.label || JSON.stringify(value);
+  return String(value);
+}
+
+function toComparableNumber(value) {
+  const number = Number(String(value ?? "").replace(/[$,%\s,]/g, ""));
+  return Number.isFinite(number) ? number : null;
+}
+
+function toComparableDate(value) {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function dateRangeForOperator(operator) {
+  const now = new Date();
+  const startOfDay = (date) => new Date(date.getFullYear(), date.getMonth(), date.getDate());
+  const today = startOfDay(now);
+  if (operator === "today") return [today, new Date(today.getTime() + 86400000)];
+  if (operator === "yesterday") return [new Date(today.getTime() - 86400000), today];
+  if (operator === "last_7_days") return [new Date(today.getTime() - 6 * 86400000), new Date(today.getTime() + 86400000)];
+  if (operator === "last_30_days") return [new Date(today.getTime() - 29 * 86400000), new Date(today.getTime() + 86400000)];
+  if (operator === "this_month") return [new Date(now.getFullYear(), now.getMonth(), 1), new Date(now.getFullYear(), now.getMonth() + 1, 1)];
+  if (operator === "last_month") return [new Date(now.getFullYear(), now.getMonth() - 1, 1), new Date(now.getFullYear(), now.getMonth(), 1)];
+  return null;
+}
+
+function recordMatchesFilter(record, filter) {
+  if (!filter?.field || !filter.operator) return true;
+  const rawValue = getValue(record, filter.field);
+  const value = normalizeComparableValue(rawValue);
+  const expected = normalizeComparableValue(filter.value).trim();
+  const lowerValue = value.toLowerCase();
+  const lowerExpected = expected.toLowerCase();
+  switch (filter.operator) {
+    case "blank":
+      return value.trim() === "";
+    case "not_blank":
+      return value.trim() !== "";
+    case "true":
+      return rawValue === true || lowerValue === "true";
+    case "false":
+      return rawValue === false || lowerValue === "false";
+    case "equals":
+      return lowerValue === lowerExpected;
+    case "not_equals":
+      return lowerValue !== lowerExpected;
+    case "contains":
+      return lowerValue.includes(lowerExpected);
+    case "not_contains":
+      return !lowerValue.includes(lowerExpected);
+    case "starts_with":
+      return lowerValue.startsWith(lowerExpected);
+    case "ends_with":
+      return lowerValue.endsWith(lowerExpected);
+    case "gt":
+    case "gte":
+    case "lt":
+    case "lte": {
+      const actualNumber = toComparableNumber(rawValue);
+      const expectedNumber = toComparableNumber(expected);
+      if (actualNumber === null || expectedNumber === null) return false;
+      if (filter.operator === "gt") return actualNumber > expectedNumber;
+      if (filter.operator === "gte") return actualNumber >= expectedNumber;
+      if (filter.operator === "lt") return actualNumber < expectedNumber;
+      return actualNumber <= expectedNumber;
+    }
+    case "between": {
+      const actualNumber = toComparableNumber(rawValue);
+      const [min, max] = expected.split(/[,|]/).map(toComparableNumber);
+      return actualNumber !== null && min !== null && max !== null && actualNumber >= min && actualNumber <= max;
+    }
+    case "before":
+    case "after": {
+      const actualDate = toComparableDate(rawValue);
+      const expectedDate = toComparableDate(expected);
+      if (!actualDate || !expectedDate) return false;
+      return filter.operator === "before" ? actualDate < expectedDate : actualDate > expectedDate;
+    }
+    default: {
+      const range = dateRangeForOperator(filter.operator);
+      if (!range) return true;
+      const actualDate = toComparableDate(rawValue);
+      return actualDate ? actualDate >= range[0] && actualDate < range[1] : false;
+    }
+  }
+}
+
+function recordMatchesFilters(record, filters = [], logic = "AND") {
+  const activeFilters = (filters || []).filter((filter) => filter?.field && filter?.operator);
+  if (!activeFilters.length) return true;
+  if (String(logic).toUpperCase() === "OR") {
+    return activeFilters.some((filter) => recordMatchesFilter(record, filter));
+  }
+  return activeFilters.every((filter) => recordMatchesFilter(record, filter));
+}
+
 function applyLocalView() {
   if (!currentViewId.startsWith("local:")) return;
-  const view = objectLocalViews().find(
-    (item) => item.id === currentViewId.slice(6),
-  );
+  const view = getCurrentLocalView();
   if (!view) return;
-  currentColumns = view.columns?.length ? view.columns : currentColumns;
+  currentColumns = normalizePortalColumns(view.columns?.length ? view.columns : currentColumns);
+  if (view.pageSize) visibleRecordCount = Number(view.pageSize) || visibleRecordCount;
+  if (view.filters?.length) {
+    currentRecords = currentRecords.filter((record) =>
+      recordMatchesFilters(record, view.filters, view.filterLogic || "AND"),
+    );
+    totalRecords = currentRecords.length;
+  }
   if (view.search) {
     const q = view.search.toLowerCase();
     currentRecords = currentRecords.filter((record) =>
@@ -2429,11 +2707,13 @@ function applyLocalView() {
           .includes(q),
       ),
     );
+    totalRecords = currentRecords.length;
   }
 }
 
 function renderTable() {
   if (viewingDetail) return;
+  renderFilterPills();
   const recordsToRender = getRecordsToRender();
   const table = $("dataTable");
   const tableCard = $("tableCard");
@@ -2487,6 +2767,47 @@ function renderTable() {
     </tr>
   `;
   observeLazySentinel();
+}
+
+function renderFilterPills() {
+  const holder = $("filterPills");
+  if (!holder) return;
+  const pills = [];
+  const search = $("objSearch")?.value || "";
+  if (search) {
+    pills.push(`<span class="filter-pill">Search: ${escapeHtml(search)} <button onclick="clearObjectSearch()" aria-label="Clear search">x</button></span>`);
+  }
+  if (currentViewId.startsWith("sf:")) {
+    const view = sfListViews.find((item) => item.id === currentViewId.slice(3));
+    if (view) pills.push(`<span class="filter-pill readonly">Salesforce view: ${escapeHtml(cleanListViewLabel(view.label))}</span>`);
+  }
+  const localView = getCurrentLocalView();
+  (localView?.filters || []).forEach((filter, index) => {
+    const needsValue = !["blank", "not_blank", "true", "false", "today", "yesterday", "last_7_days", "last_30_days", "this_month", "last_month"].includes(filter.operator);
+    const valueText = needsValue ? ` ${escapeHtml(filter.value || "")}` : "";
+    pills.push(`
+      <span class="filter-pill">
+        ${escapeHtml(labelFor(filter.field))} ${escapeHtml(operatorLabel(filter.operator))}${valueText}
+        <button onclick="removeLocalViewFilter(${index})" aria-label="Remove filter">x</button>
+      </span>
+    `);
+  });
+  holder.innerHTML = pills.join("");
+}
+
+function clearObjectSearch() {
+  const input = $("objSearch");
+  if (input) input.value = "";
+  handleObjSearch("");
+}
+
+async function removeLocalViewFilter(index) {
+  const view = getCurrentLocalView();
+  if (!view) return;
+  const filters = [...(view.filters || [])];
+  filters.splice(index, 1);
+  persistCurrentLocalViewPatch({ filters });
+  await loadData({ forceRefresh: true });
 }
 
 function renderTableRowHtml(record, showActions) {
@@ -3035,6 +3356,7 @@ function sortBy(field) {
         ? "desc"
         : "asc",
   };
+  persistCurrentLocalViewPatch({ sort: { ...sortState } });
   applySort();
   renderCurrentView();
   captureCrmPageState(currentObject);
@@ -6656,67 +6978,255 @@ async function confirmDelete() {
   }
 }
 
-function openListViewModal() {
+async function openListViewModal() {
   const meta = OBJECT_META[currentObject];
+  await loadObjectFields(currentObject);
+  const editingView = getCurrentLocalView();
+  const defaultColumns = normalizePortalColumns(editingView?.columns || meta.columns);
+  listViewDraft = {
+    id: editingView?.id || `${Date.now()}`,
+    isEditing: Boolean(editingView),
+    name: editingView?.name || "",
+    visibility: editingView?.visibility || "private",
+    pageSize: editingView?.pageSize || RENDER_CHUNK_SIZE,
+    columns: defaultColumns,
+    filters: [...(editingView?.filters || [])],
+    filterLogic: editingView?.filterLogic || "AND",
+    sort: editingView?.sort || sortState || null,
+    createdAt: editingView?.createdAt,
+    selectedField: null,
+    selectedSide: null,
+  };
+  const fieldOptions = getCachedObjectFields(currentObject)
+    .map((field) => `<option value="${escapeHtml(field.name)}">${escapeHtml(field.label)}</option>`)
+    .join("");
+  const title = $("listViewModalTitle");
+  if (title) title.textContent = editingView ? "Edit List View" : "Create List View";
   $("listViewBody").innerHTML = `
-    <div class="form-grid">
-      <div class="form-group span-2">
+    <div class="lv-builder">
+      <div class="lv-top-grid">
+        <div class="form-group">
         <label class="form-label" for="viewName">List View Name</label>
-        <input class="form-ctrl" id="viewName" placeholder="Example: Key Accounts">
-      </div>
-      <div class="form-group span-2">
-        <label class="form-label" for="viewSearch">Contains Text</label>
-        <input class="form-ctrl" id="viewSearch" placeholder="Optional filter text">
-      </div>
-      <div class="form-group span-2">
-        <label class="form-label">Columns</label>
-        <div class="check-grid">
-          ${meta.columns
-            .concat(meta.editable)
-            .filter((v, i, arr) => arr.indexOf(v) === i)
-            .map(
-              (field) => `
-            <label class="check-item">
-              <input type="checkbox" value="${field}" ${meta.columns.includes(field) ? "checked" : ""}>
-              <span>${labelFor(field)}</span>
-            </label>
-          `,
-            )
-            .join("")}
+          <input class="form-ctrl" id="viewName" value="${escapeHtml(listViewDraft.name)}" placeholder="Example: Key Accounts">
         </div>
+        <div class="form-group">
+          <label class="form-label" for="viewVisibility">Visibility</label>
+          <select class="form-ctrl" id="viewVisibility">
+            <option value="private" ${listViewDraft.visibility === "private" ? "selected" : ""}>Private</option>
+            <option value="public" ${listViewDraft.visibility === "public" ? "selected" : ""}>Public</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="viewPageSize">Page Size</label>
+          <select class="form-ctrl" id="viewPageSize">
+            ${[25, 50, 100, 200].map((size) => `<option value="${size}" ${Number(listViewDraft.pageSize) === size ? "selected" : ""}>${size} rows</option>`).join("")}
+          </select>
+        </div>
+      </div>
+
+      <div class="lv-section-title">Select Fields to Display</div>
+      <div class="lv-dual-list">
+        <div class="lv-list-panel">
+          <div class="lv-list-heading">
+            <label class="form-label" for="lvAvailableSearch">Available Fields</label>
+            <span id="lvAvailableCount"></span>
+          </div>
+          <input class="form-ctrl lv-search" id="lvAvailableSearch" placeholder="Search fields..." oninput="renderListViewFieldLists()">
+          <div class="lv-field-list" id="lvAvailableFields"></div>
+        </div>
+        <div class="lv-transfer">
+          <button class="icon-btn" type="button" title="Add field" onclick="moveListViewDraftField('add')">›</button>
+          <button class="icon-btn" type="button" title="Remove field" onclick="moveListViewDraftField('remove')">‹</button>
+          <button class="icon-btn" type="button" title="Move up" onclick="moveListViewDraftField('up')">▲</button>
+          <button class="icon-btn" type="button" title="Move down" onclick="moveListViewDraftField('down')">▼</button>
+        </div>
+        <div class="lv-list-panel">
+          <div class="lv-list-heading">
+            <label class="form-label">Visible Fields</label>
+            <span id="lvVisibleCount"></span>
+          </div>
+          <div class="lv-field-list" id="lvVisibleFields"></div>
+        </div>
+      </div>
+
+      <div class="lv-filter-builder">
+        <div class="lv-section-title">Filters</div>
+        <div class="lv-filter-row">
+          <select class="form-ctrl" id="lvFilterField" onchange="syncListViewFilterOperators()">${fieldOptions}</select>
+          <select class="form-ctrl" id="lvFilterOperator"></select>
+          <input class="form-ctrl" id="lvFilterValue" placeholder="Value">
+          <button class="btn btn-ghost" type="button" onclick="addListViewDraftFilter()">Add Filter</button>
+          <select class="form-ctrl compact" id="lvFilterLogic" onchange="listViewDraft.filterLogic=this.value">
+            <option value="AND" ${listViewDraft.filterLogic === "AND" ? "selected" : ""}>AND</option>
+            <option value="OR" ${listViewDraft.filterLogic === "OR" ? "selected" : ""}>OR</option>
+          </select>
+        </div>
+        <div class="lv-filter-list" id="lvFilterList"></div>
       </div>
     </div>
   `;
+  renderListViewFieldLists();
+  syncListViewFilterOperators();
+  renderListViewFilterBuilder();
   $("listViewOverlay").classList.add("open");
 }
 
 function closeListViewModal() {
   $("listViewOverlay").classList.remove("open");
+  listViewDraft = null;
 }
 
 function saveLocalListView() {
+  if (!listViewDraft) return;
   const name = $("viewName").value.trim();
   if (!name) {
     toast("List view name is required", "err");
     return;
   }
-  const columns = [
-    ...$("listViewBody").querySelectorAll('input[type="checkbox"]:checked'),
-  ].map((input) => input.value);
+  const columns = normalizePortalColumns(listViewDraft.columns);
+  if (!columns.length) {
+    toast("Select at least one visible field", "err");
+    return;
+  }
   const views = getLocalViews();
   views[currentObject] = views[currentObject] || [];
   const view = {
-    id: `${Date.now()}`,
+    ...(listViewDraft.isEditing ? views[currentObject].find((item) => item.id === listViewDraft.id) : {}),
+    id: listViewDraft.id,
+    version: 2,
     name,
-    search: $("viewSearch").value.trim(),
-    columns: columns.length ? columns : OBJECT_META[currentObject].columns,
+    visibility: $("viewVisibility")?.value || "private",
+    objectName: currentObject,
+    columns,
+    filters: listViewDraft.filters || [],
+    filterLogic: $("lvFilterLogic")?.value || listViewDraft.filterLogic || "AND",
+    pageSize: Number($("viewPageSize")?.value || RENDER_CHUNK_SIZE),
+    sort: listViewDraft.sort || sortState || null,
+    createdAt: listViewDraft.createdAt || new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
   };
-  views[currentObject].push(view);
+  const index = views[currentObject].findIndex((item) => item.id === view.id);
+  if (index >= 0) views[currentObject][index] = view;
+  else views[currentObject].push(view);
   setLocalViews(views);
   currentViewId = `local:${view.id}`;
+  sortState = view.sort || { field: null, direction: "asc" };
   closeListViewModal();
   renderListViewSelect();
-  loadData();
+  loadData({ forceRefresh: true });
+}
+
+function renderListViewFieldLists() {
+  if (!listViewDraft) return;
+  const availableEl = $("lvAvailableFields");
+  const visibleEl = $("lvVisibleFields");
+  if (!availableEl || !visibleEl) return;
+  const query = ($("lvAvailableSearch")?.value || "").toLowerCase();
+  const selected = new Set(listViewDraft.columns);
+  const fields = getCachedObjectFields(currentObject);
+  const availableFields = fields
+    .filter((field) => !selected.has(field.name))
+    .filter((field) => !query || field.label.toLowerCase().includes(query) || field.name.toLowerCase().includes(query));
+  const availableCount = $("lvAvailableCount");
+  const visibleCount = $("lvVisibleCount");
+  if (availableCount) availableCount.textContent = `${availableFields.length} fields`;
+  if (visibleCount) visibleCount.textContent = `${listViewDraft.columns.length} selected`;
+  const optionHtml = (field, side) => `
+    <button type="button"
+      class="lv-field-option ${listViewDraft.selectedField === field.name && listViewDraft.selectedSide === side ? "active" : ""}"
+      onclick="selectListViewDraftField('${escapeJs(field.name)}', '${side}')"
+      ondblclick="moveListViewDraftFieldDirect('${escapeJs(field.name)}', '${side === "available" ? "visible" : "available"}')">
+      ${escapeHtml(field.label)}
+      <span>${escapeHtml(field.name)}</span>
+    </button>`;
+  availableEl.innerHTML = availableFields
+    .map((field) => optionHtml(field, "available"))
+    .join("") || '<div class="lv-empty">No available fields</div>';
+  visibleEl.innerHTML = listViewDraft.columns
+    .map((name) => fieldMetaFor(name) || { name, label: labelFor(name) })
+    .map((field) => optionHtml(field, "visible"))
+    .join("") || '<div class="lv-empty">No visible fields</div>';
+}
+
+function selectListViewDraftField(field, side) {
+  if (!listViewDraft) return;
+  listViewDraft.selectedField = field;
+  listViewDraft.selectedSide = side;
+  renderListViewFieldLists();
+}
+
+function moveListViewDraftField(action) {
+  if (!listViewDraft?.selectedField) return;
+  const field = listViewDraft.selectedField;
+  const columns = [...listViewDraft.columns];
+  const index = columns.indexOf(field);
+  if (action === "add" && listViewDraft.selectedSide === "available") {
+    columns.push(field);
+    listViewDraft.selectedSide = "visible";
+  } else if (action === "remove" && index >= 0) {
+    columns.splice(index, 1);
+    listViewDraft.selectedSide = "available";
+  } else if (action === "up" && index > 0) {
+    [columns[index - 1], columns[index]] = [columns[index], columns[index - 1]];
+  } else if (action === "down" && index >= 0 && index < columns.length - 1) {
+    [columns[index + 1], columns[index]] = [columns[index], columns[index + 1]];
+  }
+  listViewDraft.columns = columns;
+  renderListViewFieldLists();
+}
+
+function moveListViewDraftFieldDirect(field, target) {
+  if (!listViewDraft) return;
+  listViewDraft.selectedField = field;
+  listViewDraft.selectedSide = target === "visible" ? "available" : "visible";
+  moveListViewDraftField(target === "visible" ? "add" : "remove");
+}
+
+function syncListViewFilterOperators() {
+  const field = $("lvFilterField")?.value;
+  const operatorSelect = $("lvFilterOperator");
+  const valueInput = $("lvFilterValue");
+  if (!field || !operatorSelect) return;
+  operatorSelect.innerHTML = operatorOptionsForField(field)
+    .map((operator) => `<option value="${operator}">${escapeHtml(operatorLabel(operator))}</option>`)
+    .join("");
+  if (valueInput) valueInput.placeholder = operatorSelect.value === "between" ? "Min, Max" : "Value";
+}
+
+function addListViewDraftFilter() {
+  if (!listViewDraft) return;
+  const field = $("lvFilterField")?.value;
+  const operator = $("lvFilterOperator")?.value;
+  const value = $("lvFilterValue")?.value || "";
+  const valueNotNeeded = ["blank", "not_blank", "true", "false", "today", "yesterday", "last_7_days", "last_30_days", "this_month", "last_month"].includes(operator);
+  if (!field || !operator) return;
+  if (!valueNotNeeded && !value.trim()) {
+    toast("Filter value is required", "err");
+    return;
+  }
+  listViewDraft.filters.push({ field, operator, value: value.trim() });
+  if ($("lvFilterValue")) $("lvFilterValue").value = "";
+  renderListViewFilterBuilder();
+}
+
+function removeListViewDraftFilter(index) {
+  if (!listViewDraft) return;
+  listViewDraft.filters.splice(index, 1);
+  renderListViewFilterBuilder();
+}
+
+function renderListViewFilterBuilder() {
+  const list = $("lvFilterList");
+  if (!list || !listViewDraft) return;
+  list.innerHTML = (listViewDraft.filters || []).map((filter, index) => {
+    const valueNotNeeded = ["blank", "not_blank", "true", "false", "today", "yesterday", "last_7_days", "last_30_days", "this_month", "last_month"].includes(filter.operator);
+    return `
+      <span class="lv-filter-chip">
+        ${escapeHtml(labelFor(filter.field))} ${escapeHtml(operatorLabel(filter.operator))}${valueNotNeeded ? "" : ` ${escapeHtml(filter.value)}`}
+        <button type="button" onclick="removeListViewDraftFilter(${index})">x</button>
+      </span>
+    `;
+  }).join("") || '<div class="lv-empty">No filters. All records allowed by security are included.</div>';
 }
 
 function overlayClick(event, overlayId, closeFn) {
