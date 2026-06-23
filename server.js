@@ -49,7 +49,7 @@ function hashToken(token) {
 async function getPortalUserInvitationContext(userId) {
   const { data: user, error } = await supabase
     .from('users')
-    .select('id, email, name, role, org_role_id, must_change_pw, invitation_expires_at, email_verified_at, password_created_at, setup_completed_at')
+    .select('id, email, name, role, org_role_id, must_change_pw, invitation_expires_at, invitation_cancelled_at, email_verified_at, password_created_at, setup_completed_at')
     .eq('id', userId)
     .single();
 
@@ -83,6 +83,7 @@ async function getPortalUserInvitationContext(userId) {
 }
 
 function needsInvitation(user = {}) {
+  if (user.invitation_cancelled_at) return true;
   if (!user.email_verified_at) return true;
   if (!user.password_created_at) return true;
   if (!user.setup_completed_at) return true;
@@ -147,6 +148,7 @@ async function sendPortalUserInvitation({ userId, adminUser, req, auditAction })
     .update({
       invitation_sent_at: nowIso,
       invitation_expires_at: expiresAt.toISOString(),
+      invitation_cancelled_at: null,
       updated_at: nowIso
     })
     .eq('id', user.id);
@@ -3832,6 +3834,7 @@ app.post('/api/auth/reset-password', async (req, res) => {
         email_verified_at: new Date().toISOString(),
         password_created_at: new Date().toISOString(),
         setup_completed_at: new Date().toISOString(),
+        invitation_cancelled_at: null,
         updated_at: new Date().toISOString()
       })
       .eq('id', resetRecord.user_id);
@@ -4217,6 +4220,46 @@ app.post('/api/portal/users/:id/resend-invitation', checkAuth, checkRole('admin'
   } catch (err) {
     console.error('POST /api/portal/users/:id/resend-invitation error:', err.message);
     res.status(500).json({ error: 'Unable to send invitation. Please try again.' });
+  }
+});
+
+// POST /api/portal/users/:id/cancel-invitation - revoke active setup links
+app.post('/api/portal/users/:id/cancel-invitation', checkAuth, checkRole('admin'), async (req, res) => {
+  const { id } = req.params;
+
+  try {
+    const { user } = await getPortalUserInvitationContext(id);
+
+    if (!needsInvitation(user)) {
+      return res.status(409).json({ error: 'This user has already completed account setup.' });
+    }
+
+    await revokeActiveSetupTokens(id);
+
+    const nowIso = new Date().toISOString();
+    const { error: updateError } = await supabase
+      .from('users')
+      .update({
+        invitation_cancelled_at: nowIso,
+        invitation_expires_at: null,
+        updated_at: nowIso
+      })
+      .eq('id', id);
+    if (updateError) throw updateError;
+
+    await writeAuditLog({
+      userId: req.user.id,
+      userEmail: req.user.email,
+      userRole: req.user.role,
+      action: 'INVITATION_CANCELLED',
+      payload: { invitedUserId: id, invitedEmail: user.email },
+      ipAddress: req.ip
+    });
+
+    res.json({ success: true, cancelledAt: nowIso });
+  } catch (err) {
+    console.error('POST /api/portal/users/:id/cancel-invitation error:', err.message);
+    res.status(500).json({ error: 'Unable to cancel invitation. Please try again.' });
   }
 });
 
@@ -4804,7 +4847,7 @@ app.get('/api/portal/users', checkAuth, checkRole('admin'), async (req, res) => 
     if (userIds.length) {
       const { data: imageRows, error: imageError } = await supabase
         .from('users')
-        .select('id, profile_image, must_change_pw, invitation_sent_at, invitation_expires_at, email_verified_at, password_created_at, setup_completed_at')
+        .select('id, profile_image, must_change_pw, invitation_sent_at, invitation_expires_at, invitation_cancelled_at, email_verified_at, password_created_at, setup_completed_at')
         .in('id', userIds);
       if (imageError) throw imageError;
       profileImagesByUserId = Object.fromEntries((imageRows || []).map((row) => [row.id, row.profile_image || null]));
@@ -4812,6 +4855,7 @@ app.get('/api/portal/users', checkAuth, checkRole('admin'), async (req, res) => 
         mustChangePw: row.must_change_pw,
         invitationSentAt: row.invitation_sent_at,
         invitationExpiresAt: row.invitation_expires_at,
+        invitationCancelledAt: row.invitation_cancelled_at,
         emailVerifiedAt: row.email_verified_at,
         passwordCreatedAt: row.password_created_at,
         setupCompletedAt: row.setup_completed_at
@@ -4857,12 +4901,14 @@ app.get('/api/portal/users', checkAuth, checkRole('admin'), async (req, res) => 
         mustChangePw: invitationStateByUserId[u.id]?.mustChangePw ?? u.must_change_pw,
         invitationSentAt: invitationStateByUserId[u.id]?.invitationSentAt || null,
         invitationExpiresAt: invitationStateByUserId[u.id]?.invitationExpiresAt || null,
+        invitationCancelledAt: invitationStateByUserId[u.id]?.invitationCancelledAt || null,
         emailVerifiedAt: invitationStateByUserId[u.id]?.emailVerifiedAt || null,
         passwordCreatedAt: invitationStateByUserId[u.id]?.passwordCreatedAt || null,
         setupCompletedAt: invitationStateByUserId[u.id]?.setupCompletedAt || null,
         needsInvitation: needsInvitation({
           must_change_pw: invitationStateByUserId[u.id]?.mustChangePw ?? u.must_change_pw,
           invitation_expires_at: invitationStateByUserId[u.id]?.invitationExpiresAt,
+          invitation_cancelled_at: invitationStateByUserId[u.id]?.invitationCancelledAt,
           email_verified_at: invitationStateByUserId[u.id]?.emailVerifiedAt,
           password_created_at: invitationStateByUserId[u.id]?.passwordCreatedAt,
           setup_completed_at: invitationStateByUserId[u.id]?.setupCompletedAt

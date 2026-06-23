@@ -73,7 +73,7 @@ function renderWelcomeUserEmail({
           <tr>
             <td style="padding:34px 36px 22px">
               <p style="font-size:15px;line-height:1.6;margin:0 0 12px;color:#4c5d75">Hello ${safeName},</p>
-              <h1 style="font-size:24px;line-height:1.25;margin:0 0 14px;color:#0b1220">Welcome to SaaSRAY CRM</h1>
+              <h1 style="font-size:24px;line-height:1.25;margin:0 0 14px;color:#0b1220">Your SaaSRAY CRM account is ready</h1>
               <p style="font-size:15px;line-height:1.7;margin:0;color:#4c5d75">
                 Your CRM portal account has been created. Verify your account and create your password to get started.
               </p>
@@ -96,7 +96,7 @@ function renderWelcomeUserEmail({
 
           <tr>
             <td align="center" style="padding:2px 36px 26px">
-              <a href="${safeSetupUrl}" style="display:inline-block;background:#0176d3;color:#ffffff;text-decoration:none;font-size:15px;font-weight:800;padding:15px 28px;border-radius:10px">Verify Account &amp; Create Password</a>
+              <a href="${safeSetupUrl}" style="display:block;background:#0176d3;color:#ffffff;text-decoration:none;font-size:16px;font-weight:800;padding:16px 28px;border-radius:12px;box-shadow:0 10px 22px rgba(1,118,211,.22)">Verify Account &amp; Create Password</a>
             </td>
           </tr>
 
@@ -126,10 +126,21 @@ function renderWelcomeUserEmail({
             <td style="padding:0 36px 26px">
               <table width="100%" cellpadding="0" cellspacing="0" role="presentation" style="background:#f8fbff;border:1px solid #dbeafe;border-radius:12px">
                 <tr><td style="padding:16px">
-                  <p style="font-size:13px;margin:0 0 8px;color:#0b1220;font-weight:800">Login Information</p>
-                  <p style="font-size:13px;margin:0 0 4px;color:#4c5d75">Application URL: <strong style="color:#172033">${safeAppUrl}</strong></p>
+                  <p style="font-size:13px;margin:0 0 10px;color:#0b1220;font-weight:800">Login URL</p>
+                  <p style="font-size:13px;margin:0 0 10px;color:#4c5d75;line-height:1.6">After setup, use this portal URL to sign in:</p>
+                  <p style="font-size:13px;margin:0;color:#0176d3;font-weight:800;word-break:break-all">${safeAppUrl}</p>
+                </td></tr>
+              </table>
+            </td>
+          </tr>
+
+          <tr>
+            <td style="padding:0 36px 26px">
+              <table width="100%" cellpadding="0" cellspacing="0" role="presentation" style="background:#ffffff;border:1px solid #e1e7f0;border-radius:12px">
+                <tr><td style="padding:16px">
+                  <p style="font-size:13px;margin:0 0 8px;color:#0b1220;font-weight:800">Sign-in Details</p>
                   <p style="font-size:13px;margin:0 0 4px;color:#4c5d75">User Email: <strong style="color:#172033">${safeEmail}</strong></p>
-                  <p style="font-size:13px;margin:0;color:#4c5d75">Password: <strong style="color:#172033">Not yet created - user creates it during setup.</strong></p>
+                  <p style="font-size:13px;margin:0;color:#4c5d75">Password: <strong style="color:#172033">You will create it during account setup.</strong></p>
                 </td></tr>
               </table>
             </td>
@@ -148,8 +159,9 @@ function renderWelcomeUserEmail({
 
           <tr>
             <td style="padding:20px 36px;background:#f7f9fc;border-top:1px solid #e1e7f0;text-align:center">
-              <p style="font-size:12px;line-height:1.6;margin:0;color:#6b7c93">Need help? Contact your SaaSRAY CRM administrator.</p>
-              <p style="font-size:11px;line-height:1.6;margin:8px 0 0;color:#8a98aa">SaaSRAY CRM &bull; This email was sent to ${safeEmail}</p>
+              <p style="font-size:13px;line-height:1.6;margin:0;color:#172033;font-weight:800">Need help?</p>
+              <p style="font-size:12px;line-height:1.6;margin:4px 0 0;color:#6b7c93">Contact your SaaSRAY CRM administrator or reply to your internal support team.</p>
+              <p style="font-size:11px;line-height:1.6;margin:10px 0 0;color:#8a98aa">SaaSRAY CRM &bull; This invitation was sent to ${safeEmail}</p>
             </td>
           </tr>
         </table>

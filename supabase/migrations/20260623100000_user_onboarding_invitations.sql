@@ -29,6 +29,7 @@ CREATE INDEX IF NOT EXISTS idx_password_reset_tokens_user_type_active
 ALTER TABLE public.users
   ADD COLUMN IF NOT EXISTS invitation_sent_at TIMESTAMPTZ,
   ADD COLUMN IF NOT EXISTS invitation_expires_at TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS invitation_cancelled_at TIMESTAMPTZ,
   ADD COLUMN IF NOT EXISTS email_verified_at TIMESTAMPTZ,
   ADD COLUMN IF NOT EXISTS password_created_at TIMESTAMPTZ,
   ADD COLUMN IF NOT EXISTS setup_completed_at TIMESTAMPTZ;
