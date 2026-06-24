@@ -682,6 +682,17 @@ body {
 
 .btn:disabled { opacity: 0.6; cursor: not-allowed; }
 
+.btn-spinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  display: inline-block;
+  flex: 0 0 auto;
+  animation: spin 0.7s linear infinite;
+}
+
 .btn-primary {
   background: var(--accent);
   color: white;

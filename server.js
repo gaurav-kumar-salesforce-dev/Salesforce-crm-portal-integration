@@ -2183,6 +2183,11 @@ async function getAccessToken() {
 
 // ─── Axios Helpers ────────────────────────────────────────────
 const baseUrl = () => `${SF.instanceUrl}/services/data/${SF.version}`;
+const uiApiListViewBaseUrl = () => {
+  const configuredVersion = Number(String(SF.version || '').replace(/^v/i, ''));
+  const version = configuredVersion >= 61 ? SF.version : 'v61.0';
+  return `${SF.instanceUrl}/services/data/${version}`;
+};
 
 async function sfGet(endpoint, params = {}, config = {}) {
   const token = await getAccessToken();
@@ -2218,6 +2223,15 @@ function isTransientSalesforceNetworkError(err) {
 async function sfPost(endpoint, body) {
   const token = await getAccessToken();
   const res = await axios.post(`${baseUrl()}${endpoint}`, body, {
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }
+  });
+  return res.data;
+}
+
+async function sfUiPost(endpoint, body) {
+  const token = await getAccessToken();
+  const res = await axios.post(`${uiApiListViewBaseUrl()}${endpoint}`, body, {
+    timeout: 30000,
     headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }
   });
   return res.data;
@@ -3230,6 +3244,13 @@ function formatSalesforceError(value) {
   if (value.message) return value.message;
   if (value.error_description) return value.error_description;
   if (value.errors) return formatSalesforceError(value.errors);
+  if (value.output?.fieldErrors) {
+    const details = Object.entries(value.output.fieldErrors)
+      .flatMap(([field, errors]) => (Array.isArray(errors) ? errors : [errors])
+        .map((error) => `${field}: ${formatSalesforceError(error)}`));
+    if (details.length) return details.join('; ');
+  }
+  if (value.output?.errors) return formatSalesforceError(value.output.errors);
   if (value.outputValues?.errors) return formatSalesforceError(value.outputValues.errors);
   try {
     return JSON.stringify(value);
@@ -5419,6 +5440,112 @@ app.get('/api/:object/listviews', checkAuth, async (req, res) => {
     res.json(data);
   } catch (err) {
     handleSFError(err, res, `List views ${object}`);
+  }
+});
+
+function developerNameFromLabel(label) {
+  const base = String(label || 'Portal List View')
+    .replace(/[^A-Za-z0-9_]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .replace(/_{2,}/g, '_')
+    .slice(0, 35) || 'Portal_List_View';
+  const safeBase = /^[A-Za-z]/.test(base) ? base : `List_${base}`;
+  return `${safeBase}_${Date.now().toString(36)}`.slice(0, 40);
+}
+
+function salesforceListViewOperation(operator) {
+  return ({
+    equals: 'Equals',
+    not_equals: 'NotEqual',
+    contains: 'Contains',
+    not_contains: 'NotContains',
+    starts_with: 'StartsWith',
+    ends_with: 'EndsWith',
+    gt: 'GreaterThan',
+    gte: 'GreaterOrEqual',
+    lt: 'LessThan',
+    lte: 'LessOrEqual',
+    blank: 'Equals',
+    not_blank: 'NotEqual',
+    true: 'Equals',
+    false: 'Equals',
+    today: 'Equals',
+    yesterday: 'Equals',
+    last_7_days: 'Equals',
+    last_30_days: 'Equals',
+    this_month: 'Equals',
+    last_month: 'Equals'
+  })[operator] || 'Equals';
+}
+
+function salesforceListViewFilterValue(filter) {
+  const operator = filter?.operator;
+  if (operator === 'blank' || operator === 'not_blank') return '';
+  if (operator === 'true') return 'true';
+  if (operator === 'false') return 'false';
+  if (operator === 'today') return 'TODAY';
+  if (operator === 'yesterday') return 'YESTERDAY';
+  if (operator === 'last_7_days') return 'LAST_N_DAYS:7';
+  if (operator === 'last_30_days') return 'LAST_N_DAYS:30';
+  if (operator === 'this_month') return 'THIS_MONTH';
+  if (operator === 'last_month') return 'LAST_MONTH';
+  return String(filter?.value ?? '');
+}
+
+function buildSalesforceListViewPayload(object, body = {}) {
+  const label = String(body.name || body.label || '').trim();
+  const columns = Array.isArray(body.columns) ? body.columns : [];
+  if (!label) throw new Error('List view name is required');
+  if (!columns.length) throw new Error('Select at least one visible field');
+
+  const filteredByInfo = (Array.isArray(body.filters) ? body.filters : [])
+    .filter((filter) => filter?.field)
+    .map((filter) => ({
+      fieldApiName: filter.field,
+      operandLabels: [salesforceListViewFilterValue(filter)],
+      operator: salesforceListViewOperation(filter.operator)
+    }));
+
+  const filterLogicString = filteredByInfo.length > 1
+    ? filteredByInfo.map((_, index) => String(index + 1)).join(` ${String(body.filterLogic || 'AND').toUpperCase() === 'OR' ? 'OR' : 'AND'} `)
+    : undefined;
+
+  return {
+    displayColumns: columns,
+    filteredByInfo,
+    ...(filterLogicString ? { filterLogicString } : {}),
+    label,
+    listViewApiName: developerNameFromLabel(label),
+    visibility: String(body.visibility || '').toLowerCase() === 'public' ? 'Public' : 'Private'
+  };
+}
+
+app.post('/api/:object/listviews', checkAuth, async (req, res) => {
+  const { object } = req.params;
+  if (!OBJECTS[object]) return res.status(400).json({ error: `Unknown object: ${object}` });
+
+  try {
+    const payload = buildSalesforceListViewPayload(object, req.body || {});
+    const created = await sfUiPost(`/ui-api/list-info/${object}`, payload);
+    const listData = await sfGet(`/sobjects/${object}/listviews`);
+    const listviews = listData.listviews || [];
+    const createdView = listviews.find((view) =>
+      view.developerName === payload.listViewApiName ||
+      view.name === payload.listViewApiName ||
+      view.label === payload.label
+    ) || null;
+
+    res.json({
+      synced: true,
+      listView: createdView || {
+        id: created?.id || created?.listViewId || created?.listViewReference?.id,
+        label: payload.label,
+        developerName: payload.listViewApiName
+      },
+      salesforce: created
+    });
+  } catch (err) {
+    handleSFError(err, res, `Create list view ${object}`);
   }
 });
 

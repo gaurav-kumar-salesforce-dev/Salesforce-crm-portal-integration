@@ -7076,22 +7076,39 @@ function closeListViewModal() {
   listViewDraft = null;
 }
 
-function saveLocalListView() {
+function persistPortalListView(view) {
+  const views = getLocalViews();
+  views[currentObject] = views[currentObject] || [];
+  const index = views[currentObject].findIndex((item) => item.id === view.id);
+  if (index >= 0) views[currentObject][index] = view;
+  else views[currentObject].push(view);
+  setLocalViews(views);
+}
+
+function removePortalListView(viewId) {
+  const views = getLocalViews();
+  if (!Array.isArray(views[currentObject])) return;
+  views[currentObject] = views[currentObject].filter((item) => item.id !== viewId);
+  setLocalViews(views);
+}
+
+function buildListViewSaveDraft() {
   if (!listViewDraft) return;
   const name = $("viewName").value.trim();
   if (!name) {
     toast("List view name is required", "err");
-    return;
+    return null;
   }
   const columns = normalizePortalColumns(listViewDraft.columns);
   if (!columns.length) {
     toast("Select at least one visible field", "err");
-    return;
+    return null;
   }
-  const views = getLocalViews();
-  views[currentObject] = views[currentObject] || [];
-  const view = {
-    ...(listViewDraft.isEditing ? views[currentObject].find((item) => item.id === listViewDraft.id) : {}),
+  const existing = listViewDraft.isEditing
+    ? objectLocalViews().find((item) => item.id === listViewDraft.id)
+    : {};
+  return {
+    ...existing,
     id: listViewDraft.id,
     version: 2,
     name,
@@ -7105,15 +7122,68 @@ function saveLocalListView() {
     createdAt: listViewDraft.createdAt || new Date().toISOString(),
     updatedAt: new Date().toISOString(),
   };
-  const index = views[currentObject].findIndex((item) => item.id === view.id);
-  if (index >= 0) views[currentObject][index] = view;
-  else views[currentObject].push(view);
-  setLocalViews(views);
-  currentViewId = `local:${view.id}`;
-  sortState = view.sort || { field: null, direction: "asc" };
-  closeListViewModal();
-  renderListViewSelect();
-  loadData({ forceRefresh: true });
+}
+
+function setListViewSaveBusy(isBusy) {
+  const button = $("listViewSaveBtn");
+  if (!button) return;
+  if (isBusy) {
+    button.dataset.originalText = button.textContent;
+    button.disabled = true;
+    button.innerHTML = '<span class="btn-spinner"></span> Saving...';
+  } else {
+    button.disabled = false;
+    button.textContent = button.dataset.originalText || "Save View";
+  }
+}
+
+async function syncPortalListViewToSalesforce(view) {
+  return api(`/api/${currentObject}/listviews`, {
+    method: "POST",
+    body: JSON.stringify({
+      name: view.name,
+      visibility: view.visibility,
+      columns: view.columns,
+      filters: view.filters,
+      filterLogic: view.filterLogic,
+      sort: view.sort,
+    }),
+  });
+}
+
+async function saveLocalListView() {
+  const view = buildListViewSaveDraft();
+  if (!view) return;
+
+  setListViewSaveBusy(true);
+  try {
+    const result = await syncPortalListViewToSalesforce(view);
+    if (!result?.synced) throw new Error("Salesforce did not confirm list view sync");
+
+    removePortalListView(view.id);
+    await loadListViews();
+    const salesforceId = result.listView?.id;
+    const matchedView = salesforceId
+      ? sfListViews.find((item) => item.id === salesforceId)
+      : sfListViews.find((item) => cleanListViewLabel(item.label) === cleanListViewLabel(view.name));
+    currentViewId = matchedView?.id ? `sf:${matchedView.id}` : "all";
+    sortState = view.sort || { field: null, direction: "asc" };
+    closeListViewModal();
+    renderListViewSelect();
+    toast("List view saved in Salesforce", "ok");
+    loadData({ forceRefresh: true });
+  } catch (err) {
+    persistPortalListView(view);
+    currentViewId = `local:${view.id}`;
+    sortState = view.sort || { field: null, direction: "asc" };
+    closeListViewModal();
+    renderListViewSelect();
+    const message = err?.message || "Salesforce rejected this list view";
+    toast(`Saved in portal only. Salesforce sync failed: ${message}`, "err", 9000);
+    loadData({ forceRefresh: true });
+  } finally {
+    setListViewSaveBusy(false);
+  }
 }
 
 function renderListViewFieldLists() {
