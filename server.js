@@ -2237,6 +2237,33 @@ async function sfUiPost(endpoint, body) {
   return res.data;
 }
 
+async function sfUiGet(endpoint, params = {}) {
+  const token = await getAccessToken();
+  const res = await axios.get(`${uiApiListViewBaseUrl()}${endpoint}`, {
+    timeout: 30000,
+    headers: { Authorization: `Bearer ${token}` },
+    params
+  });
+  return res.data;
+}
+
+async function sfUiPatch(endpoint, body) {
+  const token = await getAccessToken();
+  const res = await axios.patch(`${uiApiListViewBaseUrl()}${endpoint}`, body, {
+    timeout: 30000,
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }
+  });
+  return res.data;
+}
+
+async function sfUiDelete(endpoint) {
+  const token = await getAccessToken();
+  await axios.delete(`${uiApiListViewBaseUrl()}${endpoint}`, {
+    timeout: 30000,
+    headers: { Authorization: `Bearer ${token}` }
+  });
+}
+
 async function sfPatch(endpoint, body, config = {}) {
   const token = await getAccessToken();
   const res = await axios.patch(`${baseUrl()}${endpoint}`, body, {
@@ -5506,9 +5533,15 @@ function buildSalesforceListViewPayload(object, body = {}) {
       operator: salesforceListViewOperation(filter.operator)
     }));
 
-  const filterLogicString = filteredByInfo.length > 1
-    ? filteredByInfo.map((_, index) => String(index + 1)).join(` ${String(body.filterLogic || 'AND').toUpperCase() === 'OR' ? 'OR' : 'AND'} `)
-    : undefined;
+  let filterLogicString = undefined;
+  if (filteredByInfo.length > 1) {
+    const logic = String(body.filterLogic || 'AND').trim().toUpperCase();
+    if (logic === 'AND' || logic === 'OR') {
+      filterLogicString = filteredByInfo.map((_, index) => String(index + 1)).join(` ${logic} `);
+    } else {
+      filterLogicString = body.filterLogic;
+    }
+  }
 
   return {
     displayColumns: columns,
@@ -5546,6 +5579,88 @@ app.post('/api/:object/listviews', checkAuth, async (req, res) => {
     });
   } catch (err) {
     handleSFError(err, res, `Create list view ${object}`);
+  }
+});
+
+app.patch('/api/:object/listviews/:apiName', checkAuth, async (req, res) => {
+  const { object, apiName } = req.params;
+  if (!OBJECTS[object]) return res.status(400).json({ error: `Unknown object: ${object}` });
+
+  try {
+    const body = req.body || {};
+    const label = String(body.name || body.label || '').trim();
+    const columns = Array.isArray(body.columns) ? body.columns : [];
+    if (!label) return res.status(400).json({ error: 'List view name is required' });
+    if (!columns.length) return res.status(400).json({ error: 'Select at least one visible field' });
+
+    const filteredByInfo = (Array.isArray(body.filters) ? body.filters : [])
+      .filter((filter) => filter?.field)
+      .map((filter) => ({
+        fieldApiName: filter.field,
+        operandLabels: [salesforceListViewFilterValue(filter)],
+        operator: salesforceListViewOperation(filter.operator)
+      }));
+
+    let filterLogicString = undefined;
+    if (filteredByInfo.length > 1) {
+      const logic = String(body.filterLogic || 'AND').trim().toUpperCase();
+      if (logic === 'AND' || logic === 'OR') {
+        filterLogicString = filteredByInfo.map((_, index) => String(index + 1)).join(` ${logic} `);
+      } else {
+        filterLogicString = body.filterLogic;
+      }
+    }
+
+    const payload = {
+      displayColumns: columns,
+      filteredByInfo,
+      ...(filterLogicString ? { filterLogicString } : {}),
+      label,
+      visibility: String(body.visibility || '').toLowerCase() === 'public' ? 'Public' : 'Private'
+    };
+
+    const updated = await sfUiPatch(`/ui-api/list-info/${object}/${apiName}`, payload);
+    const listData = await sfGet(`/sobjects/${object}/listviews`);
+    const listviews = listData.listviews || [];
+    const matchedView = listviews.find((view) =>
+      view.developerName === apiName || view.label === label
+    ) || null;
+
+    res.json({
+      synced: true,
+      listView: matchedView || {
+        id: updated?.id || updated?.listViewId,
+        label,
+        developerName: apiName
+      },
+      salesforce: updated
+    });
+  } catch (err) {
+    handleSFError(err, res, `Update list view ${object}/${apiName}`);
+  }
+});
+
+app.delete('/api/:object/listviews/:apiName', checkAuth, async (req, res) => {
+  const { object, apiName } = req.params;
+  if (!OBJECTS[object]) return res.status(400).json({ error: `Unknown object: ${object}` });
+
+  try {
+    await sfUiDelete(`/ui-api/list-info/${object}/${apiName}`);
+    res.json({ deleted: true });
+  } catch (err) {
+    handleSFError(err, res, `Delete list view ${object}/${apiName}`);
+  }
+});
+
+app.get('/api/:object/listviews/:id/describe', checkAuth, async (req, res) => {
+  const { object, id } = req.params;
+  if (!OBJECTS[object]) return res.status(400).json({ error: `Unknown object: ${object}` });
+
+  try {
+    const data = await sfUiGet(`/ui-api/list-info/${id}`);
+    res.json(data);
+  } catch (err) {
+    handleSFError(err, res, `Describe list view ${object}/${id}`);
   }
 });
 
@@ -5649,6 +5764,16 @@ app.get('/api/:object/listviews/:id/results', checkAuth, async (req, res, next) 
 
     const describeStartedAt = performance.now();
     const detail = await sfGet(`/sobjects/${object}/listviews/${id}/describe`);
+    let displayColumnNames = null;
+    try {
+      const uiInfo = await sfUiGet(`/ui-api/list-info/${id}`);
+      if (uiInfo && Array.isArray(uiInfo.displayColumns)) {
+        displayColumnNames = new Set(uiInfo.displayColumns.map(c => c.fieldApiName));
+      }
+    } catch (e) {
+      // Fallback if UI API fails
+    }
+
     const scope = await buildReadableRecordScopeFilter(object, req.user, requestId);
     const scopedQuery = appendExtraWhereToSOQL(detail.query, scope.clause);
     const sfStartedAt = performance.now();
@@ -5669,9 +5794,16 @@ app.get('/api/:object/listviews/:id/results', checkAuth, async (req, res, next) 
     const hiddenFields = new Set(req.fieldPerms?.hiddenFields || []);
     const owdAccess = await getOrgWideDefaultAccess(object);
     const canUseSalesforceTotal = req.user.isSystemAdmin || ['public_read', 'public_read_write'].includes(owdAccess);
+
+    const returnedColumns = (detail.columns || []).filter(column => {
+      if (hiddenFields.has(column.fieldNameOrPath)) return false;
+      if (displayColumnNames && !displayColumnNames.has(column.fieldNameOrPath)) return false;
+      return true;
+    });
+
     res.json({
       label: detail.label,
-      columns: (detail.columns || []).filter(column => !hiddenFields.has(column.fieldNameOrPath)),
+      columns: returnedColumns,
       query: detail.query,
       records,
       totalSize: canUseSalesforceTotal ? (data.totalSize || 0) : records.length,

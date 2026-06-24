@@ -2399,6 +2399,37 @@ async function loadListViews() {
   renderListViewSelect();
 }
 
+function isEditableListView(viewId) {
+  if (!viewId || viewId === "all") return false;
+  if (viewId.startsWith("local:")) return true;
+  if (viewId.startsWith("sf:")) {
+    const id = viewId.slice(3);
+    const view = sfListViews.find((v) => v.id === id);
+    if (!view) return false;
+    const devName = view.developerName || "";
+    const lower = devName.toLowerCase();
+    if (lower === "all" || lower === "recentlyviewed" || lower.startsWith("all_") || lower.startsWith("my_") || lower.startsWith("recently_")) {
+      return false;
+    }
+    const standardNames = [
+      "allaccounts", "allcontacts", "allopportunities", "allcases", "allleads", "allcampaigns",
+      "recentlyviewedaccounts", "recentlyviewedcontacts", "recentlyviewedopportunities", "recentlyviewedcases", "recentlyviewedleads", "recentlyviewedcampaigns",
+      "myaccounts", "mycontacts", "myopportunities", "mycases", "myleads", "mycampaigns"
+    ];
+    if (standardNames.includes(lower)) return false;
+    return true;
+  }
+  return false;
+}
+
+function updateListViewButtonsVisibility() {
+  const isEditable = isEditableListView(currentViewId);
+  const editBtn = $("editListViewBtn");
+  const deleteBtn = $("deleteListViewBtn");
+  if (editBtn) editBtn.style.display = isEditable ? "inline-flex" : "none";
+  if (deleteBtn) deleteBtn.style.display = isEditable ? "inline-flex" : "none";
+}
+
 function renderListViewSelect() {
   const select = $("listViewSelect");
   const locals = objectLocalViews();
@@ -2412,6 +2443,7 @@ function renderListViewSelect() {
     currentViewId = "all";
     select.value = "all";
   }
+  updateListViewButtonsVisibility();
 }
 
 async function handleListViewChange(value) {
@@ -2420,6 +2452,7 @@ async function handleListViewChange(value) {
   nextRecordsUrl = null;
   const localView = getCurrentLocalView();
   sortState = localView?.sort || { field: null, direction: "asc" };
+  updateListViewButtonsVisibility();
   await loadData();
 }
 
@@ -2479,7 +2512,7 @@ async function loadData(options = {}) {
       pageSize: localView?.pageSize || RENDER_CHUNK_SIZE,
     });
     const cachedEntry = forceRefresh
-      ? peekCrmListCache(cacheKey)
+      ? null
       : getCrmListCache(cacheKey);
     if (!cachedEntry) {
       $("pageSub").textContent =
@@ -2776,10 +2809,6 @@ function renderFilterPills() {
   const search = $("objSearch")?.value || "";
   if (search) {
     pills.push(`<span class="filter-pill">Search: ${escapeHtml(search)} <button onclick="clearObjectSearch()" aria-label="Clear search">x</button></span>`);
-  }
-  if (currentViewId.startsWith("sf:")) {
-    const view = sfListViews.find((item) => item.id === currentViewId.slice(3));
-    if (view) pills.push(`<span class="filter-pill readonly">Salesforce view: ${escapeHtml(cleanListViewLabel(view.label))}</span>`);
   }
   const localView = getCurrentLocalView();
   (localView?.filters || []).forEach((filter, index) => {
@@ -6983,6 +7012,8 @@ async function openListViewModal() {
   await loadObjectFields(currentObject);
   const editingView = getCurrentLocalView();
   const defaultColumns = normalizePortalColumns(editingView?.columns || meta.columns);
+  const logicVal = editingView?.filterLogic || "AND";
+  const isStandardLogic = ["AND", "OR"].includes(logicVal.toUpperCase());
   listViewDraft = {
     id: editingView?.id || `${Date.now()}`,
     isEditing: Boolean(editingView),
@@ -6991,7 +7022,8 @@ async function openListViewModal() {
     pageSize: editingView?.pageSize || RENDER_CHUNK_SIZE,
     columns: defaultColumns,
     filters: [...(editingView?.filters || [])],
-    filterLogic: editingView?.filterLogic || "AND",
+    filterLogicType: isStandardLogic ? logicVal.toUpperCase() : "CUSTOM",
+    customFilterLogic: isStandardLogic ? "" : logicVal,
     sort: editingView?.sort || sortState || null,
     createdAt: editingView?.createdAt,
     selectedField: null,
@@ -7056,10 +7088,15 @@ async function openListViewModal() {
           <select class="form-ctrl" id="lvFilterOperator"></select>
           <input class="form-ctrl" id="lvFilterValue" placeholder="Value">
           <button class="btn btn-ghost" type="button" onclick="addListViewDraftFilter()">Add Filter</button>
-          <select class="form-ctrl compact" id="lvFilterLogic" onchange="listViewDraft.filterLogic=this.value">
-            <option value="AND" ${listViewDraft.filterLogic === "AND" ? "selected" : ""}>AND</option>
-            <option value="OR" ${listViewDraft.filterLogic === "OR" ? "selected" : ""}>OR</option>
+          <select class="form-ctrl compact" id="lvFilterLogicType" onchange="handleFilterLogicTypeChange(this.value)">
+            <option value="AND" ${listViewDraft.filterLogicType === "AND" ? "selected" : ""}>AND</option>
+            <option value="OR" ${listViewDraft.filterLogicType === "OR" ? "selected" : ""}>OR</option>
+            <option value="CUSTOM" ${listViewDraft.filterLogicType === "CUSTOM" ? "selected" : ""}>Custom</option>
           </select>
+        </div>
+        <div class="form-group" id="lvCustomLogicContainer" style="display: ${listViewDraft.filterLogicType === 'CUSTOM' ? 'flex' : 'none'}; margin-top: 12px; gap: 5px;">
+          <label class="form-label" for="lvCustomFilterLogic">Filter Logic</label>
+          <input class="form-ctrl" id="lvCustomFilterLogic" value="${escapeHtml(listViewDraft.customFilterLogic || '')}" placeholder="Example: 1 AND (2 OR 3)">
         </div>
         <div class="lv-filter-list" id="lvFilterList"></div>
       </div>
@@ -7074,6 +7111,15 @@ async function openListViewModal() {
 function closeListViewModal() {
   $("listViewOverlay").classList.remove("open");
   listViewDraft = null;
+}
+
+function handleFilterLogicTypeChange(value) {
+  if (!listViewDraft) return;
+  listViewDraft.filterLogicType = value;
+  const container = $("lvCustomLogicContainer");
+  if (container) {
+    container.style.display = value === "CUSTOM" ? "flex" : "none";
+  }
 }
 
 function persistPortalListView(view) {
@@ -7104,9 +7150,13 @@ function buildListViewSaveDraft() {
     toast("Select at least one visible field", "err");
     return null;
   }
-  const existing = listViewDraft.isEditing
+  const existing = listViewDraft.isEditing && !listViewDraft.sfDeveloperName
     ? objectLocalViews().find((item) => item.id === listViewDraft.id)
     : {};
+  const logicType = $("lvFilterLogicType")?.value || listViewDraft.filterLogicType || "AND";
+  const customLogic = $("lvCustomFilterLogic")?.value || listViewDraft.customFilterLogic || "";
+  const filterLogic = logicType === "CUSTOM" ? customLogic.trim() : logicType;
+
   return {
     ...existing,
     id: listViewDraft.id,
@@ -7116,11 +7166,12 @@ function buildListViewSaveDraft() {
     objectName: currentObject,
     columns,
     filters: listViewDraft.filters || [],
-    filterLogic: $("lvFilterLogic")?.value || listViewDraft.filterLogic || "AND",
+    filterLogic,
     pageSize: Number($("viewPageSize")?.value || RENDER_CHUNK_SIZE),
     sort: listViewDraft.sort || sortState || null,
     createdAt: listViewDraft.createdAt || new Date().toISOString(),
     updatedAt: new Date().toISOString(),
+    sfDeveloperName: listViewDraft.sfDeveloperName || null,
   };
 }
 
@@ -7138,8 +7189,13 @@ function setListViewSaveBusy(isBusy) {
 }
 
 async function syncPortalListViewToSalesforce(view) {
-  return api(`/api/${currentObject}/listviews`, {
-    method: "POST",
+  const method = view.sfDeveloperName ? "PATCH" : "POST";
+  const url = view.sfDeveloperName
+    ? `/api/${currentObject}/listviews/${view.sfDeveloperName}`
+    : `/api/${currentObject}/listviews`;
+
+  return api(url, {
+    method,
     body: JSON.stringify({
       name: view.name,
       visibility: view.visibility,
@@ -7160,9 +7216,12 @@ async function saveLocalListView() {
     const result = await syncPortalListViewToSalesforce(view);
     if (!result?.synced) throw new Error("Salesforce did not confirm list view sync");
 
-    removePortalListView(view.id);
+    if (!view.sfDeveloperName) {
+      removePortalListView(view.id);
+    }
+    invalidateCrmObjectCache(currentObject);
     await loadListViews();
-    const salesforceId = result.listView?.id;
+    const salesforceId = result.listView?.id || (view.sfDeveloperName ? view.id : null);
     const matchedView = salesforceId
       ? sfListViews.find((item) => item.id === salesforceId)
       : sfListViews.find((item) => cleanListViewLabel(item.label) === cleanListViewLabel(view.name));
@@ -7173,18 +7232,278 @@ async function saveLocalListView() {
     toast("List view saved in Salesforce", "ok");
     loadData({ forceRefresh: true });
   } catch (err) {
-    persistPortalListView(view);
-    currentViewId = `local:${view.id}`;
-    sortState = view.sort || { field: null, direction: "asc" };
-    closeListViewModal();
-    renderListViewSelect();
-    const message = err?.message || "Salesforce rejected this list view";
-    toast(`Saved in portal only. Salesforce sync failed: ${message}`, "err", 9000);
-    loadData({ forceRefresh: true });
+    if (view.sfDeveloperName) {
+      const message = err?.message || "Salesforce rejected this list view update";
+      toast(`Update failed: ${message}`, "err", 9000);
+    } else {
+      persistPortalListView(view);
+      currentViewId = `local:${view.id}`;
+      sortState = view.sort || { field: null, direction: "asc" };
+      closeListViewModal();
+      renderListViewSelect();
+      const message = err?.message || "Salesforce rejected this list view";
+      toast(`Saved in portal only. Salesforce sync failed: ${message}`, "err", 9000);
+      loadData({ forceRefresh: true });
+    }
   } finally {
     setListViewSaveBusy(false);
   }
 }
+
+function mapSalesforceFilterToPortal(sfFilter) {
+  const field = sfFilter.fieldApiName;
+  const sfOperator = sfFilter.operator;
+  const operandLabels = sfFilter.operandLabels || [];
+  const val = operandLabels[0] || "";
+
+  let operator = "equals";
+  let value = val;
+
+  const sfOperatorLower = String(sfOperator).toLowerCase();
+
+  if (sfOperatorLower === "equals" || sfOperatorLower === "equal") {
+    if (val === "") {
+      operator = "blank";
+      value = "";
+    } else if (val.toLowerCase() === "true") {
+      operator = "true";
+      value = "";
+    } else if (val.toLowerCase() === "false") {
+      operator = "false";
+      value = "";
+    } else if (val.toUpperCase() === "TODAY") {
+      operator = "today";
+      value = "";
+    } else if (val.toUpperCase() === "YESTERDAY") {
+      operator = "yesterday";
+      value = "";
+    } else if (val.toUpperCase() === "LAST_N_DAYS:7") {
+      operator = "last_7_days";
+      value = "";
+    } else if (val.toUpperCase() === "LAST_N_DAYS:30") {
+      operator = "last_30_days";
+      value = "";
+    } else if (val.toUpperCase() === "THIS_MONTH") {
+      operator = "this_month";
+      value = "";
+    } else if (val.toUpperCase() === "LAST_MONTH") {
+      operator = "last_month";
+      value = "";
+    } else {
+      operator = "equals";
+    }
+  } else if (sfOperatorLower === "notequal") {
+    if (val === "") {
+      operator = "not_blank";
+      value = "";
+    } else {
+      operator = "not_equals";
+    }
+  } else if (sfOperatorLower === "contains") {
+    operator = "contains";
+  } else if (sfOperatorLower === "notcontains") {
+    operator = "not_contains";
+  } else if (sfOperatorLower === "startswith") {
+    operator = "starts_with";
+  } else if (sfOperatorLower === "endswith") {
+    operator = "ends_with";
+  } else if (sfOperatorLower === "greaterthan") {
+    operator = "gt";
+  } else if (sfOperatorLower === "greaterorequal") {
+    operator = "gte";
+  } else if (sfOperatorLower === "lessthan") {
+    operator = "lt";
+  } else if (sfOperatorLower === "lessorequal") {
+    operator = "lte";
+  }
+
+  return { field, operator, value };
+}
+
+async function editCurrentListView() {
+  if (!currentViewId || currentViewId === "all") return;
+
+  if (currentViewId.startsWith("local:")) {
+    openListViewModal();
+    return;
+  }
+
+  if (currentViewId.startsWith("sf:")) {
+    const sfId = currentViewId.slice(3);
+    const view = sfListViews.find(v => v.id === sfId);
+    if (!view) return;
+
+    try {
+      const describe = await api(`/api/${currentObject}/listviews/${sfId}/describe`);
+      
+      await loadObjectFields(currentObject);
+      
+      const columns = (describe.displayColumns || []).map(col => col.fieldApiName);
+      const filters = (describe.filteredByInfo || []).map(mapSalesforceFilterToPortal);
+      
+      const logicVal = describe.filterLogicString || "AND";
+      const isStandardLogic = ["AND", "OR"].includes(logicVal.toUpperCase());
+
+      listViewDraft = {
+        id: sfId,
+        isEditing: true,
+        sfDeveloperName: describe.listViewApiName || view.developerName,
+        name: describe.label || view.label,
+        visibility: String(describe.visibility || "private").toLowerCase(),
+        pageSize: RENDER_CHUNK_SIZE,
+        columns: normalizePortalColumns(columns),
+        filters: filters,
+        filterLogicType: isStandardLogic ? logicVal.toUpperCase() : "CUSTOM",
+        customFilterLogic: isStandardLogic ? "" : logicVal,
+        sort: sortState || null,
+        selectedField: null,
+        selectedSide: null
+      };
+
+      const fieldOptions = getCachedObjectFields(currentObject)
+        .map((field) => `<option value="${escapeHtml(field.name)}">${escapeHtml(field.label)}</option>`)
+        .join("");
+
+      const title = $("listViewModalTitle");
+      if (title) title.textContent = "Edit List View";
+      
+      $("listViewBody").innerHTML = `
+        <div class="lv-builder">
+          <div class="lv-top-grid">
+            <div class="form-group">
+              <label class="form-label" for="viewName">List View Name</label>
+              <input class="form-ctrl" id="viewName" value="${escapeHtml(listViewDraft.name)}" placeholder="Example: Key Accounts">
+            </div>
+            <div class="form-group">
+              <label class="form-label" for="viewVisibility">Visibility</label>
+              <select class="form-ctrl" id="viewVisibility">
+                <option value="private" ${listViewDraft.visibility === "private" ? "selected" : ""}>Private</option>
+                <option value="public" ${listViewDraft.visibility === "public" ? "selected" : ""}>Public</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="lv-section-title">Select Fields to Display</div>
+          <div class="lv-dual-list">
+            <div class="lv-list-panel">
+              <div class="lv-list-heading">
+                <label class="form-label" for="lvAvailableSearch">Available Fields</label>
+                <span id="lvAvailableCount"></span>
+              </div>
+              <input class="form-ctrl lv-search" id="lvAvailableSearch" placeholder="Search fields..." oninput="renderListViewFieldLists()">
+              <div class="lv-field-list" id="lvAvailableFields"></div>
+            </div>
+            <div class="lv-transfer">
+              <button class="icon-btn" type="button" title="Add field" onclick="moveListViewDraftField('add')">›</button>
+              <button class="icon-btn" type="button" title="Remove field" onclick="moveListViewDraftField('remove')">‹</button>
+              <button class="icon-btn" type="button" title="Move up" onclick="moveListViewDraftField('up')">▲</button>
+              <button class="icon-btn" type="button" title="Move down" onclick="moveListViewDraftField('down')">▼</button>
+            </div>
+            <div class="lv-list-panel">
+              <div class="lv-list-heading">
+                <label class="form-label">Visible Fields</label>
+                <span id="lvVisibleCount"></span>
+              </div>
+              <div class="lv-field-list" id="lvVisibleFields"></div>
+            </div>
+          </div>
+
+          <div class="lv-filter-builder">
+            <div class="lv-section-title">Filters</div>
+            <div class="lv-filter-row">
+              <select class="form-ctrl" id="lvFilterField" onchange="syncListViewFilterOperators()">${fieldOptions}</select>
+              <select class="form-ctrl" id="lvFilterOperator"></select>
+              <input class="form-ctrl" id="lvFilterValue" placeholder="Value">
+              <button class="btn btn-ghost" type="button" onclick="addListViewDraftFilter()">Add Filter</button>
+              <select class="form-ctrl compact" id="lvFilterLogicType" onchange="handleFilterLogicTypeChange(this.value)">
+                <option value="AND" ${listViewDraft.filterLogicType === "AND" ? "selected" : ""}>AND</option>
+                <option value="OR" ${listViewDraft.filterLogicType === "OR" ? "selected" : ""}>OR</option>
+                <option value="CUSTOM" ${listViewDraft.filterLogicType === "CUSTOM" ? "selected" : ""}>Custom</option>
+              </select>
+            </div>
+            <div class="form-group" id="lvCustomLogicContainer" style="display: ${listViewDraft.filterLogicType === 'CUSTOM' ? 'flex' : 'none'}; margin-top: 12px; gap: 5px;">
+              <label class="form-label" for="lvCustomFilterLogic">Filter Logic</label>
+              <input class="form-ctrl" id="lvCustomFilterLogic" value="${escapeHtml(listViewDraft.customFilterLogic || '')}" placeholder="Example: 1 AND (2 OR 3)">
+            </div>
+            <div class="lv-filter-list" id="lvFilterList"></div>
+          </div>
+        </div>
+      `;
+      renderListViewFieldLists();
+      syncListViewFilterOperators();
+      renderListViewFilterBuilder();
+      $("listViewOverlay").classList.add("open");
+    } catch (err) {
+      toast(`Failed to load list view details: ${err.message || err}`, "err");
+    }
+  }
+}
+
+let listViewToDelete = null;
+
+function openDeleteListViewModal() {
+  if (!currentViewId || currentViewId === "all") return;
+  
+  let name = "";
+  if (currentViewId.startsWith("local:")) {
+    const view = getCurrentLocalView();
+    name = view ? view.name : "";
+    listViewToDelete = { type: "local", id: currentViewId.slice(6), name };
+  } else if (currentViewId.startsWith("sf:")) {
+    const sfId = currentViewId.slice(3);
+    const view = sfListViews.find(v => v.id === sfId);
+    name = view ? view.label : "";
+    listViewToDelete = { type: "sf", id: sfId, developerName: view?.developerName, name };
+  }
+  
+  if (!listViewToDelete) return;
+  
+  const nameEl = $("deleteListViewName");
+  if (nameEl) nameEl.textContent = listViewToDelete.name;
+  
+  $("deleteListViewOverlay").classList.add("open");
+}
+
+function closeDeleteListViewModal() {
+  $("deleteListViewOverlay").classList.remove("open");
+  listViewToDelete = null;
+}
+
+async function confirmDeleteListView() {
+  if (!listViewToDelete) return;
+  
+  const btn = $("confirmDeleteListViewBtn");
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = "Deleting...";
+  }
+  
+  try {
+    if (listViewToDelete.type === "local") {
+      removePortalListView(listViewToDelete.id);
+      toast("Local list view deleted", "ok");
+    } else {
+      await api(`/api/${currentObject}/listviews/${listViewToDelete.developerName}`, {
+        method: "DELETE"
+      });
+      toast("List view deleted from Salesforce", "ok");
+    }
+    
+    invalidateCrmObjectCache(currentObject);
+    currentViewId = "all";
+    await loadListViews();
+    closeDeleteListViewModal();
+    await loadData();
+  } catch (err) {
+    toast(`Failed to delete list view: ${err.message || err}`, "err");
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = "Delete List View";
+    }
+  }
+}
+
 
 function renderListViewFieldLists() {
   if (!listViewDraft) return;
@@ -7308,7 +7627,7 @@ function toast(message, type = 'info', duration = 6000) {
   if (!stack) return;
 
   // Map raw error messages to human-friendly ones
-  const friendlyMessage = friendlyError(message);
+  const friendlyMessage = type === 'err' ? friendlyError(message) : message;
   const toastKey = `${type}:${friendlyMessage}`;
   const now = Date.now();
   if (toastKey === lastToastKey && now - lastToastAt < 1200) return;
