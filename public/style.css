@@ -1970,6 +1970,7 @@ textarea.form-ctrl { resize: vertical; min-height: 80px; line-height: 1.5; }
   width: 14px;
   height: 14px;
   fill: currentColor;
+  transition: transform 0.2s ease;
 }
 
 .readonly-field .form-ctrl,
@@ -5986,4 +5987,396 @@ html[data-theme="dark"] .obj-search input::placeholder {
 
 html[data-theme="dark"] .global-search-box input::placeholder {
   color: #5C5F7A;
+}
+
+/* ── Record Detail Layout Editor ────────────────────────────────── */
+.layout-editor-container {
+  display: flex;
+  gap: 20px;
+  background: var(--bg-card, #ffffff);
+  border: 1px solid var(--border-color, #e0e0e0);
+  border-radius: 8px;
+  padding: 20px;
+  margin-top: 15px;
+  height: 650px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
+}
+
+.layout-editor-sidebar {
+  width: 280px;
+  border-right: 1px solid var(--border-color, #e0e0e0);
+  padding-right: 20px;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.sidebar-header {
+  margin-bottom: 15px;
+}
+
+.sidebar-header h3 {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-color, #333333);
+  margin-bottom: 8px;
+}
+
+.layout-search-input {
+  width: 100%;
+  padding: 8px 12px;
+  border: 1px solid var(--border-color, #d8dde6);
+  border-radius: 4px;
+  font-size: 13px;
+  background-color: var(--bg-input, #ffffff);
+  color: var(--text-color, #333333);
+  outline: none;
+  transition: border-color 0.2s;
+}
+
+.layout-search-input:focus {
+  border-color: var(--primary-color, #1589ee);
+}
+
+.available-fields-list {
+  flex: 1;
+  overflow-y: auto;
+  padding-right: 5px;
+}
+
+.available-field-item {
+  padding: 10px 12px;
+  background: var(--bg-hover, #f3f5f9);
+  border: 1px solid var(--border-color, #d8dde6);
+  border-radius: 4px;
+  margin-bottom: 8px;
+  cursor: grab;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  transition: all 0.2s;
+}
+
+.available-field-item:hover {
+  background: var(--bg-active, #eef3fc);
+  border-color: var(--primary-color, #1589ee);
+  transform: translateY(-1px);
+}
+
+.available-field-item:active {
+  cursor: grabbing;
+}
+
+.field-item-label {
+  display: block;
+  font-weight: 600;
+  font-size: 12.5px;
+  color: var(--text-color, #333333);
+}
+
+.field-item-name {
+  display: block;
+  font-size: 11px;
+  color: var(--text-muted, #706e6b);
+}
+
+.sidebar-empty {
+  text-align: center;
+  color: var(--text-muted, #706e6b);
+  padding: 20px 10px;
+  font-size: 12.5px;
+}
+
+.layout-editor-canvas {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.canvas-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 20px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--border-color, #e0e0e0);
+}
+
+.canvas-header .btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 12px;
+  font-size: 12.5px;
+  font-weight: 500;
+}
+
+.canvas-header .btn svg {
+  width: 14px;
+  height: 14px;
+  fill: currentColor;
+}
+
+.canvas-sections {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  padding-right: 8px;
+}
+
+.layout-edit-section {
+  background: var(--bg-section-edit, #f9fafc);
+  border: 1px dashed var(--border-dashed, #b0b5c0);
+  border-radius: 6px;
+  padding: 16px;
+  transition: border-color 0.2s;
+}
+
+.layout-edit-section:hover {
+  border-color: var(--primary-color, #1589ee);
+}
+
+.layout-edit-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.layout-edit-section-title-input {
+  font-weight: 600;
+  font-size: 14px;
+  color: var(--text-color, #333333);
+  border: 1px solid transparent;
+  background: transparent;
+  padding: 4px 8px;
+  border-radius: 4px;
+  width: 60%;
+  transition: all 0.2s;
+}
+
+.layout-edit-section-title-input:hover {
+  background: rgba(0, 0, 0, 0.02);
+  border-color: var(--border-color, #d8dde6);
+}
+
+.layout-edit-section-title-input:focus {
+  border-color: var(--primary-color, #1589ee);
+  background: #ffffff;
+  box-shadow: 0 0 4px rgba(21, 137, 238, 0.2);
+}
+
+.section-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.section-actions .btn-icon-only {
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  font-size: 11px;
+}
+
+.section-actions .btn-icon-only svg {
+  width: 14px;
+  height: 14px;
+  fill: currentColor;
+}
+
+.layout-edit-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 12px;
+  min-height: 70px;
+  background: var(--bg-canvas, #ffffff);
+  border: 1px solid var(--border-color, #e0e0e0);
+  border-radius: 6px;
+  padding: 12px;
+  transition: background-color 0.2s;
+}
+
+.layout-edit-grid:hover {
+  background-color: var(--bg-grid-hover, #fafbfc);
+}
+
+.layout-edit-field {
+  padding: 10px 14px;
+  background: #ffffff;
+  border: 1px solid var(--border-color, #d8dde6);
+  border-radius: 4px;
+  cursor: grab;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  position: relative;
+  transition: all 0.2s;
+}
+
+.layout-edit-field:hover {
+  border-color: var(--primary-color, #1589ee);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.08);
+}
+
+.layout-edit-field:active {
+  cursor: grabbing;
+}
+
+.layout-field-drag-handle {
+  color: var(--text-muted, #706e6b);
+  display: flex;
+  align-items: center;
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+}
+
+.layout-field-drag-handle svg {
+  width: 100%;
+  height: 100%;
+  fill: currentColor;
+}
+
+.layout-field-info {
+  display: flex;
+  flex-direction: column;
+}
+
+.layout-field-label {
+  font-weight: 600;
+  font-size: 12.5px;
+  color: var(--text-color, #333333);
+}
+
+.layout-field-name {
+  font-size: 11px;
+  color: var(--text-muted, #706e6b);
+}
+
+.layout-field-remove {
+  margin-left: auto;
+  background: none;
+  border: none;
+  color: #c23934;
+  font-size: 18px;
+  cursor: pointer;
+  line-height: 1;
+  padding: 0 4px;
+  transition: color 0.2s;
+}
+
+.layout-field-remove:hover {
+  color: #a61a14;
+}
+
+.grid-empty-msg {
+  grid-column: span 2;
+  text-align: center;
+  color: var(--text-muted, #706e6b);
+  font-size: 12.5px;
+  padding: 20px;
+  border: 1px dashed var(--border-dashed, #b0b5c0);
+  border-radius: 4px;
+  background: #fdfdfd;
+}
+
+/* Dark mode overrides for Layout Editor */
+html[data-theme="dark"] .layout-editor-container {
+  background: #171923;
+  border-color: #2d3142;
+}
+
+html[data-theme="dark"] .layout-editor-sidebar {
+  border-right-color: #2d3142;
+}
+
+html[data-theme="dark"] .sidebar-header h3 {
+  color: #e8e9f0;
+}
+
+html[data-theme="dark"] .layout-search-input {
+  border-color: #2d3142;
+  background-color: #0f111a;
+  color: #e8e9f0;
+}
+
+html[data-theme="dark"] .available-field-item {
+  background: #202330;
+  border-color: #2d3142;
+}
+
+html[data-theme="dark"] .available-field-item:hover {
+  background: #272a3a;
+  border-color: #1589ee;
+}
+
+html[data-theme="dark"] .field-item-label {
+  color: #e8e9f0;
+}
+
+html[data-theme="dark"] .field-item-name {
+  color: #a0aec0;
+}
+
+html[data-theme="dark"] .canvas-header {
+  border-bottom-color: #2d3142;
+}
+
+html[data-theme="dark"] .layout-edit-section {
+  background: #1b1d28;
+  border-color: #4a5568;
+}
+
+html[data-theme="dark"] .layout-edit-section-title-input {
+  color: #e8e9f0;
+}
+
+html[data-theme="dark"] .layout-edit-section-title-input:hover {
+  background: rgba(255, 255, 255, 0.05);
+  border-color: #2d3142;
+}
+
+html[data-theme="dark"] .layout-edit-section-title-input:focus {
+  background: #0f111a;
+  border-color: #1589ee;
+}
+
+html[data-theme="dark"] .layout-edit-grid {
+  background: #0f111a;
+  border-color: #2d3142;
+}
+
+html[data-theme="dark"] .layout-edit-grid:hover {
+  background-color: #141722;
+}
+
+html[data-theme="dark"] .layout-edit-field {
+  background: #171923;
+  border-color: #2d3142;
+}
+
+html[data-theme="dark"] .layout-edit-field:hover {
+  border-color: #1589ee;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
+}
+
+html[data-theme="dark"] .layout-field-label {
+  color: #e8e9f0;
+}
+
+html[data-theme="dark"] .layout-field-name {
+  color: #a0aec0;
+}
+
+html[data-theme="dark"] .grid-empty-msg {
+  border-color: #4a5568;
+  background: #1b1d28;
 }

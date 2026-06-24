@@ -5860,6 +5860,132 @@ app.get('/api/:object/fields', checkAuth, async (req, res, next) => {
   }
 });
 
+app.get('/api/:object/layouts', checkAuth, async (req, res) => {
+  const { object } = req.params;
+  if (!OBJECTS[object]) {
+    return res.status(400).json({ error: `Unknown object: ${object}` });
+  }
+
+  try {
+    const data = await sfGet(`/sobjects/${object}/describe/layouts`);
+    const layout = data.layouts && data.layouts[0];
+    if (!layout) {
+      return res.status(404).json({ error: `Layout not found for object: ${object}` });
+    }
+
+    const detailSections = layout.detailLayoutSections || [];
+    const mappedLayout = detailSections.map(section => {
+      const fields = [];
+      const layoutRows = section.layoutRows || [];
+      for (const row of layoutRows) {
+        const layoutItems = row.layoutItems || [];
+        for (const item of layoutItems) {
+          const layoutComponents = item.layoutComponents || [];
+          for (const component of layoutComponents) {
+            if (component.componentType === 'Field') {
+              const fieldName = component.value || (component.details && component.details.name);
+              if (fieldName) {
+                const readOnly = item.editableForUpdate === false || item.editableForNew === false;
+                if (readOnly) {
+                  fields.push({ name: fieldName, readOnly: true });
+                } else {
+                  fields.push(fieldName);
+                }
+              }
+            }
+          }
+        }
+      }
+      return {
+        title: section.heading || "Information",
+        fields: fields
+      };
+    }).filter(s => s.fields.length > 0);
+
+    res.json({ layouts: mappedLayout });
+  } catch (err) {
+    handleSFError(err, res, `Layouts ${object}`);
+  }
+});
+
+// GET user custom layout from Supabase
+app.get('/api/portal/layouts/:object', checkAuth, async (req, res) => {
+  const { object } = req.params;
+  try {
+    const { data, error } = await supabase
+      .from('portal_custom_layouts')
+      .select('layout_data')
+      .eq('user_id', req.user.id)
+      .eq('object_name', object)
+      .maybeSingle();
+
+    if (error) {
+      console.error('[GET /api/portal/layouts/:object] Supabase lookup error:', error);
+      return res.status(500).json({ error: 'Failed to retrieve layout from database' });
+    }
+
+    res.json({ layout: data ? data.layout_data : null });
+  } catch (err) {
+    console.error('[GET /api/portal/layouts/:object] Exception:', err);
+    res.status(500).json({ error: 'Server error retrieving layout' });
+  }
+});
+
+// POST user custom layout to Supabase (save/upsert)
+app.post('/api/portal/layouts/:object', checkAuth, async (req, res) => {
+  const { object } = req.params;
+  const { layout } = req.body;
+
+  if (!layout || !Array.isArray(layout)) {
+    return res.status(400).json({ error: 'Invalid layout data' });
+  }
+
+  try {
+    const { error } = await supabase
+      .from('portal_custom_layouts')
+      .upsert({
+        user_id: req.user.id,
+        object_name: object,
+        layout_data: layout,
+        updated_at: new Date()
+      }, {
+        onConflict: 'user_id,object_name'
+      });
+
+    if (error) {
+      console.error('[POST /api/portal/layouts/:object] Supabase upsert error:', error);
+      return res.status(500).json({ error: 'Failed to save layout to database' });
+    }
+
+    res.json({ success: true });
+  } catch (err) {
+    console.error('[POST /api/portal/layouts/:object] Exception:', err);
+    res.status(500).json({ error: 'Server error saving layout' });
+  }
+});
+
+// DELETE user custom layout from Supabase (reset to default)
+app.delete('/api/portal/layouts/:object', checkAuth, async (req, res) => {
+  const { object } = req.params;
+  try {
+    const { error } = await supabase
+      .from('portal_custom_layouts')
+      .delete()
+      .eq('user_id', req.user.id)
+      .eq('object_name', object);
+
+    if (error) {
+      console.error('[DELETE /api/portal/layouts/:object] Supabase delete error:', error);
+      return res.status(500).json({ error: 'Failed to delete layout from database' });
+    }
+
+    res.json({ success: true });
+  } catch (err) {
+    console.error('[DELETE /api/portal/layouts/:object] Exception:', err);
+    res.status(500).json({ error: 'Server error deleting layout' });
+  }
+});
+
 // Global SOSL search
 app.get('/api/search/global', checkAuth, async (req, res) => {
   const q = (req.query.q || '').trim();
