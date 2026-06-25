@@ -491,7 +491,7 @@
   <!-- ── Toast ─────────────────────────────────────────── -->
   <div class="overlay" id="campaignMemberOverlay"
     onclick="overlayClick(event, 'campaignMemberOverlay', closeCampaignMemberModal)">
-    <div class="modal modal-wide">
+    <div class="modal candidate-explorer-modal">
       <div class="modal-head">
         <h2 id="campaignMemberTitle">Add Campaign Members</h2>
         <button class="close-btn" onclick="closeCampaignMemberModal()">
@@ -502,18 +502,68 @@
           </svg>
         </button>
       </div>
-      <div class="modal-body">
-        <div class="member-modal-toolbar">
-          <input class="form-ctrl" id="campaignMemberSearch" placeholder="Search..."
-            oninput="searchCampaignCandidates(this.value)">
-          <span class="rec-count" id="campaignMemberSelectedCount">0 selected</span>
+      <div class="modal-body candidate-explorer-body">
+        <!-- ── Left: Filters Panel ── -->
+        <aside class="candidate-filter-panel">
+          <div class="filter-panel-header">
+            <h3>Filters</h3>
+            <button class="btn btn-text btn-sm" onclick="clearAllFilters()">Clear All</button>
+          </div>
+          <div id="activeFiltersList" class="active-filters-scroll"></div>
+          <div class="add-filter-form">
+            <h4>Add Filter</h4>
+            <div class="filter-form-row">
+              <label>Field</label>
+              <select id="filterFieldSelect" class="form-ctrl" onchange="onFilterFieldChange(this.value)"></select>
+            </div>
+            <div class="filter-form-row">
+              <label>Operator</label>
+              <select id="filterOperatorSelect" class="form-ctrl" onchange="onFilterOperatorChange()"></select>
+            </div>
+            <div class="filter-form-row">
+              <label>Value</label>
+              <div id="filterValueContainer">
+                <input id="filterValueInput" class="form-ctrl" placeholder="Value...">
+              </div>
+            </div>
+            <button class="btn btn-secondary btn-sm add-filter-btn" onclick="addFilterCondition()">
+              <svg viewBox="0 0 20 20" width="14" height="14" fill="currentColor" style="margin-right:4px"><path d="M10 5a1 1 0 011 1v3h3a1 1 0 110 2h-3v3a1 1 0 11-2 0v-3H6a1 1 0 110-2h3V6a1 1 0 011-1z"/></svg>
+              Add Filter
+            </button>
+          </div>
+        </aside>
+        <!-- ── Right: Candidate Explorer ── -->
+        <div class="candidate-explorer-main">
+          <div class="explorer-top-bar">
+            <div class="explorer-search-wrap">
+              <svg class="explorer-search-icon" viewBox="0 0 20 20" width="16" height="16" fill="currentColor"><path fill-rule="evenodd" d="M8 4a4 4 0 100 8 4 4 0 000-8zM2 8a6 6 0 1110.89 3.476l4.817 4.817a1 1 0 01-1.414 1.414l-4.816-4.816A6 6 0 012 8z" clip-rule="evenodd"/></svg>
+              <input class="form-ctrl explorer-search-input" id="campaignMemberSearch" placeholder="Search by name, email, phone..."
+                oninput="searchCampaignCandidates(this.value)">
+            </div>
+            <div class="explorer-meta">
+              <span class="rec-count" id="campaignMemberSelectedCount">0 selected</span>
+              <button id="clearCandidateSelectionBtn" class="btn btn-text btn-sm" onclick="clearCandidateSelection()" style="display:none">Clear</button>
+            </div>
+          </div>
+          <div class="candidate-table-scroll" id="campaignMemberCandidates"></div>
+          <div class="explorer-pagination-bar">
+            <span class="pagination-info-text" id="candidatePaginationInfo">Showing 0–0 of 0</span>
+            <div class="pagination-btn-group">
+              <button class="btn btn-ghost btn-sm" id="prevCandidatePageBtn" disabled onclick="changeCandidatePage(-1)">
+                <svg viewBox="0 0 20 20" width="14" height="14" fill="currentColor"><path fill-rule="evenodd" d="M12.707 5.293a1 1 0 010 1.414L9.414 10l3.293 3.293a1 1 0 01-1.414 1.414l-4-4a1 1 0 010-1.414l4-4a1 1 0 011.414 0z" clip-rule="evenodd"/></svg>
+                Previous
+              </button>
+              <button class="btn btn-ghost btn-sm" id="nextCandidatePageBtn" disabled onclick="changeCandidatePage(1)">
+                Next
+                <svg viewBox="0 0 20 20" width="14" height="14" fill="currentColor"><path fill-rule="evenodd" d="M7.293 14.707a1 1 0 010-1.414L10.586 10 7.293 6.707a1 1 0 011.414-1.414l4 4a1 1 0 010 1.414l-4 4a1 1 0 01-1.414 0z" clip-rule="evenodd"/></svg>
+              </button>
+            </div>
+          </div>
         </div>
-        <div class="mini-table-wrap" id="campaignMemberCandidates"></div>
       </div>
       <div class="modal-foot">
         <button class="btn btn-ghost" onclick="closeCampaignMemberModal()">Cancel</button>
-        <button class="btn btn-primary" id="addCampaignMembersBtn" onclick="addSelectedCampaignMembers()">Add
-          Members</button>
+        <button class="btn btn-primary" id="addCampaignMembersBtn" onclick="addSelectedCampaignMembers()">Add Members</button>
       </div>
     </div>
   </div>

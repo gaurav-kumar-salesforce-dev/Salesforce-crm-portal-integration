@@ -6148,6 +6148,7 @@ app.delete('/api/campaigns/:id/members/:memberId', async (req, res) => {
     if (!data.records?.length) return res.status(404).json({ error: 'Campaign member not found' });
 
     await sfDelete(`/sobjects/CampaignMember/${memberId}`);
+    invalidateCampaignMemberIdCache(id);
     res.json({ success: true });
   } catch (err) {
     handleSFError(err, res, `Delete campaign member ${memberId}`);
@@ -6469,28 +6470,152 @@ app.post('/api/:object/:id/activity', checkAuth, async (req, res, next) => {
   }
 });
 
+// ─── Candidate Explorer: Caching, Metadata & Advanced Filters ────
+const CANDIDATE_CACHE = new Map();
+const CANDIDATE_COUNT_CACHE = new Map();
+const CAMPAIGN_MEMBER_ID_CACHE = new Map();
+const CANDIDATE_CACHE_TTL = 30000;
+
+const objectFieldDetailsCache = new Map();
+
+async function getObjectFieldDetails(objectName) {
+  const cacheKey = `${orgStore.activeOrgKey}:${objectName}`;
+  if (objectFieldDetailsCache.has(cacheKey)) return objectFieldDetailsCache.get(cacheKey);
+  const meta = await sfGet(`/sobjects/${objectName}/describe`);
+  const fields = (meta.fields || [])
+    .filter(f => !f.deprecatedAndHidden)
+    .filter(f => !['address', 'location'].includes(f.type))
+    .map(f => ({ name: f.name, label: f.label, type: f.type, filterable: f.filterable, picklistValues: (f.picklistValues || []).filter(p => p.active).map(p => ({ label: p.label, value: p.value })) }))
+    .sort((a, b) => a.label.localeCompare(b.label));
+  objectFieldDetailsCache.set(cacheKey, fields);
+  return fields;
+}
+
+function invalidateCampaignMemberIdCache(campaignId) {
+  CAMPAIGN_MEMBER_ID_CACHE.delete(campaignId);
+}
+
+function getCachedOr(cache, key, ttl) {
+  const hit = cache.get(key);
+  if (hit && (Date.now() - hit.ts < ttl)) return hit.data;
+  return undefined;
+}
+
+app.get('/api/metadata/filterable-fields/:object', async (req, res) => {
+  const { object } = req.params;
+  if (!['Contact', 'Lead'].includes(object)) return res.status(400).json({ error: 'Object must be Contact or Lead' });
+  try {
+    const allFields = await getObjectFieldDetails(object);
+    const filterable = allFields.filter(f => f.filterable !== false && ['string', 'picklist', 'email', 'phone', 'url', 'boolean', 'double', 'integer', 'currency', 'percent', 'date', 'datetime', 'textarea', 'reference', 'id'].includes(f.type));
+    res.json({ fields: filterable });
+  } catch (err) {
+    handleSFError(err, res, `Filterable fields ${object}`);
+  }
+});
+
 app.get('/api/campaigns/:id/candidates/:object', async (req, res) => {
   const { id, object } = req.params;
   if (!['Contact', 'Lead'].includes(object)) return res.status(400).json({ error: 'Object must be Contact or Lead' });
 
   try {
     const search = String(req.query.search || '').trim();
-    const cfg = OBJECTS[object];
+    const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 50, 1), 200);
+    const offset = Math.max(parseInt(req.query.offset, 10) || 0, 0);
+    let filters = [];
+    if (req.query.filters) { try { filters = JSON.parse(req.query.filters); } catch (_) {} }
+
+    const allFieldDetails = await getObjectFieldDetails(object);
+    const detailsMap = new Map(allFieldDetails.map(f => [f.name, f]));
+    detailsMap.set('Account.Name', { name: 'Account.Name', type: 'string', label: 'Account Name' });
+    detailsMap.set('Account.Industry', { name: 'Account.Industry', type: 'string', label: 'Account Industry' });
     const availableFields = await getObjectFieldSet(object);
-    const where = buildWhereClause(object, search, object === 'Lead' && availableFields.has('IsConverted') ? "IsConverted = false" : '', availableFields);
-    const soql = `SELECT ${await fieldsCsvForObject(object)} FROM ${object}${where} ORDER BY ${cfg.orderBy} LIMIT 100`;
-    const [people, members] = await Promise.all([
-      sfGet('/query', { q: soql }),
-      sfGet('/query', {
-        q: `SELECT ContactId, LeadId FROM CampaignMember WHERE CampaignId = '${escapeSOQL(id)}' LIMIT 2000`
-      })
-    ]);
-    const existing = new Set((members.records || []).map((record) => record.ContactId || record.LeadId).filter(Boolean));
+    const cfg = OBJECTS[object];
+    const conditions = [];
+
+    if (search) {
+      const safe = escapeSOQL(search);
+      const parts = cfg.searchFields.filter(f => availableFields.has(f)).map(f => `${f} LIKE '%${safe}%'`);
+      if (parts.length) conditions.push(`(${parts.join(' OR ')})`);
+    }
+    if (object === 'Lead' && availableFields.has('IsConverted')) conditions.push('IsConverted = false');
+
+    if (Array.isArray(filters)) {
+      for (const { field, operator, value } of filters) {
+        if (!field || !operator) continue;
+        const meta = detailsMap.get(field);
+        if (!meta && !isSelectableField(field, availableFields)) continue;
+        const type = meta ? meta.type : 'string';
+        const sv = escapeSOQL(String(value || '').trim());
+        let cond = '';
+        if (operator === 'equals' || operator === 'eq') {
+          if (type === 'boolean') cond = `${field} = ${String(value).toLowerCase() === 'true' ? 'true' : 'false'}`;
+          else if (['double','integer','currency','percent'].includes(type)) cond = `${field} = ${parseFloat(sv) || 0}`;
+          else if (['date','datetime'].includes(type)) { if (sv) cond = `${field} = ${sv}`; }
+          else cond = `${field} = '${sv}'`;
+        } else if (operator === 'not_equal' || operator === 'ne') {
+          if (type === 'boolean') cond = `${field} != ${String(value).toLowerCase() === 'true' ? 'true' : 'false'}`;
+          else if (['double','integer','currency','percent'].includes(type)) cond = `${field} != ${parseFloat(sv) || 0}`;
+          else if (['date','datetime'].includes(type)) { if (sv) cond = `${field} != ${sv}`; }
+          else cond = `${field} != '${sv}'`;
+        } else if (operator === 'contains') { cond = `${field} LIKE '%${sv}%'`; }
+        else if (operator === 'starts_with') { cond = `${field} LIKE '${sv}%'`; }
+        else if (operator === 'ends_with') { cond = `${field} LIKE '%${sv}'`; }
+        else if (operator === 'greater_than' || operator === 'gt') {
+          if (['double','integer','currency','percent'].includes(type)) cond = `${field} > ${parseFloat(sv) || 0}`;
+          else if (['date','datetime'].includes(type)) { if (sv) cond = `${field} > ${sv}`; }
+          else cond = `${field} > '${sv}'`;
+        } else if (operator === 'less_than' || operator === 'lt') {
+          if (['double','integer','currency','percent'].includes(type)) cond = `${field} < ${parseFloat(sv) || 0}`;
+          else if (['date','datetime'].includes(type)) { if (sv) cond = `${field} < ${sv}`; }
+          else cond = `${field} < '${sv}'`;
+        } else if (operator === 'is_null') {
+          if (['string', 'textarea', 'picklist', 'phone', 'email', 'url', 'id', 'reference'].includes(type)) {
+            cond = `(${field} = null OR ${field} = '')`;
+          } else {
+            cond = `${field} = null`;
+          }
+        } else if (operator === 'is_not_null') {
+          if (['string', 'textarea', 'picklist', 'phone', 'email', 'url', 'id', 'reference'].includes(type)) {
+            cond = `(${field} != null AND ${field} != '')`;
+          } else {
+            cond = `${field} != null`;
+          }
+        }
+        if (cond) conditions.push(cond);
+      }
+    }
+
+    const where = conditions.length ? ` WHERE ${conditions.join(' AND ')}` : '';
+    const dataSoql = `SELECT ${await fieldsCsvForObject(object)} FROM ${object}${where} ORDER BY ${cfg.orderBy} LIMIT ${limit} OFFSET ${offset}`;
+    const countSoql = `SELECT COUNT() FROM ${object}${where}`;
+
+    // Cache layer: campaign member IDs
+    let memberIds = getCachedOr(CAMPAIGN_MEMBER_ID_CACHE, id, CANDIDATE_CACHE_TTL);
+    if (!memberIds) {
+      const md = await sfGet('/query', { q: `SELECT ContactId, LeadId FROM CampaignMember WHERE CampaignId = '${escapeSOQL(id)}' LIMIT 10000` });
+      memberIds = new Set((md.records || []).map(r => r.ContactId || r.LeadId).filter(Boolean));
+      CAMPAIGN_MEMBER_ID_CACHE.set(id, { data: memberIds, ts: Date.now() });
+    }
+
+    // Cache layer: people records
+    let records = getCachedOr(CANDIDATE_CACHE, dataSoql, CANDIDATE_CACHE_TTL);
+    if (!records) {
+      const d = await sfGet('/query', { q: dataSoql });
+      records = d.records || [];
+      CANDIDATE_CACHE.set(dataSoql, { data: records, ts: Date.now() });
+    }
+
+    // Cache layer: total count
+    let totalSize = getCachedOr(CANDIDATE_COUNT_CACHE, countSoql, CANDIDATE_CACHE_TTL);
+    if (totalSize === undefined) {
+      const d = await sfGet('/query', { q: countSoql });
+      totalSize = d.totalSize || 0;
+      CANDIDATE_COUNT_CACHE.set(countSoql, { data: totalSize, ts: Date.now() });
+    }
+
     res.json({
-      records: (people.records || []).map((record) => ({
-        ...record,
-        alreadyMember: existing.has(record.Id)
-      }))
+      records: records.map(record => ({ ...record, alreadyMember: memberIds.has(record.Id) })),
+      totalSize
     });
   } catch (err) {
     handleSFError(err, res, `Campaign ${req.params.id} candidates ${object}`);
@@ -6527,6 +6652,7 @@ app.post('/api/campaigns/:id/members', async (req, res) => {
 
     const result = await sfPost('/composite/sobjects', { allOrNone: false, records });
     const results = Array.isArray(result) ? result : result.results || [];
+    invalidateCampaignMemberIdCache(id);
     res.json({
       success: true,
       created: results.filter((item) => item.success).length,

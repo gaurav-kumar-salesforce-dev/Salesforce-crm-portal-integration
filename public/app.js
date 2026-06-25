@@ -591,6 +591,11 @@ let campaignMemberSelection = new Set();
 let memberCandidateObject = "Contact";
 let memberCandidateSelection = new Set();
 let currentCampaignCandidates = [];
+let memberCandidateFilters = [];
+let memberCandidatePage = 0;
+let memberCandidateLimit = 50;
+let memberCandidateTotal = 0;
+let memberCandidateFields = [];
 let emailTemplates = [];
 let detailLookupLabels = {};
 let expandedActivityIds = new Set();
@@ -6827,119 +6832,277 @@ async function openCampaignMemberModal(objectName) {
   if (!canReadObject("Campaign") || !canReadObject(objectName)) return;
   memberCandidateObject = objectName;
   memberCandidateSelection = new Set();
+  memberCandidateFilters = [];
+  memberCandidatePage = 0;
+  memberCandidateTotal = 0;
   $("campaignMemberTitle").textContent = `Add ${objectName}s to Campaign`;
   $("campaignMemberSearch").value = "";
   $("campaignMemberOverlay").classList.add("open");
-  await loadCampaignCandidates("");
+  const fSel = $("filterFieldSelect");
+  if (fSel) fSel.innerHTML = "<option>Loading fields...</option>";
+  try {
+    const d = await api(`/api/metadata/filterable-fields/${objectName}`);
+    memberCandidateFields = d.fields || [];
+    if (objectName === "Contact") {
+      memberCandidateFields.unshift(
+        { name: "Account.Name", label: "Account Name", type: "string", picklistValues: [] },
+        { name: "Account.Industry", label: "Account Industry", type: "string", picklistValues: [] }
+      );
+    }
+    if (fSel) fSel.innerHTML = memberCandidateFields.map(f => `<option value="${f.name}">${escapeHtml(f.label)}</option>`).join("");
+    if (memberCandidateFields.length) onFilterFieldChange(memberCandidateFields[0].name);
+    renderActiveFilters();
+    await loadCampaignCandidates();
+  } catch (err) {
+    toast(`Failed to load fields: ${err.message}`, "err");
+    await loadCampaignCandidates();
+  }
 }
 
 function closeCampaignMemberModal() {
   $("campaignMemberOverlay").classList.remove("open");
 }
 
-function searchCampaignCandidates(value) {
-  clearTimeout(lookupTimer);
-  lookupTimer = setTimeout(() => loadCampaignCandidates(value), 300);
+function onFilterFieldChange(fieldName) {
+  const fm = memberCandidateFields.find(f => f.name === fieldName);
+  if (!fm) return;
+  const opSel = $("filterOperatorSelect");
+  const t = fm.type;
+  let ops;
+  if (t === "boolean") {
+    ops = [
+      {v:"equals",l:"equals"},
+      {v:"not_equal",l:"not equal"},
+      {v:"is_null",l:"is empty/blank"},
+      {v:"is_not_null",l:"has value"}
+    ];
+  } else if (["double","integer","currency","percent","date","datetime"].includes(t)) {
+    ops = [
+      {v:"equals",l:"equals"},
+      {v:"not_equal",l:"not equal"},
+      {v:"greater_than",l:"greater than"},
+      {v:"less_than",l:"less than"},
+      {v:"is_null",l:"is empty/blank"},
+      {v:"is_not_null",l:"has value"}
+    ];
+  } else if (t === "picklist") {
+    ops = [
+      {v:"equals",l:"equals"},
+      {v:"not_equal",l:"not equal"},
+      {v:"is_null",l:"is empty/blank"},
+      {v:"is_not_null",l:"has value"}
+    ];
+  } else {
+    ops = [
+      {v:"contains",l:"contains"},
+      {v:"equals",l:"equals"},
+      {v:"starts_with",l:"starts with"},
+      {v:"not_equal",l:"not equal"},
+      {v:"is_null",l:"is empty/blank"},
+      {v:"is_not_null",l:"has value"}
+    ];
+  }
+  if (opSel) opSel.innerHTML = ops.map(o => `<option value="${o.v}">${o.l}</option>`).join("");
+  onFilterOperatorChange();
 }
 
-async function loadCampaignCandidates(search) {
+function onFilterOperatorChange() {
+  const opSel = $("filterOperatorSelect");
+  const valC = $("filterValueContainer");
+  if (!opSel || !valC) return;
+  const op = opSel.value;
+  if (op === "is_null" || op === "is_not_null") {
+    valC.innerHTML = `<input type="text" id="filterValueInput" class="form-ctrl" value="" disabled placeholder="No value needed">`;
+  } else {
+    const fSel = $("filterFieldSelect");
+    if (!fSel) return;
+    const fm = memberCandidateFields.find(f => f.name === fSel.value);
+    if (!fm) return;
+    const t = fm.type;
+    if (t === "boolean") {
+      valC.innerHTML = `<select id="filterValueInput" class="form-ctrl"><option value="true">True</option><option value="false">False</option></select>`;
+    } else if (t === "picklist" && fm.picklistValues?.length) {
+      valC.innerHTML = `<select id="filterValueInput" class="form-ctrl">${fm.picklistValues.map(p => `<option value="${escapeHtml(p.value)}">${escapeHtml(p.label)}</option>`).join("")}</select>`;
+    } else if (t === "date" || t === "datetime") {
+      valC.innerHTML = `<input type="date" id="filterValueInput" class="form-ctrl">`;
+    } else {
+      valC.innerHTML = `<input type="text" id="filterValueInput" class="form-ctrl" placeholder="Value...">`;
+    }
+  }
+}
+
+function addFilterCondition() {
+  const fSel = $("filterFieldSelect"), opSel = $("filterOperatorSelect"), valEl = $("filterValueInput");
+  if (!fSel?.value || !opSel?.value) return;
+  const fm = memberCandidateFields.find(f => f.name === fSel.value);
+  if (!fm) return;
+  const op = opSel.value;
+  const isNullOp = (op === "is_null" || op === "is_not_null");
+  const val = isNullOp ? "" : (valEl?.value || "").trim();
+  if (!isNullOp && !val) { toast("Enter a filter value", "err"); return; }
+  
+  let displayVal = val;
+  if (isNullOp) {
+    displayVal = "";
+  } else if (valEl.tagName === "SELECT") {
+    displayVal = valEl.options[valEl.selectedIndex]?.text || val;
+  }
+  
+  memberCandidateFilters.push({
+    field: fSel.value, fieldLabel: fm.label,
+    operator: op, operatorLabel: opSel.options[opSel.selectedIndex]?.text || op,
+    value: val, displayValue: displayVal
+  });
+  if (valEl.tagName === "INPUT" && !valEl.disabled) valEl.value = "";
+  renderActiveFilters();
+  memberCandidatePage = 0;
+  loadCampaignCandidates();
+}
+
+function removeFilter(i) {
+  memberCandidateFilters.splice(i, 1);
+  renderActiveFilters();
+  memberCandidatePage = 0;
+  loadCampaignCandidates();
+}
+
+function clearAllFilters() {
+  memberCandidateFilters = [];
+  renderActiveFilters();
+  memberCandidatePage = 0;
+  loadCampaignCandidates();
+}
+
+function renderActiveFilters() {
+  const c = $("activeFiltersList");
+  if (!c) return;
+  if (!memberCandidateFilters.length) {
+    c.innerHTML = `<div class="filter-empty-state">No active filters</div>`;
+    return;
+  }
+  c.innerHTML = memberCandidateFilters.map((f, i) => {
+    const detail = (f.operator === "is_null" || f.operator === "is_not_null")
+      ? escapeHtml(f.operatorLabel)
+      : `${escapeHtml(f.operatorLabel)} "${escapeHtml(f.displayValue)}"`;
+    return `
+      <div class="active-filter-pill">
+        <div class="filter-pill-body">
+          <span class="filter-pill-field">${escapeHtml(f.fieldLabel)}</span>
+          <span class="filter-pill-detail">${detail}</span>
+        </div>
+        <button class="filter-pill-remove" onclick="removeFilter(${i})" title="Remove">&times;</button>
+      </div>
+    `;
+  }).join("");
+}
+
+function searchCampaignCandidates(value) {
+  clearTimeout(lookupTimer);
+  lookupTimer = setTimeout(() => { memberCandidatePage = 0; loadCampaignCandidates(); }, 400);
+}
+
+async function loadCampaignCandidates() {
   const box = $("campaignMemberCandidates");
   box.innerHTML = '<div class="state-box compact">Loading records...</div>';
   try {
-    const data = await api(
-      `/api/campaigns/${activeCampaign.Id}/candidates/${memberCandidateObject}?search=${encodeURIComponent(search || "")}`,
-    );
+    const sv = $("campaignMemberSearch")?.value?.trim() || "";
+    const off = memberCandidatePage * memberCandidateLimit;
+    const url = `/api/campaigns/${activeCampaign.Id}/candidates/${memberCandidateObject}?search=${encodeURIComponent(sv)}&limit=${memberCandidateLimit}&offset=${off}&filters=${encodeURIComponent(JSON.stringify(memberCandidateFilters))}`;
+    const data = await api(url);
     const records = data.records || [];
     currentCampaignCandidates = records;
-    $("campaignMemberSelectedCount").textContent =
-      `${memberCandidateSelection.size} selected`;
+    memberCandidateTotal = data.totalSize || 0;
     box.innerHTML = renderCampaignCandidateTable(records);
+    const s = memberCandidateTotal === 0 ? 0 : off + 1;
+    const e = Math.min(off + memberCandidateLimit, memberCandidateTotal);
+    const pgInfo = $("candidatePaginationInfo");
+    if (pgInfo) pgInfo.textContent = `Showing ${s}\u2013${e} of ${memberCandidateTotal.toLocaleString()}`;
+    const prev = $("prevCandidatePageBtn"), next = $("nextCandidatePageBtn");
+    if (prev) prev.disabled = memberCandidatePage === 0;
+    if (next) next.disabled = e >= memberCandidateTotal;
+    updateCandidateSelectionUI();
   } catch (err) {
     box.innerHTML = `<div class="error-state compact"><p>${escapeHtml(err.message)}</p></div>`;
   }
 }
 
+function updateCandidateSelectionUI() {
+  const sz = memberCandidateSelection.size;
+  const el = $("campaignMemberSelectedCount");
+  if (el) el.textContent = `${sz} selected`;
+  const cb = $("clearCandidateSelectionBtn");
+  if (cb) cb.style.display = sz > 0 ? "inline-flex" : "none";
+}
+
+function changeCandidatePage(delta) {
+  const np = memberCandidatePage + delta;
+  if (np < 0) return;
+  if (delta > 0 && (memberCandidatePage + 1) * memberCandidateLimit >= memberCandidateTotal) return;
+  memberCandidatePage = np;
+  loadCampaignCandidates();
+}
+
+function clearCandidateSelection() {
+  memberCandidateSelection = new Set();
+  updateCandidateSelectionUI();
+  $("campaignMemberCandidates").innerHTML = renderCampaignCandidateTable(currentCampaignCandidates);
+}
+
 function renderCampaignCandidateTable(records) {
   if (!records.length)
-    return '<div class="table-empty"><h3>No records found</h3><p>Try another search.</p></div>';
+    return '<div class="table-empty"><h3>No records found</h3><p>Try a different search or filter.</p></div>';
   const isContact = memberCandidateObject === "Contact";
-  const selectable = records.filter((record) => !record.alreadyMember);
-  const allVisibleSelected =
-    selectable.length > 0 &&
-    selectable.every((record) => memberCandidateSelection.has(record.Id));
+  const selectable = records.filter(r => !r.alreadyMember);
+  const allSel = selectable.length > 0 && selectable.every(r => memberCandidateSelection.has(r.Id));
   return `
     <table class="mini-table">
-      <thead>
-        <tr>
-          <th><input type="checkbox" aria-label="Select all visible records" ${allVisibleSelected ? "checked" : ""} onchange="toggleAllCandidateSelection(this.checked)"></th>
-          <th>Name</th>
-          <th>${isContact ? "Account" : "Company"}</th>
-          <th>Phone</th>
-          <th>Email</th>
-          <th>${isContact ? "Title" : "Status"}</th>
-        </tr>
-      </thead>
+      <thead><tr>
+        <th><input type="checkbox" aria-label="Select all" ${allSel ? "checked" : ""} onchange="toggleAllCandidateSelection(this.checked)"></th>
+        <th>Name</th><th>${isContact ? "Account" : "Company"}</th><th>Phone</th><th>Email</th><th>${isContact ? "Title" : "Status"}</th>
+      </tr></thead>
       <tbody>
-        ${records
-          .map(
-            (record) => `
-          <tr class="${record.alreadyMember ? "muted-row" : ""}">
-            <td><input type="checkbox" value="${record.Id}" ${memberCandidateSelection.has(record.Id) ? "checked" : ""} ${record.alreadyMember ? "disabled" : ""} onchange="toggleCandidateSelection('${record.Id}', this.checked)"></td>
-            <td>${escapeHtml(record.Name || "-")}</td>
-            <td>${escapeHtml(isContact ? record.Account?.Name || "-" : record.Company || "-")}</td>
-            <td>${escapeHtml(record.Phone || "-")}</td>
-            <td>${record.Email ? `<a class="cell-email" href="mailto:${escapeHtml(record.Email)}">${escapeHtml(record.Email)}</a>` : '<span class="cell-empty">-</span>'}</td>
-            <td>${escapeHtml((isContact ? record.Title : record.Status) || (record.alreadyMember ? "Already member" : "-"))}</td>
+        ${records.map(r => `
+          <tr class="${r.alreadyMember ? "muted-row" : ""}">
+            <td><input type="checkbox" value="${r.Id}" ${memberCandidateSelection.has(r.Id) ? "checked" : ""} ${r.alreadyMember ? "disabled" : ""} onchange="toggleCandidateSelection('${r.Id}', this.checked)"></td>
+            <td>${escapeHtml(r.Name || "-")}</td>
+            <td>${escapeHtml(isContact ? r.Account?.Name || "-" : r.Company || "-")}</td>
+            <td>${escapeHtml(r.Phone || "-")}</td>
+            <td>${r.Email ? `<a class="cell-email" href="mailto:${escapeHtml(r.Email)}">${escapeHtml(r.Email)}</a>` : '<span class="cell-empty">-</span>'}</td>
+            <td>${escapeHtml((isContact ? r.Title : r.Status) || (r.alreadyMember ? "Already member" : "-"))}</td>
           </tr>
-        `,
-          )
-          .join("")}
+        `).join("")}
       </tbody>
-    </table>
-  `;
+    </table>`;
 }
 
 function toggleCandidateSelection(id, checked) {
   if (checked) memberCandidateSelection.add(id);
   else memberCandidateSelection.delete(id);
-  $("campaignMemberSelectedCount").textContent =
-    `${memberCandidateSelection.size} selected`;
+  updateCandidateSelectionUI();
 }
 
 function toggleAllCandidateSelection(checked) {
-  currentCampaignCandidates
-    .filter((record) => !record.alreadyMember)
-    .forEach((record) => {
-      if (checked) memberCandidateSelection.add(record.Id);
-      else memberCandidateSelection.delete(record.Id);
-    });
-  $("campaignMemberSelectedCount").textContent =
-    `${memberCandidateSelection.size} selected`;
-  $("campaignMemberCandidates").innerHTML = renderCampaignCandidateTable(
-    currentCampaignCandidates,
-  );
+  currentCampaignCandidates.filter(r => !r.alreadyMember).forEach(r => {
+    if (checked) memberCandidateSelection.add(r.Id);
+    else memberCandidateSelection.delete(r.Id);
+  });
+  updateCandidateSelectionUI();
+  $("campaignMemberCandidates").innerHTML = renderCampaignCandidateTable(currentCampaignCandidates);
 }
 
 async function addSelectedCampaignMembers() {
   const ids = [...memberCandidateSelection];
-  if (!ids.length) {
-    toast("Select at least one record", "err");
-    return;
-  }
+  if (!ids.length) { toast("Select at least one record", "err"); return; }
   try {
     $("addCampaignMembersBtn").disabled = true;
     const result = await api(`/api/campaigns/${activeCampaign.Id}/members`, {
-      method: "POST",
-      body: JSON.stringify({ object: memberCandidateObject, ids }),
+      method: "POST", body: JSON.stringify({ object: memberCandidateObject, ids }),
     });
     toast(`${result.created || 0} members added`, "ok");
     closeCampaignMemberModal();
     await loadCampaignMembers(activeCampaign.Id);
-  } catch (err) {
-    toast(err.message, "err");
-  } finally {
-    $("addCampaignMembersBtn").disabled = false;
-  }
+  } catch (err) { toast(err.message, "err"); }
+  finally { $("addCampaignMembersBtn").disabled = false; }
 }
 
 async function openCampaignEmailModal() {
