@@ -3705,6 +3705,19 @@ function getCustomCompactFields(objectName) {
   );
 }
 
+function getResolvedCompactFields(objectName, fields) {
+  const allFields = fields || [];
+  return getCustomCompactFields(objectName)
+    .filter((field) => {
+      const baseName = field.split(".")[0];
+      return allFields.some(f => 
+        f.name.toLowerCase() === baseName.toLowerCase() || 
+        f.relationshipName?.toLowerCase() === baseName.toLowerCase() ||
+        (f.name.toLowerCase().endsWith("id") && f.name.toLowerCase().slice(0, -2) === baseName.toLowerCase())
+      );
+    });
+}
+
 async function loadCompactLayoutForObject(objectName) {
   if (COMPACT_LAYOUT_CACHE[objectName]) {
     return COMPACT_LAYOUT_CACHE[objectName];
@@ -3826,6 +3839,7 @@ function getLayoutSections(objectName, fields = []) {
         columns: section.columns || 2,
         leftFields: leftResolved,
         rightFields: rightResolved,
+        fields: [...leftResolved, ...rightResolved],
       };
     })
     .filter((section) => section.leftFields.length || section.rightFields.length);
@@ -3888,10 +3902,24 @@ function renderFormSections(sections, record, objectName = currentObject) {
   return sections
     .map(
       (section) => `
-    <section class="form-section">
-      <div class="form-section-title">${utilityIconSvg("chevronDown")}<span>${escapeHtml(section.title)}</span></div>
-      <div class="form-grid">
-        ${section.fields.map((field) => renderFieldControl(field.name, record, field, objectName)).join("")}
+    <section class="form-section" style="margin-bottom: 24px;">
+      <div class="form-section-title" style="margin-bottom: 12px; font-weight: 700; font-size: 14px; color: var(--text-1, #1e293b); display: flex; align-items: center; gap: 8px;">
+        ${utilityIconSvg("chevronDown")}<span>${escapeHtml(section.title)}</span>
+      </div>
+      <div class="form-grid-container">
+        ${section.columns === 1 
+          ? `<div class="form-grid-col-1" style="display: flex; flex-direction: column; gap: 14px;">
+               ${(section.leftFields || []).map((field) => renderFieldControl(field.name, record, field, objectName)).join("")}
+             </div>`
+          : `<div class="form-grid-col-2" style="display: grid; grid-template-columns: 1fr 1fr; gap: 14px 20px;">
+               <div style="display: flex; flex-direction: column; gap: 14px;">
+                 ${(section.leftFields || []).map((field) => renderFieldControl(field.name, record, field, objectName)).join("")}
+               </div>
+               <div style="display: flex; flex-direction: column; gap: 14px;">
+                 ${(section.rightFields || []).map((field) => renderFieldControl(field.name, record, field, objectName)).join("")}
+               </div>
+             </div>`
+        }
       </div>
     </section>
   `,
@@ -4299,8 +4327,7 @@ function renderRecordDetailPage(
   title,
   id,
 ) {
-  const summaryFields = getCustomCompactFields(objectName)
-    .filter((field) => getValue(record, field) !== undefined);
+  const summaryFields = getResolvedCompactFields(objectName, fields);
   const canEditThisRecord = currentDetailCanEdit();
   $("content").innerHTML = `
     <div class="record-page">
@@ -4344,19 +4371,21 @@ function renderRecordDetailPage(
 
       <div class="record-layout">
         <section class="record-main">
-          <div class="record-tabs">
-            <button class="record-tab active" id="tabRelatedBtn" onclick="showRecordTab('related')">Related</button>
-            <button class="record-tab" id="tabDetailsBtn" onclick="showRecordTab('details')">Details</button>
+          <div class="record-tabs" style="display: flex; justify-content: space-between; align-items: center;">
+            <div style="display: flex; gap: 16px;">
+              <button class="record-tab active" id="tabRelatedBtn" onclick="showRecordTab('related')">Related</button>
+              <button class="record-tab" id="tabDetailsBtn" onclick="showRecordTab('details')">Details</button>
+            </div>
+            <div id="recordTabActions" style="display: none; padding: 6px 0;">
+              <button class="btn btn-ghost btn-sm" onclick="startRearrangingFields()" style="display: inline-flex; align-items: center; gap: 6px;">
+                ${utilityIconSvg("settings")} Rearrange Fields
+              </button>
+            </div>
           </div>
           <div id="recordRelatedPanel" class="record-tab-panel">
             ${renderRelatedPanel(objectName)}
           </div>
           <div id="recordDetailsPanel" class="record-tab-panel" style="display:none">
-            <div class="details-toolbar" style="display: flex; justify-content: flex-end; margin-bottom: 12px;">
-              <button class="btn btn-ghost btn-sm" onclick="startRearrangingFields()">
-                ${utilityIconSvg("settings")} Rearrange Fields
-              </button>
-            </div>
             <div id="detailsContent">
               ${renderConfiguredDetailSections(objectName, record, fields, displayFields)}
             </div>
@@ -5171,6 +5200,11 @@ function showRecordTab(name) {
   $("recordDetailsPanel").style.display = name === "details" ? "block" : "none";
   $("tabRelatedBtn").classList.toggle("active", name === "related");
   $("tabDetailsBtn").classList.toggle("active", name === "details");
+  
+  const actions = $("recordTabActions");
+  if (actions) {
+    actions.style.display = name === "details" ? "block" : "none";
+  }
   captureCrmPageState(currentObject);
 }
 
@@ -7994,14 +8028,72 @@ let layoutFieldSearchQuery = "";
 function startRearrangingFields() {
   if (!detailRecordState) return;
   const objectName = detailRecordState.objectName;
+  const allFields = detailRecordState.fields || [];
   
-  // Clone and normalize current active layout
-  editingLayoutData = JSON.parse(JSON.stringify(normalizeLayoutData(getActiveLayout(objectName))));
+  // Clone, normalize, and filter active layout fields to only keep fields in metadata
+  const rawLayout = getActiveLayout(objectName);
+  const normalized = normalizeLayoutData(rawLayout);
+  
+  editingLayoutData = normalized.map(section => {
+    const leftFiltered = (section.leftFields || []).filter(fieldEntry => {
+      const name = typeof fieldEntry === "string" ? fieldEntry : fieldEntry.name;
+      return findLayoutField(name, allFields) !== undefined;
+    });
+    
+    const rightFiltered = (section.rightFields || []).filter(fieldEntry => {
+      const name = typeof fieldEntry === "string" ? fieldEntry : fieldEntry.name;
+      return findLayoutField(name, allFields) !== undefined;
+    });
+    
+    return {
+      title: section.title,
+      columns: section.columns || 2,
+      leftFields: leftFiltered,
+      rightFields: rightFiltered
+    };
+  });
+  
   isEditingLayout = true;
   layoutFieldSearchQuery = "";
   
-  // Render layout editor
-  $("recordDetailsPanel").innerHTML = renderLayoutEditorHtml(objectName);
+  // Open modal
+  const existing = $("layoutEditorModalOverlay");
+  if (existing) existing.remove();
+
+  const overlay = document.createElement("div");
+  overlay.id = "layoutEditorModalOverlay";
+  overlay.className = "overlay open";
+  overlay.style.zIndex = "9998";
+  
+  overlay.addEventListener("click", (e) => {
+    if (e.target === overlay) {
+      cancelCustomLayout();
+    }
+  });
+
+  // Render stable modal wrapper
+  overlay.innerHTML = `
+    <div class="modal modal-wide layout-editor-modal" style="width: min(1300px, calc(100vw - 40px)); height: min(90vh, 850px); max-width: 1300px; max-height: 90vh; display: flex; flex-direction: column; padding: 0;">
+      <div class="modal-head">
+        <div class="modal-title-group">
+          <div class="modal-obj-icon">🛠️</div>
+          <h2>Page Layout Editor - ${escapeHtml(objectName)}</h2>
+        </div>
+        <button class="close-btn" onclick="cancelCustomLayout()">
+          <svg viewBox="0 0 20 20" width="18" height="18" fill="currentColor">
+            <path fill-rule="evenodd"
+              d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z"
+              clip-rule="evenodd" />
+          </svg>
+        </button>
+      </div>
+      <div class="modal-body" id="layoutEditorModalBody" style="flex: 1; display: flex; flex-direction: column; overflow: hidden; padding: 20px; background: var(--bg-canvas, #f3f5f9);">
+        ${renderLayoutEditorBodyHtml(objectName)}
+      </div>
+    </div>
+  `;
+
+  document.body.appendChild(overlay);
   
   // Initialize available fields search and drag-and-drop
   setupAvailableFieldsFilter();
@@ -8026,7 +8118,7 @@ function normalizeLayoutData(layout) {
   }));
 }
 
-function renderLayoutEditorHtml(objectName) {
+function renderLayoutEditorBodyHtml(objectName) {
   // Collect all field names currently in the layout
   const activeFieldNames = new Set();
   editingLayoutData.forEach(section => {
@@ -8045,25 +8137,25 @@ function renderLayoutEditorHtml(objectName) {
   const availableFields = allFields.filter(f => !activeFieldNames.has(f.name));
   
   return `
-    <div class="layout-editor-container">
-      <div class="layout-editor-sidebar">
-        <div class="sidebar-header">
-          <h3>Available Fields</h3>
+    <div class="layout-editor-container" style="display: flex; gap: 20px; background: transparent; border: none; border-radius: 0; padding: 0; margin-top: 0; height: 100%; box-shadow: none;">
+      <div class="layout-editor-sidebar" style="width: 280px; border-right: 1px solid var(--border-color, #e0e0e0); padding-right: 20px; display: flex; flex-direction: column; height: 100%;">
+        <div class="sidebar-header" style="margin-bottom: 12px;">
+          <h3 style="font-size: 14px; font-weight: 600; margin-bottom: 8px;">Available Fields</h3>
           <input type="text" id="layoutFieldSearch" placeholder="Search fields..." class="layout-search-input">
         </div>
-        <div class="available-fields-list" id="availableFieldsList">
+        <div class="available-fields-list" id="availableFieldsList" style="flex: 1; overflow-y: auto;">
           ${renderAvailableFieldsList(availableFields)}
         </div>
       </div>
       
-      <div class="layout-editor-canvas">
-        <div class="canvas-header">
+      <div class="layout-editor-canvas" style="flex: 1; display: flex; flex-direction: column; height: 100%; overflow: hidden;">
+        <div class="canvas-header" style="display: flex; align-items: center; gap: 10px; margin-bottom: 16px; padding-bottom: 12px; border-bottom: 1px solid var(--border-color, #e0e0e0); justify-content: flex-end;">
           <button class="btn btn-primary btn-sm" onclick="saveCustomLayout()">${utilityIconSvg("like")} Save Layout</button>
           <button class="btn btn-ghost btn-sm" onclick="cancelCustomLayout()">Cancel</button>
           <button class="btn btn-ghost btn-danger-link btn-sm" onclick="resetCustomLayoutToDefault()">${utilityIconSvg("refresh")} Reset</button>
           <button class="btn btn-ghost btn-sm" onclick="addNewLayoutSection()">${utilityIconSvg("comment")} + Add Section</button>
         </div>
-        <div class="canvas-sections" id="canvasSections">
+        <div class="canvas-sections" id="canvasSections" style="flex: 1; overflow-y: auto; padding-right: 8px; display: flex; flex-direction: column; gap: 20px;">
           ${editingLayoutData.map((section, sIdx) => renderEditorSection(section, sIdx)).join("")}
         </div>
       </div>
@@ -8111,7 +8203,7 @@ function renderEditorSection(section, sIdx) {
           <button class="btn btn-icon-only btn-ghost-link" onclick="moveSection(${sIdx}, 1)" ${sIdx === editingLayoutData.length - 1 ? 'disabled' : ''} title="Move Section Down">
             ▼
           </button>
-          <button class="btn btn-icon-only btn-ghost-link btn-danger-link" onclick="deleteLayoutSection(${sIdx})" title="Delete Section">
+          <button class="btn btn-icon-only btn-danger-link" onclick="deleteLayoutSection(${sIdx})" title="Delete Section">
             ${utilityIconSvg("trash")}
           </button>
         </div>
@@ -8229,19 +8321,10 @@ function moveSection(sIdx, direction) {
 function deleteLayoutSection(sIdx) {
   if (!editingLayoutData) return;
   
-  const section = editingLayoutData[sIdx];
-  const fieldsToMove = [...(section.leftFields || []), ...(section.rightFields || [])];
   editingLayoutData.splice(sIdx, 1);
   
   if (editingLayoutData.length === 0) {
     editingLayoutData.push({ title: "Information", columns: 2, leftFields: [], rightFields: [] });
-  }
-  
-  if (fieldsToMove.length > 0) {
-    if (!editingLayoutData[0].leftFields) {
-      editingLayoutData[0].leftFields = [];
-    }
-    editingLayoutData[0].leftFields.push(...fieldsToMove);
   }
   
   reRenderLayoutEditor();
@@ -8536,15 +8619,25 @@ function reRenderLayoutEditor() {
   // 1. Save scroll positions
   const canvasScroll = $("canvasSections") ? $("canvasSections").scrollTop : 0;
   const sidebarScroll = $("availableFieldsList") ? $("availableFieldsList").scrollTop : 0;
-  const windowScroll = window.scrollY;
   
-  // 2. Re-render Layout Editor HTML
-  $("recordDetailsPanel").innerHTML = renderLayoutEditorHtml(detailRecordState.objectName);
+  // 2. Re-render Layout Editor HTML inside stable body
+  const body = $("layoutEditorModalBody");
+  if (body) {
+    body.innerHTML = renderLayoutEditorBodyHtml(detailRecordState.objectName);
+  }
   
-  // 3. Restore scroll positions
-  if ($("canvasSections")) $("canvasSections").scrollTop = canvasScroll;
-  if ($("availableFieldsList")) $("availableFieldsList").scrollTop = sidebarScroll;
-  window.scrollTo(window.scrollX, windowScroll);
+  // 3. Restore scroll positions immediately & with a safe timeout
+  const canvasEl = $("canvasSections");
+  const sidebarEl = $("availableFieldsList");
+  if (canvasEl) canvasEl.scrollTop = canvasScroll;
+  if (sidebarEl) sidebarEl.scrollTop = sidebarScroll;
+  
+  setTimeout(() => {
+    const cEl = $("canvasSections");
+    const sEl = $("availableFieldsList");
+    if (cEl) cEl.scrollTop = canvasScroll;
+    if (sEl) sEl.scrollTop = sidebarScroll;
+  }, 0);
   
   // 4. Initialize available fields search
   setupAvailableFieldsFilter();
@@ -8611,6 +8704,11 @@ async function resetCustomLayoutToDefault() {
 
 function restoreStandardDetailView() {
   if (!detailRecordState) return;
+  
+  // Close the modal layout editor overlay if it exists
+  const overlay = $("layoutEditorModalOverlay");
+  if (overlay) overlay.remove();
+  
   const { objectName, record, fields } = detailRecordState;
   
   const displayFields = fields
@@ -8624,11 +8722,6 @@ function restoreStandardDetailView() {
     
   // Re-render Details Tab
   $("recordDetailsPanel").innerHTML = `
-    <div class="details-toolbar" style="display: flex; justify-content: flex-end; margin-bottom: 12px;">
-      <button class="btn btn-ghost btn-sm" onclick="startRearrangingFields()">
-        ${utilityIconSvg("settings")} Rearrange Fields
-      </button>
-    </div>
     <div id="detailsContent">
       ${renderConfiguredDetailSections(objectName, record, fields, displayFields)}
     </div>
@@ -8847,8 +8940,7 @@ function refreshRecordDetailPageHeader() {
   const { objectName, record, fields } = detailRecordState;
   
   // Re-run getSummaryFields
-  const summaryFields = getCustomCompactFields(objectName)
-    .filter((field) => getValue(record, field) !== undefined);
+  const summaryFields = getResolvedCompactFields(objectName, fields);
     
   // Find record-summary container and replace its contents
   const summaryContainer = document.querySelector(".record-summary");

@@ -6201,6 +6201,7 @@ html[data-theme="dark"] .global-search-box input::placeholder {
   justify-content: center;
   border-radius: 4px;
   font-size: 11px;
+  padding: 0 !important;
 }
 
 .section-actions .btn-icon-only svg {
@@ -6493,5 +6494,9 @@ html[data-theme="dark"] .btn-danger-link:hover {
   .detail-grid.cols-2 {
     grid-template-columns: 1fr;
     gap: 14px;
+  }
+  .form-grid-col-2 {
+    grid-template-columns: 1fr !important;
+    gap: 14px !important;
   }
 }
