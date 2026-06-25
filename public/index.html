@@ -224,9 +224,21 @@
           </svg>
           <input type="text" id="objSearch" placeholder="Search this list..." oninput="handleObjSearch(this.value)">
         </div>
-        <select class="list-view-select" id="listViewSelect" onchange="handleListViewChange(this.value)">
-          <option value="all">All Records</option>
-        </select>
+        <div class="list-view-controls">
+          <select class="list-view-select" id="listViewSelect" onchange="handleListViewChange(this.value)">
+            <option value="all">All Records</option>
+          </select>
+          <button class="lv-action-btn" id="editListViewBtn" title="Edit this list view" aria-label="Edit list view" style="display:none" onclick="editCurrentListView()">
+            <svg viewBox="0 0 20 20" width="15" height="15" fill="currentColor">
+              <path d="M13.586 3.586a2 2 0 112.828 2.828l-.793.793-2.828-2.828.793-.793zM11.379 5.793L3 14.172V17h2.828l8.38-8.379-2.83-2.828z"/>
+            </svg>
+          </button>
+          <button class="lv-action-btn lv-action-btn-danger" id="deleteListViewBtn" title="Delete this list view" aria-label="Delete list view" style="display:none" onclick="openDeleteListViewModal()">
+            <svg viewBox="0 0 20 20" width="15" height="15" fill="currentColor">
+              <path fill-rule="evenodd" d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm5-1a1 1 0 00-1 1v6a1 1 0 102 0V8a1 1 0 00-1-1z" clip-rule="evenodd"/>
+            </svg>
+          </button>
+        </div>
         <div class="view-toggle" id="viewToggle" style="display:none" role="group" aria-label="View mode">
           <button class="view-toggle-btn active" id="tableViewBtn" onclick="setViewMode('table')" title="Table view"
             aria-label="Table view">
@@ -290,9 +302,9 @@
   </div>
 
   <div class="overlay" id="listViewOverlay" onclick="overlayClick(event, 'listViewOverlay', closeListViewModal)">
-    <div class="modal modal-sm">
+    <div class="modal modal-sm list-view-builder-modal">
       <div class="modal-head">
-        <h2>Create List View</h2>
+        <h2 id="listViewModalTitle">Create List View</h2>
         <button class="close-btn" onclick="closeListViewModal()">
           <svg viewBox="0 0 20 20" width="18" height="18" fill="currentColor">
             <path fill-rule="evenodd"
@@ -304,7 +316,34 @@
       <div class="modal-body" id="listViewBody"></div>
       <div class="modal-foot">
         <button class="btn btn-ghost" onclick="closeListViewModal()">Cancel</button>
-        <button class="btn btn-primary" onclick="saveLocalListView()">Save View</button>
+        <button class="btn btn-primary" id="listViewSaveBtn" onclick="saveLocalListView()">Save View</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Delete List View Confirmation ─────────────── -->
+  <div class="overlay" id="deleteListViewOverlay" onclick="overlayClick(event, 'deleteListViewOverlay', closeDeleteListViewModal)">
+    <div class="modal modal-xs">
+      <div class="modal-head">
+        <h2>Delete List View</h2>
+        <button class="close-btn" onclick="closeDeleteListViewModal()">
+          <svg viewBox="0 0 20 20" width="18" height="18" fill="currentColor">
+            <path fill-rule="evenodd"
+              d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z"
+              clip-rule="evenodd" />
+          </svg>
+        </button>
+      </div>
+      <div class="modal-body">
+        <div class="del-warning">
+          <div class="del-icon">🗑️</div>
+          <p>This action is <strong>permanent</strong> and cannot be undone. The list view will be deleted from both the portal and Salesforce.</p>
+          <p id="deleteListViewName" class="del-record-name"></p>
+        </div>
+      </div>
+      <div class="modal-foot">
+        <button class="btn btn-ghost" onclick="closeDeleteListViewModal()">Cancel</button>
+        <button class="btn btn-danger" id="confirmDeleteListViewBtn" onclick="confirmDeleteListView()">Delete List View</button>
       </div>
     </div>
   </div>
@@ -452,7 +491,7 @@
   <!-- ── Toast ─────────────────────────────────────────── -->
   <div class="overlay" id="campaignMemberOverlay"
     onclick="overlayClick(event, 'campaignMemberOverlay', closeCampaignMemberModal)">
-    <div class="modal modal-wide">
+    <div class="modal candidate-explorer-modal">
       <div class="modal-head">
         <h2 id="campaignMemberTitle">Add Campaign Members</h2>
         <button class="close-btn" onclick="closeCampaignMemberModal()">
@@ -463,18 +502,68 @@
           </svg>
         </button>
       </div>
-      <div class="modal-body">
-        <div class="member-modal-toolbar">
-          <input class="form-ctrl" id="campaignMemberSearch" placeholder="Search..."
-            oninput="searchCampaignCandidates(this.value)">
-          <span class="rec-count" id="campaignMemberSelectedCount">0 selected</span>
+      <div class="modal-body candidate-explorer-body">
+        <!-- ── Left: Filters Panel ── -->
+        <aside class="candidate-filter-panel">
+          <div class="filter-panel-header">
+            <h3>Filters</h3>
+            <button class="btn btn-text btn-sm" onclick="clearAllFilters()">Clear All</button>
+          </div>
+          <div id="activeFiltersList" class="active-filters-scroll"></div>
+          <div class="add-filter-form">
+            <h4>Add Filter</h4>
+            <div class="filter-form-row">
+              <label>Field</label>
+              <select id="filterFieldSelect" class="form-ctrl" onchange="onFilterFieldChange(this.value)"></select>
+            </div>
+            <div class="filter-form-row">
+              <label>Operator</label>
+              <select id="filterOperatorSelect" class="form-ctrl" onchange="onFilterOperatorChange()"></select>
+            </div>
+            <div class="filter-form-row">
+              <label>Value</label>
+              <div id="filterValueContainer">
+                <input id="filterValueInput" class="form-ctrl" placeholder="Value...">
+              </div>
+            </div>
+            <button class="btn btn-secondary btn-sm add-filter-btn" onclick="addFilterCondition()">
+              <svg viewBox="0 0 20 20" width="14" height="14" fill="currentColor" style="margin-right:4px"><path d="M10 5a1 1 0 011 1v3h3a1 1 0 110 2h-3v3a1 1 0 11-2 0v-3H6a1 1 0 110-2h3V6a1 1 0 011-1z"/></svg>
+              Add Filter
+            </button>
+          </div>
+        </aside>
+        <!-- ── Right: Candidate Explorer ── -->
+        <div class="candidate-explorer-main">
+          <div class="explorer-top-bar">
+            <div class="explorer-search-wrap">
+              <svg class="explorer-search-icon" viewBox="0 0 20 20" width="16" height="16" fill="currentColor"><path fill-rule="evenodd" d="M8 4a4 4 0 100 8 4 4 0 000-8zM2 8a6 6 0 1110.89 3.476l4.817 4.817a1 1 0 01-1.414 1.414l-4.816-4.816A6 6 0 012 8z" clip-rule="evenodd"/></svg>
+              <input class="form-ctrl explorer-search-input" id="campaignMemberSearch" placeholder="Search by name, email, phone..."
+                oninput="searchCampaignCandidates(this.value)">
+            </div>
+            <div class="explorer-meta">
+              <span class="rec-count" id="campaignMemberSelectedCount">0 selected</span>
+              <button id="clearCandidateSelectionBtn" class="btn btn-text btn-sm" onclick="clearCandidateSelection()" style="display:none">Clear</button>
+            </div>
+          </div>
+          <div class="candidate-table-scroll" id="campaignMemberCandidates"></div>
+          <div class="explorer-pagination-bar">
+            <span class="pagination-info-text" id="candidatePaginationInfo">Showing 0–0 of 0</span>
+            <div class="pagination-btn-group">
+              <button class="btn btn-ghost btn-sm" id="prevCandidatePageBtn" disabled onclick="changeCandidatePage(-1)">
+                <svg viewBox="0 0 20 20" width="14" height="14" fill="currentColor"><path fill-rule="evenodd" d="M12.707 5.293a1 1 0 010 1.414L9.414 10l3.293 3.293a1 1 0 01-1.414 1.414l-4-4a1 1 0 010-1.414l4-4a1 1 0 011.414 0z" clip-rule="evenodd"/></svg>
+                Previous
+              </button>
+              <button class="btn btn-ghost btn-sm" id="nextCandidatePageBtn" disabled onclick="changeCandidatePage(1)">
+                Next
+                <svg viewBox="0 0 20 20" width="14" height="14" fill="currentColor"><path fill-rule="evenodd" d="M7.293 14.707a1 1 0 010-1.414L10.586 10 7.293 6.707a1 1 0 011.414-1.414l4 4a1 1 0 010 1.414l-4 4a1 1 0 01-1.414 0z" clip-rule="evenodd"/></svg>
+              </button>
+            </div>
+          </div>
         </div>
-        <div class="mini-table-wrap" id="campaignMemberCandidates"></div>
       </div>
       <div class="modal-foot">
         <button class="btn btn-ghost" onclick="closeCampaignMemberModal()">Cancel</button>
-        <button class="btn btn-primary" id="addCampaignMembersBtn" onclick="addSelectedCampaignMembers()">Add
-          Members</button>
+        <button class="btn btn-primary" id="addCampaignMembersBtn" onclick="addSelectedCampaignMembers()">Add Members</button>
       </div>
     </div>
   </div>

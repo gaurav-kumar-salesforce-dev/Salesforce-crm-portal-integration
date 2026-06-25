@@ -562,6 +562,7 @@ const crmListCache = new Map();
 const apiInFlightRequests = new Map();
 const crmBackgroundRefreshes = new Map();
 const crmPageStates = new Map();
+const objectFieldMetadataCache = new Map();
 let restoringCrmHistory = false;
 let editingRecord = null;
 let deletingRecord = null;
@@ -590,6 +591,11 @@ let campaignMemberSelection = new Set();
 let memberCandidateObject = "Contact";
 let memberCandidateSelection = new Set();
 let currentCampaignCandidates = [];
+let memberCandidateFilters = [];
+let memberCandidatePage = 0;
+let memberCandidateLimit = 50;
+let memberCandidateTotal = 0;
+let memberCandidateFields = [];
 let emailTemplates = [];
 let detailLookupLabels = {};
 let expandedActivityIds = new Set();
@@ -602,6 +608,7 @@ let modalPresetValues = {};
 let savingRecord = false;
 let supabaseAuthClient = null;
 let supabaseAuthClientPromise = null;
+let listViewDraft = null;
 
 // Token storage helpers
 function getAuthToken() {
@@ -694,6 +701,150 @@ function uniqueKanbanValues(values, objectName = currentObject) {
 
 function objectLocalViews() {
   return getLocalViews()[currentObject] || [];
+}
+
+function cleanListViewLabel(label) {
+  return String(label || "")
+    .replace(/^\s*(Salesforce|Portal)\s*[-:]\s*/i, "")
+    .trim();
+}
+
+function humanizeFieldLabel(field) {
+  return String(field || "")
+    .replace(/\./g, " ")
+    .replace(/__c$/i, "")
+    .replace(/Id$/, "")
+    .replace(/([a-z])([A-Z])/g, "$1 $2")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+async function loadObjectFields(objectName = currentObject) {
+  if (objectFieldMetadataCache.has(objectName)) {
+    return objectFieldMetadataCache.get(objectName);
+  }
+  const fallback = [...new Set([...(OBJECT_META[objectName]?.columns || []), ...(OBJECT_META[objectName]?.editable || [])])]
+    .map((name) => ({ name, label: humanizeFieldLabel(name), type: "string" }));
+  try {
+    const data = await api(`/api/${objectName}/fields`);
+    const fields = (data.fields || fallback)
+      .filter((field) => field?.name && field.name !== "Id" && !String(field.name).includes("attributes"))
+      .map((field) => ({
+        ...field,
+        label: cleanListViewLabel(field.label || humanizeFieldLabel(field.name)),
+      }))
+      .sort((a, b) => a.label.localeCompare(b.label));
+    objectFieldMetadataCache.set(objectName, fields.length ? fields : fallback);
+  } catch {
+    objectFieldMetadataCache.set(objectName, fallback);
+  }
+  return objectFieldMetadataCache.get(objectName);
+}
+
+function getCachedObjectFields(objectName = currentObject) {
+  return objectFieldMetadataCache.get(objectName) || [
+    ...new Set([...(OBJECT_META[objectName]?.columns || []), ...(OBJECT_META[objectName]?.editable || [])]),
+  ].map((name) => ({ name, label: humanizeFieldLabel(name), type: "string" }));
+}
+
+function fieldMetaFor(field, objectName = currentObject) {
+  const fields = getCachedObjectFields(objectName);
+  return fields.find((item) => item.name === field) || null;
+}
+
+function getCurrentLocalView() {
+  if (!currentViewId.startsWith("local:")) return null;
+  return objectLocalViews().find((item) => item.id === currentViewId.slice(6)) || null;
+}
+
+function normalizePortalColumns(columns, objectName = currentObject) {
+  const hidden = currentHiddenFields || new Set();
+  const valid = new Set(getCachedObjectFields(objectName).map((field) => field.name));
+  const fallback = OBJECT_META[objectName]?.columns || [];
+  const source = columns?.length ? columns : fallback;
+  const seen = new Set();
+  return source.filter((field) => {
+    if (!field || field === "Id" || String(field).includes("attributes")) return false;
+    if (hidden.has(field) || seen.has(field)) return false;
+    if (valid.size && !valid.has(field) && !String(field).includes(".")) return false;
+    seen.add(field);
+    return true;
+  });
+}
+
+function fieldTypeFor(field) {
+  const type = String(fieldMetaFor(field)?.type || "").toLowerCase();
+  if (type) return type;
+  if (/date|time/i.test(field)) return "date";
+  if (/amount|revenue|count|number|employees|probability|percent/i.test(field)) return "number";
+  if (/email/i.test(field)) return "email";
+  if (/phone|mobile/i.test(field)) return "phone";
+  if (/url|website/i.test(field)) return "url";
+  return "string";
+}
+
+function operatorOptionsForField(field) {
+  const type = fieldTypeFor(field);
+  if (["currency", "double", "int", "integer", "percent", "number"].includes(type)) {
+    return ["equals", "not_equals", "gt", "gte", "lt", "lte", "between", "blank", "not_blank"];
+  }
+  if (["date", "datetime", "time"].includes(type)) {
+    return ["equals", "before", "after", "today", "yesterday", "last_7_days", "last_30_days", "this_month", "last_month", "blank", "not_blank"];
+  }
+  if (type === "boolean") return ["true", "false", "blank", "not_blank"];
+  return ["equals", "not_equals", "contains", "not_contains", "starts_with", "ends_with", "blank", "not_blank"];
+}
+
+function operatorLabel(operator) {
+  return ({
+    equals: "equals",
+    not_equals: "not equal to",
+    contains: "contains",
+    not_contains: "does not contain",
+    starts_with: "starts with",
+    ends_with: "ends with",
+    gt: "greater than",
+    gte: "greater or equal",
+    lt: "less than",
+    lte: "less or equal",
+    between: "between",
+    before: "before",
+    after: "after",
+    today: "today",
+    yesterday: "yesterday",
+    last_7_days: "last 7 days",
+    last_30_days: "last 30 days",
+    this_month: "this month",
+    last_month: "last month",
+    blank: "is blank",
+    not_blank: "is not blank",
+    true: "is true",
+    false: "is false",
+  })[operator] || operator;
+}
+
+function viewSignatureForCache(view) {
+  if (!view) return "";
+  return JSON.stringify({
+    columns: view.columns || [],
+    filters: view.filters || [],
+    filterLogic: view.filterLogic || "AND",
+    pageSize: view.pageSize || RENDER_CHUNK_SIZE,
+    sort: view.sort || null,
+    version: view.version || 1,
+  });
+}
+
+function persistCurrentLocalViewPatch(patch) {
+  const view = getCurrentLocalView();
+  if (!view) return;
+  const views = getLocalViews();
+  const list = views[currentObject] || [];
+  const index = list.findIndex((item) => item.id === view.id);
+  if (index < 0) return;
+  list[index] = { ...list[index], ...patch, updatedAt: new Date().toISOString() };
+  views[currentObject] = list;
+  setLocalViews(views);
 }
 
 function objectIcon(objectName, record = null) {
@@ -852,10 +1003,7 @@ function setValue(body, field, value) {
 }
 
 function labelFor(field) {
-  return field
-    .replace(/\./g, " ")
-    .replace(/Id$/, "")
-    .replace(/([a-z])([A-Z])/g, "$1 $2");
+  return fieldMetaFor(field)?.label || humanizeFieldLabel(field);
 }
 
 function escapeHtml(value) {
@@ -937,11 +1085,12 @@ function crmListCachePrefix(objectName) {
   return `crm:list:${objectName}:`;
 }
 
-function crmListCacheKey({ objectName, path, search, viewId, sort, page = 1, pageSize = RENDER_CHUNK_SIZE }) {
+function crmListCacheKey({ objectName, path, search, viewId, sort, viewSignature = "", page = 1, pageSize = RENDER_CHUNK_SIZE }) {
   return [
     crmListCachePrefix(objectName),
     `path=${path}`,
     `view=${viewId || "all"}`,
+    `signature=${viewSignature || ""}`,
     `search=${search || ""}`,
     `sort=${sort?.field || ""}:${sort?.direction || "asc"}`,
     `page=${page}`,
@@ -1637,7 +1786,12 @@ function currentDetailCanEdit() {
 function formatValue(field, value, record = null) {
   if (value === null || value === undefined || value === "")
     return '<span class="cell-empty">-</span>';
-  if (field === "Amount" || field === "AnnualRevenue") {
+  const type = fieldTypeFor(field);
+  if (["currency", "double", "int", "integer", "percent", "number"].includes(type) || field === "Amount" || field === "AnnualRevenue") {
+    if (Number.isNaN(Number(value))) return escapeHtml(String(value));
+    if (type === "percent" || /probability|percent/i.test(field)) {
+      return `<span class="cell-number">${Number(value).toLocaleString()}%</span>`;
+    }
     return `<span class="cell-amount">${Number(value).toLocaleString(
       undefined,
       {
@@ -1647,9 +1801,22 @@ function formatValue(field, value, record = null) {
       },
     )}</span>`;
   }
-  if (field.includes("Date")) return new Date(value).toLocaleDateString();
+  if (["date", "datetime", "time"].includes(type) || field.includes("Date")) {
+    const date = new Date(value);
+    return Number.isNaN(date.getTime()) ? escapeHtml(String(value)) : date.toLocaleDateString();
+  }
   if (field === "Email")
     return `<a class="cell-email" href="mailto:${escapeHtml(value)}">${escapeHtml(value)}</a>`;
+  if (type === "phone") {
+    return `<a class="cell-email" href="tel:${escapeHtml(value)}">${escapeHtml(value)}</a>`;
+  }
+  if (type === "url") {
+    const url = /^https?:\/\//i.test(String(value)) ? String(value) : `https://${value}`;
+    return `<a class="cell-email" href="${escapeHtml(url)}" target="_blank" rel="noopener">${escapeHtml(value)}</a>`;
+  }
+  if (type === "boolean") {
+    return `<span class="badge ${value ? "badge-success" : "badge-neutral"}">${value ? "Yes" : "No"}</span>`;
+  }
   if (["Status", "StageName", "Priority", "Type"].includes(field)) {
     return `<span class="badge badge-neutral">${escapeHtml(value)}</span>`;
   }
@@ -1664,6 +1831,10 @@ function formatValue(field, value, record = null) {
   }
   if (field === "Name" || field === "CaseNumber") {
     return `<button class="cell-button-link" onclick="event.stopPropagation(); openRecordDetail('${currentObject}', '${record?.Id || ""}')">${escapeHtml(value)}</button>`;
+  }
+  if (typeof value === "object") {
+    if (value.Name) return escapeHtml(value.Name);
+    return escapeHtml(JSON.stringify(value));
   }
   return escapeHtml(String(value));
 }
@@ -2233,26 +2404,60 @@ async function loadListViews() {
   renderListViewSelect();
 }
 
+function isEditableListView(viewId) {
+  if (!viewId || viewId === "all") return false;
+  if (viewId.startsWith("local:")) return true;
+  if (viewId.startsWith("sf:")) {
+    const id = viewId.slice(3);
+    const view = sfListViews.find((v) => v.id === id);
+    if (!view) return false;
+    const devName = view.developerName || "";
+    const lower = devName.toLowerCase();
+    if (lower === "all" || lower === "recentlyviewed" || lower.startsWith("all_") || lower.startsWith("my_") || lower.startsWith("recently_")) {
+      return false;
+    }
+    const standardNames = [
+      "allaccounts", "allcontacts", "allopportunities", "allcases", "allleads", "allcampaigns",
+      "recentlyviewedaccounts", "recentlyviewedcontacts", "recentlyviewedopportunities", "recentlyviewedcases", "recentlyviewedleads", "recentlyviewedcampaigns",
+      "myaccounts", "mycontacts", "myopportunities", "mycases", "myleads", "mycampaigns"
+    ];
+    if (standardNames.includes(lower)) return false;
+    return true;
+  }
+  return false;
+}
+
+function updateListViewButtonsVisibility() {
+  const isEditable = isEditableListView(currentViewId);
+  const editBtn = $("editListViewBtn");
+  const deleteBtn = $("deleteListViewBtn");
+  if (editBtn) editBtn.style.display = isEditable ? "inline-flex" : "none";
+  if (deleteBtn) deleteBtn.style.display = isEditable ? "inline-flex" : "none";
+}
+
 function renderListViewSelect() {
   const select = $("listViewSelect");
   const locals = objectLocalViews();
   select.innerHTML = `
     <option value="all">All ${OBJECT_META[currentObject].title}</option>
-    ${sfListViews.map((view) => `<option value="sf:${view.id}">Salesforce: ${escapeHtml(view.label)}</option>`).join("")}
-    ${locals.map((view) => `<option value="local:${view.id}">Portal: ${escapeHtml(view.name)}</option>`).join("")}
+    ${sfListViews.map((view) => `<option value="sf:${view.id}">${escapeHtml(cleanListViewLabel(view.label))}</option>`).join("")}
+    ${locals.map((view) => `<option value="local:${view.id}">${escapeHtml(cleanListViewLabel(view.name))}</option>`).join("")}
   `;
   select.value = currentViewId;
   if (select.value !== currentViewId) {
     currentViewId = "all";
     select.value = "all";
   }
+  updateListViewButtonsVisibility();
 }
 
 async function handleListViewChange(value) {
   currentViewId = value;
   visibleRecordCount = RENDER_CHUNK_SIZE;
   nextRecordsUrl = null;
-  sortState = { field: null, direction: "asc" };
+  const localView = getCurrentLocalView();
+  sortState = localView?.sort || { field: null, direction: "asc" };
+  updateListViewButtonsVisibility();
   await loadData();
 }
 
@@ -2275,6 +2480,7 @@ async function loadData(options = {}) {
   }
   currentColumns = meta.columns.slice();
   currentHiddenFields = new Set();
+  await loadObjectFields(currentObject);
 
   $("pageIcon").innerHTML = objectIcon(currentObject);
   $("pageTitle").textContent = getCurrentViewName();
@@ -2297,15 +2503,21 @@ async function loadData(options = {}) {
       const query = `?${params.toString()}`;
       path = `/api/${currentObject}${query}`;
     }
+    const localView = getCurrentLocalView();
+    const viewSignature = currentViewId.startsWith("local:") ? viewSignatureForCache(localView) : "";
+    if (localView?.pageSize) visibleRecordCount = Number(localView.pageSize) || RENDER_CHUNK_SIZE;
+    cacheMeta.filters.viewSignature = viewSignature;
     const cacheKey = crmListCacheKey({
       objectName: currentObject,
       path,
       search,
       viewId: currentViewId,
       sort: sortState,
+      viewSignature,
+      pageSize: localView?.pageSize || RENDER_CHUNK_SIZE,
     });
     const cachedEntry = forceRefresh
-      ? peekCrmListCache(cacheKey)
+      ? null
       : getCrmListCache(cacheKey);
     if (!cachedEntry) {
       $("pageSub").textContent =
@@ -2395,31 +2607,135 @@ function normalizeListViewColumns(columns) {
       (field) => field && field !== "Id" && !field.includes("attributes"),
     );
   return fields.length
-    ? [...new Set(fields)].slice(0, 8)
+    ? normalizePortalColumns([...new Set(fields)])
     : OBJECT_META[currentObject].columns.slice();
 }
 
 function getCurrentViewName() {
   if (currentViewId.startsWith("sf:")) {
     const view = sfListViews.find((item) => item.id === currentViewId.slice(3));
-    return view?.label || OBJECT_META[currentObject].title;
+    return cleanListViewLabel(view?.label || OBJECT_META[currentObject].title);
   }
   if (currentViewId.startsWith("local:")) {
     const view = objectLocalViews().find(
       (item) => item.id === currentViewId.slice(6),
     );
-    return view?.name || OBJECT_META[currentObject].title;
+    return cleanListViewLabel(view?.name || OBJECT_META[currentObject].title);
   }
   return OBJECT_META[currentObject].title;
 }
 
+function normalizeComparableValue(value) {
+  if (value === null || value === undefined) return "";
+  if (typeof value === "object") return value.Name || value.label || JSON.stringify(value);
+  return String(value);
+}
+
+function toComparableNumber(value) {
+  const number = Number(String(value ?? "").replace(/[$,%\s,]/g, ""));
+  return Number.isFinite(number) ? number : null;
+}
+
+function toComparableDate(value) {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function dateRangeForOperator(operator) {
+  const now = new Date();
+  const startOfDay = (date) => new Date(date.getFullYear(), date.getMonth(), date.getDate());
+  const today = startOfDay(now);
+  if (operator === "today") return [today, new Date(today.getTime() + 86400000)];
+  if (operator === "yesterday") return [new Date(today.getTime() - 86400000), today];
+  if (operator === "last_7_days") return [new Date(today.getTime() - 6 * 86400000), new Date(today.getTime() + 86400000)];
+  if (operator === "last_30_days") return [new Date(today.getTime() - 29 * 86400000), new Date(today.getTime() + 86400000)];
+  if (operator === "this_month") return [new Date(now.getFullYear(), now.getMonth(), 1), new Date(now.getFullYear(), now.getMonth() + 1, 1)];
+  if (operator === "last_month") return [new Date(now.getFullYear(), now.getMonth() - 1, 1), new Date(now.getFullYear(), now.getMonth(), 1)];
+  return null;
+}
+
+function recordMatchesFilter(record, filter) {
+  if (!filter?.field || !filter.operator) return true;
+  const rawValue = getValue(record, filter.field);
+  const value = normalizeComparableValue(rawValue);
+  const expected = normalizeComparableValue(filter.value).trim();
+  const lowerValue = value.toLowerCase();
+  const lowerExpected = expected.toLowerCase();
+  switch (filter.operator) {
+    case "blank":
+      return value.trim() === "";
+    case "not_blank":
+      return value.trim() !== "";
+    case "true":
+      return rawValue === true || lowerValue === "true";
+    case "false":
+      return rawValue === false || lowerValue === "false";
+    case "equals":
+      return lowerValue === lowerExpected;
+    case "not_equals":
+      return lowerValue !== lowerExpected;
+    case "contains":
+      return lowerValue.includes(lowerExpected);
+    case "not_contains":
+      return !lowerValue.includes(lowerExpected);
+    case "starts_with":
+      return lowerValue.startsWith(lowerExpected);
+    case "ends_with":
+      return lowerValue.endsWith(lowerExpected);
+    case "gt":
+    case "gte":
+    case "lt":
+    case "lte": {
+      const actualNumber = toComparableNumber(rawValue);
+      const expectedNumber = toComparableNumber(expected);
+      if (actualNumber === null || expectedNumber === null) return false;
+      if (filter.operator === "gt") return actualNumber > expectedNumber;
+      if (filter.operator === "gte") return actualNumber >= expectedNumber;
+      if (filter.operator === "lt") return actualNumber < expectedNumber;
+      return actualNumber <= expectedNumber;
+    }
+    case "between": {
+      const actualNumber = toComparableNumber(rawValue);
+      const [min, max] = expected.split(/[,|]/).map(toComparableNumber);
+      return actualNumber !== null && min !== null && max !== null && actualNumber >= min && actualNumber <= max;
+    }
+    case "before":
+    case "after": {
+      const actualDate = toComparableDate(rawValue);
+      const expectedDate = toComparableDate(expected);
+      if (!actualDate || !expectedDate) return false;
+      return filter.operator === "before" ? actualDate < expectedDate : actualDate > expectedDate;
+    }
+    default: {
+      const range = dateRangeForOperator(filter.operator);
+      if (!range) return true;
+      const actualDate = toComparableDate(rawValue);
+      return actualDate ? actualDate >= range[0] && actualDate < range[1] : false;
+    }
+  }
+}
+
+function recordMatchesFilters(record, filters = [], logic = "AND") {
+  const activeFilters = (filters || []).filter((filter) => filter?.field && filter?.operator);
+  if (!activeFilters.length) return true;
+  if (String(logic).toUpperCase() === "OR") {
+    return activeFilters.some((filter) => recordMatchesFilter(record, filter));
+  }
+  return activeFilters.every((filter) => recordMatchesFilter(record, filter));
+}
+
 function applyLocalView() {
   if (!currentViewId.startsWith("local:")) return;
-  const view = objectLocalViews().find(
-    (item) => item.id === currentViewId.slice(6),
-  );
+  const view = getCurrentLocalView();
   if (!view) return;
-  currentColumns = view.columns?.length ? view.columns : currentColumns;
+  currentColumns = normalizePortalColumns(view.columns?.length ? view.columns : currentColumns);
+  if (view.pageSize) visibleRecordCount = Number(view.pageSize) || visibleRecordCount;
+  if (view.filters?.length) {
+    currentRecords = currentRecords.filter((record) =>
+      recordMatchesFilters(record, view.filters, view.filterLogic || "AND"),
+    );
+    totalRecords = currentRecords.length;
+  }
   if (view.search) {
     const q = view.search.toLowerCase();
     currentRecords = currentRecords.filter((record) =>
@@ -2429,11 +2745,13 @@ function applyLocalView() {
           .includes(q),
       ),
     );
+    totalRecords = currentRecords.length;
   }
 }
 
 function renderTable() {
   if (viewingDetail) return;
+  renderFilterPills();
   const recordsToRender = getRecordsToRender();
   const table = $("dataTable");
   const tableCard = $("tableCard");
@@ -2487,6 +2805,43 @@ function renderTable() {
     </tr>
   `;
   observeLazySentinel();
+}
+
+function renderFilterPills() {
+  const holder = $("filterPills");
+  if (!holder) return;
+  const pills = [];
+  const search = $("objSearch")?.value || "";
+  if (search) {
+    pills.push(`<span class="filter-pill">Search: ${escapeHtml(search)} <button onclick="clearObjectSearch()" aria-label="Clear search">x</button></span>`);
+  }
+  const localView = getCurrentLocalView();
+  (localView?.filters || []).forEach((filter, index) => {
+    const needsValue = !["blank", "not_blank", "true", "false", "today", "yesterday", "last_7_days", "last_30_days", "this_month", "last_month"].includes(filter.operator);
+    const valueText = needsValue ? ` ${escapeHtml(filter.value || "")}` : "";
+    pills.push(`
+      <span class="filter-pill">
+        ${escapeHtml(labelFor(filter.field))} ${escapeHtml(operatorLabel(filter.operator))}${valueText}
+        <button onclick="removeLocalViewFilter(${index})" aria-label="Remove filter">x</button>
+      </span>
+    `);
+  });
+  holder.innerHTML = pills.join("");
+}
+
+function clearObjectSearch() {
+  const input = $("objSearch");
+  if (input) input.value = "";
+  handleObjSearch("");
+}
+
+async function removeLocalViewFilter(index) {
+  const view = getCurrentLocalView();
+  if (!view) return;
+  const filters = [...(view.filters || [])];
+  filters.splice(index, 1);
+  persistCurrentLocalViewPatch({ filters });
+  await loadData({ forceRefresh: true });
 }
 
 function renderTableRowHtml(record, showActions) {
@@ -3035,6 +3390,7 @@ function sortBy(field) {
         ? "desc"
         : "asc",
   };
+  persistCurrentLocalViewPatch({ sort: { ...sortState } });
   applySort();
   renderCurrentView();
   captureCrmPageState(currentObject);
@@ -3277,6 +3633,7 @@ async function openRecordModal(
 ) {
   modalObject = objectName;
   modalPresetValues = options.presetValues || {};
+  await loadLayoutForObject(objectName);
   const meta = OBJECT_META[objectName];
   $("modalObjIcon").innerHTML = objectIcon(objectName);
   $("modalTitle").textContent = title;
@@ -3292,7 +3649,10 @@ async function openRecordModal(
 
 async function getEditableFields(record, objectName = currentObject) {
   try {
-    const data = await api(`/api/${objectName}/fields`);
+    const [data] = await Promise.all([
+      api(`/api/${objectName}/fields`),
+      loadLayoutForObject(objectName)
+    ]);
     const layoutSections = getLayoutSections(objectName, data.fields || []);
     if (layoutSections.length)
       return layoutSections.flatMap((section) => section.fields);
@@ -3329,20 +3689,165 @@ async function getEditableFields(record, objectName = currentObject) {
   }
 }
 
+const COMPACT_LAYOUT_CACHE = {};
+
+function getCustomCompactFields(objectName) {
+  if (COMPACT_LAYOUT_CACHE[objectName]) {
+    return COMPACT_LAYOUT_CACHE[objectName];
+  }
+  return (
+    {
+      Account: ["Type", "Industry", "Phone", "BillingCity"],
+      Contact: ["Title", "Email", "Phone", "Account.Name"],
+      Lead: ["Company", "Status", "Email", "Phone"],
+      Opportunity: ["StageName", "Amount", "CloseDate", "Probability"],
+      Case: ["Status", "Priority", "Type", "CreatedDate"],
+      Campaign: ["Type", "Status", "StartDate", "EndDate"],
+      User: ["Email", "Username", "Title"],
+    }[objectName] ||
+    OBJECT_META[objectName]?.columns ||
+    []
+  );
+}
+
+function getResolvedCompactFields(objectName, fields) {
+  const allFields = fields || [];
+  return getCustomCompactFields(objectName)
+    .filter((field) => {
+      const baseName = field.split(".")[0];
+      return allFields.some(f => 
+        f.name.toLowerCase() === baseName.toLowerCase() || 
+        f.relationshipName?.toLowerCase() === baseName.toLowerCase() ||
+        (f.name.toLowerCase().endsWith("id") && f.name.toLowerCase().slice(0, -2) === baseName.toLowerCase())
+      );
+    });
+}
+
+async function loadCompactLayoutForObject(objectName) {
+  if (COMPACT_LAYOUT_CACHE[objectName]) {
+    return COMPACT_LAYOUT_CACHE[objectName];
+  }
+  try {
+    const res = await api(`/api/portal/compact-layouts/${objectName}`);
+    if (res && res.fields) {
+      COMPACT_LAYOUT_CACHE[objectName] = res.fields;
+      return res.fields;
+    }
+  } catch (err) {
+    console.warn(`Failed to fetch Supabase compact layout for ${objectName}:`, err);
+  }
+  return getCustomCompactFields(objectName);
+}
+
+const LAYOUT_CACHE = {};
+const DB_LAYOUT_CACHE = {};
+
+function normalizeLayoutData(layout) {
+  if (!Array.isArray(layout)) return [];
+  return layout.map(section => {
+    const normalized = {
+      title: section.title || "Information",
+      columns: typeof section.columns === "number" ? section.columns : 2,
+    };
+    if (section.leftFields) {
+      normalized.leftFields = [...section.leftFields];
+      normalized.rightFields = section.rightFields ? [...section.rightFields] : [];
+    } else if (section.fields) {
+      normalized.leftFields = [];
+      normalized.rightFields = [];
+      if (normalized.columns === 2) {
+        section.fields.forEach((f, idx) => {
+          if (idx % 2 === 0) {
+            normalized.leftFields.push(f);
+          } else {
+            normalized.rightFields.push(f);
+          }
+        });
+      } else {
+        normalized.leftFields = [...section.fields];
+      }
+    } else {
+      normalized.leftFields = [];
+      normalized.rightFields = [];
+    }
+    return normalized;
+  });
+}
+
+async function loadLayoutForObject(objectName) {
+  // Check memory cache of Supabase custom layout first
+  if (DB_LAYOUT_CACHE[objectName]) {
+    return DB_LAYOUT_CACHE[objectName];
+  }
+
+  try {
+    // 1. Fetch user custom layout from Supabase
+    const dbRes = await api(`/api/portal/layouts/${objectName}`);
+    if (dbRes && dbRes.layout) {
+      DB_LAYOUT_CACHE[objectName] = normalizeLayoutData(dbRes.layout);
+      return DB_LAYOUT_CACHE[objectName];
+    }
+  } catch (err) {
+    console.warn(`Failed to fetch Supabase custom layout for ${objectName}:`, err);
+  }
+
+  // 2. Fall back to Salesforce describe layout cache
+  if (LAYOUT_CACHE[objectName]) {
+    return LAYOUT_CACHE[objectName];
+  }
+
+  try {
+    // 3. Fetch layout from Salesforce
+    const res = await api(`/api/${objectName}/layouts`);
+    if (res && res.layouts) {
+      LAYOUT_CACHE[objectName] = normalizeLayoutData(res.layouts);
+      return LAYOUT_CACHE[objectName];
+    }
+  } catch (err) {
+    console.warn(`Failed to fetch Salesforce layout for ${objectName}, falling back to default.`, err);
+  }
+
+  LAYOUT_CACHE[objectName] = normalizeLayoutData(OBJECT_FIELD_LAYOUTS[objectName] || []);
+  return LAYOUT_CACHE[objectName];
+}
+
 function getLayoutSections(objectName, fields = []) {
-  const layout = OBJECT_FIELD_LAYOUTS[objectName];
+  // 1. Try Supabase custom layout from memory cache
+  let layout = DB_LAYOUT_CACHE[objectName];
+  // 2. Try Salesforce describe layout cache
+  if (!layout) {
+    layout = LAYOUT_CACHE[objectName];
+  }
+  // 3. Try hardcoded default layout
+  if (!layout) {
+    layout = OBJECT_FIELD_LAYOUTS[objectName];
+  }
   if (!layout) return [];
+
+  // Normalize layout to have columns, leftFields, rightFields
+  layout = normalizeLayoutData(layout);
+
   const fieldList = (fields || []).map((field) =>
     typeof field === "string" ? { name: field, label: labelFor(field) } : field,
   );
+  
   const resolved = layout
-    .map((section) => ({
-      title: section.title,
-      fields: section.fields
+    .map((section) => {
+      const leftResolved = (section.leftFields || [])
         .map((entry) => resolveLayoutField(entry, fieldList))
-        .filter(Boolean),
-    }))
-    .filter((section) => section.fields.length);
+        .filter(Boolean);
+      const rightResolved = (section.rightFields || [])
+        .map((entry) => resolveLayoutField(entry, fieldList))
+        .filter(Boolean);
+      return {
+        title: section.title,
+        columns: section.columns || 2,
+        leftFields: leftResolved,
+        rightFields: rightResolved,
+        fields: [...leftResolved, ...rightResolved],
+      };
+    })
+    .filter((section) => section.leftFields.length || section.rightFields.length);
   return resolved;
 }
 
@@ -3402,10 +3907,24 @@ function renderFormSections(sections, record, objectName = currentObject) {
   return sections
     .map(
       (section) => `
-    <section class="form-section">
-      <div class="form-section-title">${utilityIconSvg("chevronDown")}<span>${escapeHtml(section.title)}</span></div>
-      <div class="form-grid">
-        ${section.fields.map((field) => renderFieldControl(field.name, record, field, objectName)).join("")}
+    <section class="form-section" style="margin-bottom: 24px;">
+      <div class="form-section-title" style="margin-bottom: 12px; font-weight: 700; font-size: 14px; color: var(--text-1, #1e293b); display: flex; align-items: center; gap: 8px;">
+        ${utilityIconSvg("chevronDown")}<span>${escapeHtml(section.title)}</span>
+      </div>
+      <div class="form-grid-container">
+        ${section.columns === 1 
+          ? `<div class="form-grid-col-1" style="display: flex; flex-direction: column; gap: 14px;">
+               ${(section.leftFields || []).map((field) => renderFieldControl(field.name, record, field, objectName)).join("")}
+             </div>`
+          : `<div class="form-grid-col-2" style="display: grid; grid-template-columns: 1fr 1fr; gap: 14px 20px;">
+               <div style="display: flex; flex-direction: column; gap: 14px;">
+                 ${(section.leftFields || []).map((field) => renderFieldControl(field.name, record, field, objectName)).join("")}
+               </div>
+               <div style="display: flex; flex-direction: column; gap: 14px;">
+                 ${(section.rightFields || []).map((field) => renderFieldControl(field.name, record, field, objectName)).join("")}
+               </div>
+             </div>`
+        }
       </div>
     </section>
   `,
@@ -3744,7 +4263,11 @@ async function openRecordDetail(objectName, id) {
     `;
     viewingDetail = true;
 
-    const data = await api(`/api/${objectName}/${id}`);
+    const [data] = await Promise.all([
+      api(`/api/${objectName}/${id}`),
+      loadLayoutForObject(objectName),
+      loadCompactLayoutForObject(objectName)
+    ]);
     const record = data.record || {};
     const fields = data.fields || [];
     detailLookupLabels = data.lookupLabels || {};
@@ -3809,9 +4332,7 @@ function renderRecordDetailPage(
   title,
   id,
 ) {
-  const summaryFields = getSummaryFields(objectName)
-    .filter((field) => getValue(record, field) !== undefined)
-    .slice(0, 4);
+  const summaryFields = getResolvedCompactFields(objectName, fields);
   const canEditThisRecord = currentDetailCanEdit();
   $("content").innerHTML = `
     <div class="record-page">
@@ -3824,11 +4345,19 @@ function renderRecordDetailPage(
               <h1 class="page-title">${escapeHtml(title)}</h1>
             </div>
           </div>
-          <div class="page-actions">
+          <div class="page-actions" style="display: flex; gap: 8px; align-items: center;">
             <button class="btn btn-ghost" onclick="restoreListContent()">Back</button>
             ${canDo(objectName, "can_edit") && canEditThisRecord
               ? '<button class="btn btn-primary" onclick="editCurrentDetailRecord()">Edit</button>'
               : ""}
+            <button class="btn btn-ghost" 
+                    style="display: inline-flex; align-items: center; justify-content: center; width: 34px; height: 34px; padding: 0; cursor: pointer;" 
+                    onclick="openCustomizeCompactLayoutModal()" 
+                    title="Customize Compact Layout">
+              <span style="display: flex; width: 16px; height: 16px; align-items: center; justify-content: center; fill: currentColor;">
+                ${utilityIconSvg("settings")}
+              </span>
+            </button>
           </div>
         </div>
         <div class="record-summary">
@@ -3847,15 +4376,24 @@ function renderRecordDetailPage(
 
       <div class="record-layout">
         <section class="record-main">
-          <div class="record-tabs">
-            <button class="record-tab active" id="tabRelatedBtn" onclick="showRecordTab('related')">Related</button>
-            <button class="record-tab" id="tabDetailsBtn" onclick="showRecordTab('details')">Details</button>
+          <div class="record-tabs" style="display: flex; justify-content: space-between; align-items: center;">
+            <div style="display: flex; gap: 16px;">
+              <button class="record-tab active" id="tabRelatedBtn" onclick="showRecordTab('related')">Related</button>
+              <button class="record-tab" id="tabDetailsBtn" onclick="showRecordTab('details')">Details</button>
+            </div>
+            <div id="recordTabActions" style="display: none; padding: 6px 0;">
+              <button class="btn btn-ghost btn-sm" onclick="startRearrangingFields()" style="display: inline-flex; align-items: center; gap: 6px;">
+                ${utilityIconSvg("settings")} Rearrange Fields
+              </button>
+            </div>
           </div>
           <div id="recordRelatedPanel" class="record-tab-panel">
             ${renderRelatedPanel(objectName)}
           </div>
           <div id="recordDetailsPanel" class="record-tab-panel" style="display:none">
-            ${renderConfiguredDetailSections(objectName, record, fields, displayFields)}
+            <div id="detailsContent">
+              ${renderConfiguredDetailSections(objectName, record, fields, displayFields)}
+            </div>
           </div>
         </section>
         <aside class="record-side">
@@ -3914,14 +4452,43 @@ function renderConfiguredDetailSections(
     .map(
       (section) => `
     <section class="detail-section">
-      <div class="detail-section-title">${utilityIconSvg("chevronDown")}<span>${escapeHtml(section.title)}</span></div>
-      <div class="detail-grid">
-        ${section.fields.map((field) => renderDetailField(objectName, record, field)).join("")}
+      <div class="detail-section-title" style="cursor: pointer; user-select: none;" onclick="toggleDetailSection(this)">
+        ${utilityIconSvg("chevronDown")}<span>${escapeHtml(section.title)}</span>
+      </div>
+      <div class="detail-grid-container">
+        ${section.columns === 1 
+          ? `<div class="detail-grid cols-1">
+               ${(section.leftFields || []).map((field) => renderDetailField(objectName, record, field)).join("")}
+             </div>`
+          : `<div class="detail-grid cols-2">
+               <div class="detail-column-side">
+                 ${(section.leftFields || []).map((field) => renderDetailField(objectName, record, field)).join("")}
+               </div>
+               <div class="detail-column-side">
+                 ${(section.rightFields || []).map((field) => renderDetailField(objectName, record, field)).join("")}
+               </div>
+             </div>`
+        }
       </div>
     </section>
   `,
     )
     .join("");
+}
+
+function toggleDetailSection(titleEl) {
+  const section = titleEl.closest(".detail-section");
+  if (!section) return;
+  const container = section.querySelector(".detail-grid-container");
+  const svg = titleEl.querySelector("svg");
+  const isCollapsed = section.classList.toggle("collapsed");
+  if (isCollapsed) {
+    if (container) container.style.display = "none";
+    if (svg) svg.style.transform = "rotate(-90deg)";
+  } else {
+    if (container) container.style.display = "";
+    if (svg) svg.style.transform = "";
+  }
 }
 
 function getSummaryFields(objectName) {
@@ -4638,6 +5205,11 @@ function showRecordTab(name) {
   $("recordDetailsPanel").style.display = name === "details" ? "block" : "none";
   $("tabRelatedBtn").classList.toggle("active", name === "related");
   $("tabDetailsBtn").classList.toggle("active", name === "details");
+  
+  const actions = $("recordTabActions");
+  if (actions) {
+    actions.style.display = name === "details" ? "block" : "none";
+  }
   captureCrmPageState(currentObject);
 }
 
@@ -6260,119 +6832,277 @@ async function openCampaignMemberModal(objectName) {
   if (!canReadObject("Campaign") || !canReadObject(objectName)) return;
   memberCandidateObject = objectName;
   memberCandidateSelection = new Set();
+  memberCandidateFilters = [];
+  memberCandidatePage = 0;
+  memberCandidateTotal = 0;
   $("campaignMemberTitle").textContent = `Add ${objectName}s to Campaign`;
   $("campaignMemberSearch").value = "";
   $("campaignMemberOverlay").classList.add("open");
-  await loadCampaignCandidates("");
+  const fSel = $("filterFieldSelect");
+  if (fSel) fSel.innerHTML = "<option>Loading fields...</option>";
+  try {
+    const d = await api(`/api/metadata/filterable-fields/${objectName}`);
+    memberCandidateFields = d.fields || [];
+    if (objectName === "Contact") {
+      memberCandidateFields.unshift(
+        { name: "Account.Name", label: "Account Name", type: "string", picklistValues: [] },
+        { name: "Account.Industry", label: "Account Industry", type: "string", picklistValues: [] }
+      );
+    }
+    if (fSel) fSel.innerHTML = memberCandidateFields.map(f => `<option value="${f.name}">${escapeHtml(f.label)}</option>`).join("");
+    if (memberCandidateFields.length) onFilterFieldChange(memberCandidateFields[0].name);
+    renderActiveFilters();
+    await loadCampaignCandidates();
+  } catch (err) {
+    toast(`Failed to load fields: ${err.message}`, "err");
+    await loadCampaignCandidates();
+  }
 }
 
 function closeCampaignMemberModal() {
   $("campaignMemberOverlay").classList.remove("open");
 }
 
-function searchCampaignCandidates(value) {
-  clearTimeout(lookupTimer);
-  lookupTimer = setTimeout(() => loadCampaignCandidates(value), 300);
+function onFilterFieldChange(fieldName) {
+  const fm = memberCandidateFields.find(f => f.name === fieldName);
+  if (!fm) return;
+  const opSel = $("filterOperatorSelect");
+  const t = fm.type;
+  let ops;
+  if (t === "boolean") {
+    ops = [
+      {v:"equals",l:"equals"},
+      {v:"not_equal",l:"not equal"},
+      {v:"is_null",l:"is empty/blank"},
+      {v:"is_not_null",l:"has value"}
+    ];
+  } else if (["double","integer","currency","percent","date","datetime"].includes(t)) {
+    ops = [
+      {v:"equals",l:"equals"},
+      {v:"not_equal",l:"not equal"},
+      {v:"greater_than",l:"greater than"},
+      {v:"less_than",l:"less than"},
+      {v:"is_null",l:"is empty/blank"},
+      {v:"is_not_null",l:"has value"}
+    ];
+  } else if (t === "picklist") {
+    ops = [
+      {v:"equals",l:"equals"},
+      {v:"not_equal",l:"not equal"},
+      {v:"is_null",l:"is empty/blank"},
+      {v:"is_not_null",l:"has value"}
+    ];
+  } else {
+    ops = [
+      {v:"contains",l:"contains"},
+      {v:"equals",l:"equals"},
+      {v:"starts_with",l:"starts with"},
+      {v:"not_equal",l:"not equal"},
+      {v:"is_null",l:"is empty/blank"},
+      {v:"is_not_null",l:"has value"}
+    ];
+  }
+  if (opSel) opSel.innerHTML = ops.map(o => `<option value="${o.v}">${o.l}</option>`).join("");
+  onFilterOperatorChange();
 }
 
-async function loadCampaignCandidates(search) {
+function onFilterOperatorChange() {
+  const opSel = $("filterOperatorSelect");
+  const valC = $("filterValueContainer");
+  if (!opSel || !valC) return;
+  const op = opSel.value;
+  if (op === "is_null" || op === "is_not_null") {
+    valC.innerHTML = `<input type="text" id="filterValueInput" class="form-ctrl" value="" disabled placeholder="No value needed">`;
+  } else {
+    const fSel = $("filterFieldSelect");
+    if (!fSel) return;
+    const fm = memberCandidateFields.find(f => f.name === fSel.value);
+    if (!fm) return;
+    const t = fm.type;
+    if (t === "boolean") {
+      valC.innerHTML = `<select id="filterValueInput" class="form-ctrl"><option value="true">True</option><option value="false">False</option></select>`;
+    } else if (t === "picklist" && fm.picklistValues?.length) {
+      valC.innerHTML = `<select id="filterValueInput" class="form-ctrl">${fm.picklistValues.map(p => `<option value="${escapeHtml(p.value)}">${escapeHtml(p.label)}</option>`).join("")}</select>`;
+    } else if (t === "date" || t === "datetime") {
+      valC.innerHTML = `<input type="date" id="filterValueInput" class="form-ctrl">`;
+    } else {
+      valC.innerHTML = `<input type="text" id="filterValueInput" class="form-ctrl" placeholder="Value...">`;
+    }
+  }
+}
+
+function addFilterCondition() {
+  const fSel = $("filterFieldSelect"), opSel = $("filterOperatorSelect"), valEl = $("filterValueInput");
+  if (!fSel?.value || !opSel?.value) return;
+  const fm = memberCandidateFields.find(f => f.name === fSel.value);
+  if (!fm) return;
+  const op = opSel.value;
+  const isNullOp = (op === "is_null" || op === "is_not_null");
+  const val = isNullOp ? "" : (valEl?.value || "").trim();
+  if (!isNullOp && !val) { toast("Enter a filter value", "err"); return; }
+  
+  let displayVal = val;
+  if (isNullOp) {
+    displayVal = "";
+  } else if (valEl.tagName === "SELECT") {
+    displayVal = valEl.options[valEl.selectedIndex]?.text || val;
+  }
+  
+  memberCandidateFilters.push({
+    field: fSel.value, fieldLabel: fm.label,
+    operator: op, operatorLabel: opSel.options[opSel.selectedIndex]?.text || op,
+    value: val, displayValue: displayVal
+  });
+  if (valEl.tagName === "INPUT" && !valEl.disabled) valEl.value = "";
+  renderActiveFilters();
+  memberCandidatePage = 0;
+  loadCampaignCandidates();
+}
+
+function removeFilter(i) {
+  memberCandidateFilters.splice(i, 1);
+  renderActiveFilters();
+  memberCandidatePage = 0;
+  loadCampaignCandidates();
+}
+
+function clearAllFilters() {
+  memberCandidateFilters = [];
+  renderActiveFilters();
+  memberCandidatePage = 0;
+  loadCampaignCandidates();
+}
+
+function renderActiveFilters() {
+  const c = $("activeFiltersList");
+  if (!c) return;
+  if (!memberCandidateFilters.length) {
+    c.innerHTML = `<div class="filter-empty-state">No active filters</div>`;
+    return;
+  }
+  c.innerHTML = memberCandidateFilters.map((f, i) => {
+    const detail = (f.operator === "is_null" || f.operator === "is_not_null")
+      ? escapeHtml(f.operatorLabel)
+      : `${escapeHtml(f.operatorLabel)} "${escapeHtml(f.displayValue)}"`;
+    return `
+      <div class="active-filter-pill">
+        <div class="filter-pill-body">
+          <span class="filter-pill-field">${escapeHtml(f.fieldLabel)}</span>
+          <span class="filter-pill-detail">${detail}</span>
+        </div>
+        <button class="filter-pill-remove" onclick="removeFilter(${i})" title="Remove">&times;</button>
+      </div>
+    `;
+  }).join("");
+}
+
+function searchCampaignCandidates(value) {
+  clearTimeout(lookupTimer);
+  lookupTimer = setTimeout(() => { memberCandidatePage = 0; loadCampaignCandidates(); }, 400);
+}
+
+async function loadCampaignCandidates() {
   const box = $("campaignMemberCandidates");
   box.innerHTML = '<div class="state-box compact">Loading records...</div>';
   try {
-    const data = await api(
-      `/api/campaigns/${activeCampaign.Id}/candidates/${memberCandidateObject}?search=${encodeURIComponent(search || "")}`,
-    );
+    const sv = $("campaignMemberSearch")?.value?.trim() || "";
+    const off = memberCandidatePage * memberCandidateLimit;
+    const url = `/api/campaigns/${activeCampaign.Id}/candidates/${memberCandidateObject}?search=${encodeURIComponent(sv)}&limit=${memberCandidateLimit}&offset=${off}&filters=${encodeURIComponent(JSON.stringify(memberCandidateFilters))}`;
+    const data = await api(url);
     const records = data.records || [];
     currentCampaignCandidates = records;
-    $("campaignMemberSelectedCount").textContent =
-      `${memberCandidateSelection.size} selected`;
+    memberCandidateTotal = data.totalSize || 0;
     box.innerHTML = renderCampaignCandidateTable(records);
+    const s = memberCandidateTotal === 0 ? 0 : off + 1;
+    const e = Math.min(off + memberCandidateLimit, memberCandidateTotal);
+    const pgInfo = $("candidatePaginationInfo");
+    if (pgInfo) pgInfo.textContent = `Showing ${s}\u2013${e} of ${memberCandidateTotal.toLocaleString()}`;
+    const prev = $("prevCandidatePageBtn"), next = $("nextCandidatePageBtn");
+    if (prev) prev.disabled = memberCandidatePage === 0;
+    if (next) next.disabled = e >= memberCandidateTotal;
+    updateCandidateSelectionUI();
   } catch (err) {
     box.innerHTML = `<div class="error-state compact"><p>${escapeHtml(err.message)}</p></div>`;
   }
 }
 
+function updateCandidateSelectionUI() {
+  const sz = memberCandidateSelection.size;
+  const el = $("campaignMemberSelectedCount");
+  if (el) el.textContent = `${sz} selected`;
+  const cb = $("clearCandidateSelectionBtn");
+  if (cb) cb.style.display = sz > 0 ? "inline-flex" : "none";
+}
+
+function changeCandidatePage(delta) {
+  const np = memberCandidatePage + delta;
+  if (np < 0) return;
+  if (delta > 0 && (memberCandidatePage + 1) * memberCandidateLimit >= memberCandidateTotal) return;
+  memberCandidatePage = np;
+  loadCampaignCandidates();
+}
+
+function clearCandidateSelection() {
+  memberCandidateSelection = new Set();
+  updateCandidateSelectionUI();
+  $("campaignMemberCandidates").innerHTML = renderCampaignCandidateTable(currentCampaignCandidates);
+}
+
 function renderCampaignCandidateTable(records) {
   if (!records.length)
-    return '<div class="table-empty"><h3>No records found</h3><p>Try another search.</p></div>';
+    return '<div class="table-empty"><h3>No records found</h3><p>Try a different search or filter.</p></div>';
   const isContact = memberCandidateObject === "Contact";
-  const selectable = records.filter((record) => !record.alreadyMember);
-  const allVisibleSelected =
-    selectable.length > 0 &&
-    selectable.every((record) => memberCandidateSelection.has(record.Id));
+  const selectable = records.filter(r => !r.alreadyMember);
+  const allSel = selectable.length > 0 && selectable.every(r => memberCandidateSelection.has(r.Id));
   return `
     <table class="mini-table">
-      <thead>
-        <tr>
-          <th><input type="checkbox" aria-label="Select all visible records" ${allVisibleSelected ? "checked" : ""} onchange="toggleAllCandidateSelection(this.checked)"></th>
-          <th>Name</th>
-          <th>${isContact ? "Account" : "Company"}</th>
-          <th>Phone</th>
-          <th>Email</th>
-          <th>${isContact ? "Title" : "Status"}</th>
-        </tr>
-      </thead>
+      <thead><tr>
+        <th><input type="checkbox" aria-label="Select all" ${allSel ? "checked" : ""} onchange="toggleAllCandidateSelection(this.checked)"></th>
+        <th>Name</th><th>${isContact ? "Account" : "Company"}</th><th>Phone</th><th>Email</th><th>${isContact ? "Title" : "Status"}</th>
+      </tr></thead>
       <tbody>
-        ${records
-          .map(
-            (record) => `
-          <tr class="${record.alreadyMember ? "muted-row" : ""}">
-            <td><input type="checkbox" value="${record.Id}" ${memberCandidateSelection.has(record.Id) ? "checked" : ""} ${record.alreadyMember ? "disabled" : ""} onchange="toggleCandidateSelection('${record.Id}', this.checked)"></td>
-            <td>${escapeHtml(record.Name || "-")}</td>
-            <td>${escapeHtml(isContact ? record.Account?.Name || "-" : record.Company || "-")}</td>
-            <td>${escapeHtml(record.Phone || "-")}</td>
-            <td>${record.Email ? `<a class="cell-email" href="mailto:${escapeHtml(record.Email)}">${escapeHtml(record.Email)}</a>` : '<span class="cell-empty">-</span>'}</td>
-            <td>${escapeHtml((isContact ? record.Title : record.Status) || (record.alreadyMember ? "Already member" : "-"))}</td>
+        ${records.map(r => `
+          <tr class="${r.alreadyMember ? "muted-row" : ""}">
+            <td><input type="checkbox" value="${r.Id}" ${memberCandidateSelection.has(r.Id) ? "checked" : ""} ${r.alreadyMember ? "disabled" : ""} onchange="toggleCandidateSelection('${r.Id}', this.checked)"></td>
+            <td>${escapeHtml(r.Name || "-")}</td>
+            <td>${escapeHtml(isContact ? r.Account?.Name || "-" : r.Company || "-")}</td>
+            <td>${escapeHtml(r.Phone || "-")}</td>
+            <td>${r.Email ? `<a class="cell-email" href="mailto:${escapeHtml(r.Email)}">${escapeHtml(r.Email)}</a>` : '<span class="cell-empty">-</span>'}</td>
+            <td>${escapeHtml((isContact ? r.Title : r.Status) || (r.alreadyMember ? "Already member" : "-"))}</td>
           </tr>
-        `,
-          )
-          .join("")}
+        `).join("")}
       </tbody>
-    </table>
-  `;
+    </table>`;
 }
 
 function toggleCandidateSelection(id, checked) {
   if (checked) memberCandidateSelection.add(id);
   else memberCandidateSelection.delete(id);
-  $("campaignMemberSelectedCount").textContent =
-    `${memberCandidateSelection.size} selected`;
+  updateCandidateSelectionUI();
 }
 
 function toggleAllCandidateSelection(checked) {
-  currentCampaignCandidates
-    .filter((record) => !record.alreadyMember)
-    .forEach((record) => {
-      if (checked) memberCandidateSelection.add(record.Id);
-      else memberCandidateSelection.delete(record.Id);
-    });
-  $("campaignMemberSelectedCount").textContent =
-    `${memberCandidateSelection.size} selected`;
-  $("campaignMemberCandidates").innerHTML = renderCampaignCandidateTable(
-    currentCampaignCandidates,
-  );
+  currentCampaignCandidates.filter(r => !r.alreadyMember).forEach(r => {
+    if (checked) memberCandidateSelection.add(r.Id);
+    else memberCandidateSelection.delete(r.Id);
+  });
+  updateCandidateSelectionUI();
+  $("campaignMemberCandidates").innerHTML = renderCampaignCandidateTable(currentCampaignCandidates);
 }
 
 async function addSelectedCampaignMembers() {
   const ids = [...memberCandidateSelection];
-  if (!ids.length) {
-    toast("Select at least one record", "err");
-    return;
-  }
+  if (!ids.length) { toast("Select at least one record", "err"); return; }
   try {
     $("addCampaignMembersBtn").disabled = true;
     const result = await api(`/api/campaigns/${activeCampaign.Id}/members`, {
-      method: "POST",
-      body: JSON.stringify({ object: memberCandidateObject, ids }),
+      method: "POST", body: JSON.stringify({ object: memberCandidateObject, ids }),
     });
     toast(`${result.created || 0} members added`, "ok");
     closeCampaignMemberModal();
     await loadCampaignMembers(activeCampaign.Id);
-  } catch (err) {
-    toast(err.message, "err");
-  } finally {
-    $("addCampaignMembersBtn").disabled = false;
-  }
+  } catch (err) { toast(err.message, "err"); }
+  finally { $("addCampaignMembersBtn").disabled = false; }
 }
 
 async function openCampaignEmailModal() {
@@ -6656,67 +7386,615 @@ async function confirmDelete() {
   }
 }
 
-function openListViewModal() {
+async function openListViewModal() {
   const meta = OBJECT_META[currentObject];
+  await loadObjectFields(currentObject);
+  const editingView = getCurrentLocalView();
+  const defaultColumns = normalizePortalColumns(editingView?.columns || meta.columns);
+  const logicVal = editingView?.filterLogic || "AND";
+  const isStandardLogic = ["AND", "OR"].includes(logicVal.toUpperCase());
+  listViewDraft = {
+    id: editingView?.id || `${Date.now()}`,
+    isEditing: Boolean(editingView),
+    name: editingView?.name || "",
+    visibility: editingView?.visibility || "private",
+    pageSize: editingView?.pageSize || RENDER_CHUNK_SIZE,
+    columns: defaultColumns,
+    filters: [...(editingView?.filters || [])],
+    filterLogicType: isStandardLogic ? logicVal.toUpperCase() : "CUSTOM",
+    customFilterLogic: isStandardLogic ? "" : logicVal,
+    sort: editingView?.sort || sortState || null,
+    createdAt: editingView?.createdAt,
+    selectedField: null,
+    selectedSide: null,
+  };
+  const fieldOptions = getCachedObjectFields(currentObject)
+    .map((field) => `<option value="${escapeHtml(field.name)}">${escapeHtml(field.label)}</option>`)
+    .join("");
+  const title = $("listViewModalTitle");
+  if (title) title.textContent = editingView ? "Edit List View" : "Create List View";
   $("listViewBody").innerHTML = `
-    <div class="form-grid">
-      <div class="form-group span-2">
+    <div class="lv-builder">
+      <div class="lv-top-grid">
+        <div class="form-group">
         <label class="form-label" for="viewName">List View Name</label>
-        <input class="form-ctrl" id="viewName" placeholder="Example: Key Accounts">
-      </div>
-      <div class="form-group span-2">
-        <label class="form-label" for="viewSearch">Contains Text</label>
-        <input class="form-ctrl" id="viewSearch" placeholder="Optional filter text">
-      </div>
-      <div class="form-group span-2">
-        <label class="form-label">Columns</label>
-        <div class="check-grid">
-          ${meta.columns
-            .concat(meta.editable)
-            .filter((v, i, arr) => arr.indexOf(v) === i)
-            .map(
-              (field) => `
-            <label class="check-item">
-              <input type="checkbox" value="${field}" ${meta.columns.includes(field) ? "checked" : ""}>
-              <span>${labelFor(field)}</span>
-            </label>
-          `,
-            )
-            .join("")}
+          <input class="form-ctrl" id="viewName" value="${escapeHtml(listViewDraft.name)}" placeholder="Example: Key Accounts">
         </div>
+        <div class="form-group">
+          <label class="form-label" for="viewVisibility">Visibility</label>
+          <select class="form-ctrl" id="viewVisibility">
+            <option value="private" ${listViewDraft.visibility === "private" ? "selected" : ""}>Private</option>
+            <option value="public" ${listViewDraft.visibility === "public" ? "selected" : ""}>Public</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="viewPageSize">Page Size</label>
+          <select class="form-ctrl" id="viewPageSize">
+            ${[25, 50, 100, 200].map((size) => `<option value="${size}" ${Number(listViewDraft.pageSize) === size ? "selected" : ""}>${size} rows</option>`).join("")}
+          </select>
+        </div>
+      </div>
+
+      <div class="lv-section-title">Select Fields to Display</div>
+      <div class="lv-dual-list">
+        <div class="lv-list-panel">
+          <div class="lv-list-heading">
+            <label class="form-label" for="lvAvailableSearch">Available Fields</label>
+            <span id="lvAvailableCount"></span>
+          </div>
+          <input class="form-ctrl lv-search" id="lvAvailableSearch" placeholder="Search fields..." oninput="renderListViewFieldLists()">
+          <div class="lv-field-list" id="lvAvailableFields"></div>
+        </div>
+        <div class="lv-transfer">
+          <button class="icon-btn" type="button" title="Add field" onclick="moveListViewDraftField('add')">›</button>
+          <button class="icon-btn" type="button" title="Remove field" onclick="moveListViewDraftField('remove')">‹</button>
+          <button class="icon-btn" type="button" title="Move up" onclick="moveListViewDraftField('up')">▲</button>
+          <button class="icon-btn" type="button" title="Move down" onclick="moveListViewDraftField('down')">▼</button>
+        </div>
+        <div class="lv-list-panel">
+          <div class="lv-list-heading">
+            <label class="form-label">Visible Fields</label>
+            <span id="lvVisibleCount"></span>
+          </div>
+          <div class="lv-field-list" id="lvVisibleFields"></div>
+        </div>
+      </div>
+
+      <div class="lv-filter-builder">
+        <div class="lv-section-title">Filters</div>
+        <div class="lv-filter-row">
+          <select class="form-ctrl" id="lvFilterField" onchange="syncListViewFilterOperators()">${fieldOptions}</select>
+          <select class="form-ctrl" id="lvFilterOperator"></select>
+          <input class="form-ctrl" id="lvFilterValue" placeholder="Value">
+          <button class="btn btn-ghost" type="button" onclick="addListViewDraftFilter()">Add Filter</button>
+          <select class="form-ctrl compact" id="lvFilterLogicType" onchange="handleFilterLogicTypeChange(this.value)">
+            <option value="AND" ${listViewDraft.filterLogicType === "AND" ? "selected" : ""}>AND</option>
+            <option value="OR" ${listViewDraft.filterLogicType === "OR" ? "selected" : ""}>OR</option>
+            <option value="CUSTOM" ${listViewDraft.filterLogicType === "CUSTOM" ? "selected" : ""}>Custom</option>
+          </select>
+        </div>
+        <div class="form-group" id="lvCustomLogicContainer" style="display: ${listViewDraft.filterLogicType === 'CUSTOM' ? 'flex' : 'none'}; margin-top: 12px; gap: 5px;">
+          <label class="form-label" for="lvCustomFilterLogic">Filter Logic</label>
+          <input class="form-ctrl" id="lvCustomFilterLogic" value="${escapeHtml(listViewDraft.customFilterLogic || '')}" placeholder="Example: 1 AND (2 OR 3)">
+        </div>
+        <div class="lv-filter-list" id="lvFilterList"></div>
       </div>
     </div>
   `;
+  renderListViewFieldLists();
+  syncListViewFilterOperators();
+  renderListViewFilterBuilder();
   $("listViewOverlay").classList.add("open");
 }
 
 function closeListViewModal() {
   $("listViewOverlay").classList.remove("open");
+  listViewDraft = null;
 }
 
-function saveLocalListView() {
+function handleFilterLogicTypeChange(value) {
+  if (!listViewDraft) return;
+  listViewDraft.filterLogicType = value;
+  const container = $("lvCustomLogicContainer");
+  if (container) {
+    container.style.display = value === "CUSTOM" ? "flex" : "none";
+  }
+}
+
+function persistPortalListView(view) {
+  const views = getLocalViews();
+  views[currentObject] = views[currentObject] || [];
+  const index = views[currentObject].findIndex((item) => item.id === view.id);
+  if (index >= 0) views[currentObject][index] = view;
+  else views[currentObject].push(view);
+  setLocalViews(views);
+}
+
+function removePortalListView(viewId) {
+  const views = getLocalViews();
+  if (!Array.isArray(views[currentObject])) return;
+  views[currentObject] = views[currentObject].filter((item) => item.id !== viewId);
+  setLocalViews(views);
+}
+
+function buildListViewSaveDraft() {
+  if (!listViewDraft) return;
   const name = $("viewName").value.trim();
   if (!name) {
     toast("List view name is required", "err");
+    return null;
+  }
+  const columns = normalizePortalColumns(listViewDraft.columns);
+  if (!columns.length) {
+    toast("Select at least one visible field", "err");
+    return null;
+  }
+  const existing = listViewDraft.isEditing && !listViewDraft.sfDeveloperName
+    ? objectLocalViews().find((item) => item.id === listViewDraft.id)
+    : {};
+  const logicType = $("lvFilterLogicType")?.value || listViewDraft.filterLogicType || "AND";
+  const customLogic = $("lvCustomFilterLogic")?.value || listViewDraft.customFilterLogic || "";
+  const filterLogic = logicType === "CUSTOM" ? customLogic.trim() : logicType;
+
+  return {
+    ...existing,
+    id: listViewDraft.id,
+    version: 2,
+    name,
+    visibility: $("viewVisibility")?.value || "private",
+    objectName: currentObject,
+    columns,
+    filters: listViewDraft.filters || [],
+    filterLogic,
+    pageSize: Number($("viewPageSize")?.value || RENDER_CHUNK_SIZE),
+    sort: listViewDraft.sort || sortState || null,
+    createdAt: listViewDraft.createdAt || new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    sfDeveloperName: listViewDraft.sfDeveloperName || null,
+  };
+}
+
+function setListViewSaveBusy(isBusy) {
+  const button = $("listViewSaveBtn");
+  if (!button) return;
+  if (isBusy) {
+    button.dataset.originalText = button.textContent;
+    button.disabled = true;
+    button.innerHTML = '<span class="btn-spinner"></span> Saving...';
+  } else {
+    button.disabled = false;
+    button.textContent = button.dataset.originalText || "Save View";
+  }
+}
+
+async function syncPortalListViewToSalesforce(view) {
+  const method = view.sfDeveloperName ? "PATCH" : "POST";
+  const url = view.sfDeveloperName
+    ? `/api/${currentObject}/listviews/${view.sfDeveloperName}`
+    : `/api/${currentObject}/listviews`;
+
+  return api(url, {
+    method,
+    body: JSON.stringify({
+      name: view.name,
+      visibility: view.visibility,
+      columns: view.columns,
+      filters: view.filters,
+      filterLogic: view.filterLogic,
+      sort: view.sort,
+    }),
+  });
+}
+
+async function saveLocalListView() {
+  const view = buildListViewSaveDraft();
+  if (!view) return;
+
+  setListViewSaveBusy(true);
+  try {
+    const result = await syncPortalListViewToSalesforce(view);
+    if (!result?.synced) throw new Error("Salesforce did not confirm list view sync");
+
+    if (!view.sfDeveloperName) {
+      removePortalListView(view.id);
+    }
+    invalidateCrmObjectCache(currentObject);
+    await loadListViews();
+    const salesforceId = result.listView?.id || (view.sfDeveloperName ? view.id : null);
+    const matchedView = salesforceId
+      ? sfListViews.find((item) => item.id === salesforceId)
+      : sfListViews.find((item) => cleanListViewLabel(item.label) === cleanListViewLabel(view.name));
+    currentViewId = matchedView?.id ? `sf:${matchedView.id}` : "all";
+    sortState = view.sort || { field: null, direction: "asc" };
+    closeListViewModal();
+    renderListViewSelect();
+    toast("List view saved in Salesforce", "ok");
+    loadData({ forceRefresh: true });
+  } catch (err) {
+    if (view.sfDeveloperName) {
+      const message = err?.message || "Salesforce rejected this list view update";
+      toast(`Update failed: ${message}`, "err", 9000);
+    } else {
+      persistPortalListView(view);
+      currentViewId = `local:${view.id}`;
+      sortState = view.sort || { field: null, direction: "asc" };
+      closeListViewModal();
+      renderListViewSelect();
+      const message = err?.message || "Salesforce rejected this list view";
+      toast(`Saved in portal only. Salesforce sync failed: ${message}`, "err", 9000);
+      loadData({ forceRefresh: true });
+    }
+  } finally {
+    setListViewSaveBusy(false);
+  }
+}
+
+function mapSalesforceFilterToPortal(sfFilter) {
+  const field = sfFilter.fieldApiName;
+  const sfOperator = sfFilter.operator;
+  const operandLabels = sfFilter.operandLabels || [];
+  const val = operandLabels[0] || "";
+
+  let operator = "equals";
+  let value = val;
+
+  const sfOperatorLower = String(sfOperator).toLowerCase();
+
+  if (sfOperatorLower === "equals" || sfOperatorLower === "equal") {
+    if (val === "") {
+      operator = "blank";
+      value = "";
+    } else if (val.toLowerCase() === "true") {
+      operator = "true";
+      value = "";
+    } else if (val.toLowerCase() === "false") {
+      operator = "false";
+      value = "";
+    } else if (val.toUpperCase() === "TODAY") {
+      operator = "today";
+      value = "";
+    } else if (val.toUpperCase() === "YESTERDAY") {
+      operator = "yesterday";
+      value = "";
+    } else if (val.toUpperCase() === "LAST_N_DAYS:7") {
+      operator = "last_7_days";
+      value = "";
+    } else if (val.toUpperCase() === "LAST_N_DAYS:30") {
+      operator = "last_30_days";
+      value = "";
+    } else if (val.toUpperCase() === "THIS_MONTH") {
+      operator = "this_month";
+      value = "";
+    } else if (val.toUpperCase() === "LAST_MONTH") {
+      operator = "last_month";
+      value = "";
+    } else {
+      operator = "equals";
+    }
+  } else if (sfOperatorLower === "notequal") {
+    if (val === "") {
+      operator = "not_blank";
+      value = "";
+    } else {
+      operator = "not_equals";
+    }
+  } else if (sfOperatorLower === "contains") {
+    operator = "contains";
+  } else if (sfOperatorLower === "notcontains") {
+    operator = "not_contains";
+  } else if (sfOperatorLower === "startswith") {
+    operator = "starts_with";
+  } else if (sfOperatorLower === "endswith") {
+    operator = "ends_with";
+  } else if (sfOperatorLower === "greaterthan") {
+    operator = "gt";
+  } else if (sfOperatorLower === "greaterorequal") {
+    operator = "gte";
+  } else if (sfOperatorLower === "lessthan") {
+    operator = "lt";
+  } else if (sfOperatorLower === "lessorequal") {
+    operator = "lte";
+  }
+
+  return { field, operator, value };
+}
+
+async function editCurrentListView() {
+  if (!currentViewId || currentViewId === "all") return;
+
+  if (currentViewId.startsWith("local:")) {
+    openListViewModal();
     return;
   }
-  const columns = [
-    ...$("listViewBody").querySelectorAll('input[type="checkbox"]:checked'),
-  ].map((input) => input.value);
-  const views = getLocalViews();
-  views[currentObject] = views[currentObject] || [];
-  const view = {
-    id: `${Date.now()}`,
-    name,
-    search: $("viewSearch").value.trim(),
-    columns: columns.length ? columns : OBJECT_META[currentObject].columns,
-  };
-  views[currentObject].push(view);
-  setLocalViews(views);
-  currentViewId = `local:${view.id}`;
-  closeListViewModal();
-  renderListViewSelect();
-  loadData();
+
+  if (currentViewId.startsWith("sf:")) {
+    const sfId = currentViewId.slice(3);
+    const view = sfListViews.find(v => v.id === sfId);
+    if (!view) return;
+
+    try {
+      const describe = await api(`/api/${currentObject}/listviews/${sfId}/describe`);
+      
+      await loadObjectFields(currentObject);
+      
+      const columns = (describe.displayColumns || []).map(col => col.fieldApiName);
+      const filters = (describe.filteredByInfo || []).map(mapSalesforceFilterToPortal);
+      
+      const logicVal = describe.filterLogicString || "AND";
+      const isStandardLogic = ["AND", "OR"].includes(logicVal.toUpperCase());
+
+      listViewDraft = {
+        id: sfId,
+        isEditing: true,
+        sfDeveloperName: describe.listViewApiName || view.developerName,
+        name: describe.label || view.label,
+        visibility: String(describe.visibility || "private").toLowerCase(),
+        pageSize: RENDER_CHUNK_SIZE,
+        columns: normalizePortalColumns(columns),
+        filters: filters,
+        filterLogicType: isStandardLogic ? logicVal.toUpperCase() : "CUSTOM",
+        customFilterLogic: isStandardLogic ? "" : logicVal,
+        sort: sortState || null,
+        selectedField: null,
+        selectedSide: null
+      };
+
+      const fieldOptions = getCachedObjectFields(currentObject)
+        .map((field) => `<option value="${escapeHtml(field.name)}">${escapeHtml(field.label)}</option>`)
+        .join("");
+
+      const title = $("listViewModalTitle");
+      if (title) title.textContent = "Edit List View";
+      
+      $("listViewBody").innerHTML = `
+        <div class="lv-builder">
+          <div class="lv-top-grid">
+            <div class="form-group">
+              <label class="form-label" for="viewName">List View Name</label>
+              <input class="form-ctrl" id="viewName" value="${escapeHtml(listViewDraft.name)}" placeholder="Example: Key Accounts">
+            </div>
+            <div class="form-group">
+              <label class="form-label" for="viewVisibility">Visibility</label>
+              <select class="form-ctrl" id="viewVisibility">
+                <option value="private" ${listViewDraft.visibility === "private" ? "selected" : ""}>Private</option>
+                <option value="public" ${listViewDraft.visibility === "public" ? "selected" : ""}>Public</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="lv-section-title">Select Fields to Display</div>
+          <div class="lv-dual-list">
+            <div class="lv-list-panel">
+              <div class="lv-list-heading">
+                <label class="form-label" for="lvAvailableSearch">Available Fields</label>
+                <span id="lvAvailableCount"></span>
+              </div>
+              <input class="form-ctrl lv-search" id="lvAvailableSearch" placeholder="Search fields..." oninput="renderListViewFieldLists()">
+              <div class="lv-field-list" id="lvAvailableFields"></div>
+            </div>
+            <div class="lv-transfer">
+              <button class="icon-btn" type="button" title="Add field" onclick="moveListViewDraftField('add')">›</button>
+              <button class="icon-btn" type="button" title="Remove field" onclick="moveListViewDraftField('remove')">‹</button>
+              <button class="icon-btn" type="button" title="Move up" onclick="moveListViewDraftField('up')">▲</button>
+              <button class="icon-btn" type="button" title="Move down" onclick="moveListViewDraftField('down')">▼</button>
+            </div>
+            <div class="lv-list-panel">
+              <div class="lv-list-heading">
+                <label class="form-label">Visible Fields</label>
+                <span id="lvVisibleCount"></span>
+              </div>
+              <div class="lv-field-list" id="lvVisibleFields"></div>
+            </div>
+          </div>
+
+          <div class="lv-filter-builder">
+            <div class="lv-section-title">Filters</div>
+            <div class="lv-filter-row">
+              <select class="form-ctrl" id="lvFilterField" onchange="syncListViewFilterOperators()">${fieldOptions}</select>
+              <select class="form-ctrl" id="lvFilterOperator"></select>
+              <input class="form-ctrl" id="lvFilterValue" placeholder="Value">
+              <button class="btn btn-ghost" type="button" onclick="addListViewDraftFilter()">Add Filter</button>
+              <select class="form-ctrl compact" id="lvFilterLogicType" onchange="handleFilterLogicTypeChange(this.value)">
+                <option value="AND" ${listViewDraft.filterLogicType === "AND" ? "selected" : ""}>AND</option>
+                <option value="OR" ${listViewDraft.filterLogicType === "OR" ? "selected" : ""}>OR</option>
+                <option value="CUSTOM" ${listViewDraft.filterLogicType === "CUSTOM" ? "selected" : ""}>Custom</option>
+              </select>
+            </div>
+            <div class="form-group" id="lvCustomLogicContainer" style="display: ${listViewDraft.filterLogicType === 'CUSTOM' ? 'flex' : 'none'}; margin-top: 12px; gap: 5px;">
+              <label class="form-label" for="lvCustomFilterLogic">Filter Logic</label>
+              <input class="form-ctrl" id="lvCustomFilterLogic" value="${escapeHtml(listViewDraft.customFilterLogic || '')}" placeholder="Example: 1 AND (2 OR 3)">
+            </div>
+            <div class="lv-filter-list" id="lvFilterList"></div>
+          </div>
+        </div>
+      `;
+      renderListViewFieldLists();
+      syncListViewFilterOperators();
+      renderListViewFilterBuilder();
+      $("listViewOverlay").classList.add("open");
+    } catch (err) {
+      toast(`Failed to load list view details: ${err.message || err}`, "err");
+    }
+  }
+}
+
+let listViewToDelete = null;
+
+function openDeleteListViewModal() {
+  if (!currentViewId || currentViewId === "all") return;
+  
+  let name = "";
+  if (currentViewId.startsWith("local:")) {
+    const view = getCurrentLocalView();
+    name = view ? view.name : "";
+    listViewToDelete = { type: "local", id: currentViewId.slice(6), name };
+  } else if (currentViewId.startsWith("sf:")) {
+    const sfId = currentViewId.slice(3);
+    const view = sfListViews.find(v => v.id === sfId);
+    name = view ? view.label : "";
+    listViewToDelete = { type: "sf", id: sfId, developerName: view?.developerName, name };
+  }
+  
+  if (!listViewToDelete) return;
+  
+  const nameEl = $("deleteListViewName");
+  if (nameEl) nameEl.textContent = listViewToDelete.name;
+  
+  $("deleteListViewOverlay").classList.add("open");
+}
+
+function closeDeleteListViewModal() {
+  $("deleteListViewOverlay").classList.remove("open");
+  listViewToDelete = null;
+}
+
+async function confirmDeleteListView() {
+  if (!listViewToDelete) return;
+  
+  const btn = $("confirmDeleteListViewBtn");
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = "Deleting...";
+  }
+  
+  try {
+    if (listViewToDelete.type === "local") {
+      removePortalListView(listViewToDelete.id);
+      toast("Local list view deleted", "ok");
+    } else {
+      await api(`/api/${currentObject}/listviews/${listViewToDelete.developerName}`, {
+        method: "DELETE"
+      });
+      toast("List view deleted from Salesforce", "ok");
+    }
+    
+    invalidateCrmObjectCache(currentObject);
+    currentViewId = "all";
+    await loadListViews();
+    closeDeleteListViewModal();
+    await loadData();
+  } catch (err) {
+    toast(`Failed to delete list view: ${err.message || err}`, "err");
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = "Delete List View";
+    }
+  }
+}
+
+
+function renderListViewFieldLists() {
+  if (!listViewDraft) return;
+  const availableEl = $("lvAvailableFields");
+  const visibleEl = $("lvVisibleFields");
+  if (!availableEl || !visibleEl) return;
+  const query = ($("lvAvailableSearch")?.value || "").toLowerCase();
+  const selected = new Set(listViewDraft.columns);
+  const fields = getCachedObjectFields(currentObject);
+  const availableFields = fields
+    .filter((field) => !selected.has(field.name))
+    .filter((field) => !query || field.label.toLowerCase().includes(query) || field.name.toLowerCase().includes(query));
+  const availableCount = $("lvAvailableCount");
+  const visibleCount = $("lvVisibleCount");
+  if (availableCount) availableCount.textContent = `${availableFields.length} fields`;
+  if (visibleCount) visibleCount.textContent = `${listViewDraft.columns.length} selected`;
+  const optionHtml = (field, side) => `
+    <button type="button"
+      class="lv-field-option ${listViewDraft.selectedField === field.name && listViewDraft.selectedSide === side ? "active" : ""}"
+      onclick="selectListViewDraftField('${escapeJs(field.name)}', '${side}')"
+      ondblclick="moveListViewDraftFieldDirect('${escapeJs(field.name)}', '${side === "available" ? "visible" : "available"}')">
+      ${escapeHtml(field.label)}
+      <span>${escapeHtml(field.name)}</span>
+    </button>`;
+  availableEl.innerHTML = availableFields
+    .map((field) => optionHtml(field, "available"))
+    .join("") || '<div class="lv-empty">No available fields</div>';
+  visibleEl.innerHTML = listViewDraft.columns
+    .map((name) => fieldMetaFor(name) || { name, label: labelFor(name) })
+    .map((field) => optionHtml(field, "visible"))
+    .join("") || '<div class="lv-empty">No visible fields</div>';
+}
+
+function selectListViewDraftField(field, side) {
+  if (!listViewDraft) return;
+  listViewDraft.selectedField = field;
+  listViewDraft.selectedSide = side;
+  renderListViewFieldLists();
+}
+
+function moveListViewDraftField(action) {
+  if (!listViewDraft?.selectedField) return;
+  const field = listViewDraft.selectedField;
+  const columns = [...listViewDraft.columns];
+  const index = columns.indexOf(field);
+  if (action === "add" && listViewDraft.selectedSide === "available") {
+    columns.push(field);
+    listViewDraft.selectedSide = "visible";
+  } else if (action === "remove" && index >= 0) {
+    columns.splice(index, 1);
+    listViewDraft.selectedSide = "available";
+  } else if (action === "up" && index > 0) {
+    [columns[index - 1], columns[index]] = [columns[index], columns[index - 1]];
+  } else if (action === "down" && index >= 0 && index < columns.length - 1) {
+    [columns[index + 1], columns[index]] = [columns[index], columns[index + 1]];
+  }
+  listViewDraft.columns = columns;
+  renderListViewFieldLists();
+}
+
+function moveListViewDraftFieldDirect(field, target) {
+  if (!listViewDraft) return;
+  listViewDraft.selectedField = field;
+  listViewDraft.selectedSide = target === "visible" ? "available" : "visible";
+  moveListViewDraftField(target === "visible" ? "add" : "remove");
+}
+
+function syncListViewFilterOperators() {
+  const field = $("lvFilterField")?.value;
+  const operatorSelect = $("lvFilterOperator");
+  const valueInput = $("lvFilterValue");
+  if (!field || !operatorSelect) return;
+  operatorSelect.innerHTML = operatorOptionsForField(field)
+    .map((operator) => `<option value="${operator}">${escapeHtml(operatorLabel(operator))}</option>`)
+    .join("");
+  if (valueInput) valueInput.placeholder = operatorSelect.value === "between" ? "Min, Max" : "Value";
+}
+
+function addListViewDraftFilter() {
+  if (!listViewDraft) return;
+  const field = $("lvFilterField")?.value;
+  const operator = $("lvFilterOperator")?.value;
+  const value = $("lvFilterValue")?.value || "";
+  const valueNotNeeded = ["blank", "not_blank", "true", "false", "today", "yesterday", "last_7_days", "last_30_days", "this_month", "last_month"].includes(operator);
+  if (!field || !operator) return;
+  if (!valueNotNeeded && !value.trim()) {
+    toast("Filter value is required", "err");
+    return;
+  }
+  listViewDraft.filters.push({ field, operator, value: value.trim() });
+  if ($("lvFilterValue")) $("lvFilterValue").value = "";
+  renderListViewFilterBuilder();
+}
+
+function removeListViewDraftFilter(index) {
+  if (!listViewDraft) return;
+  listViewDraft.filters.splice(index, 1);
+  renderListViewFilterBuilder();
+}
+
+function renderListViewFilterBuilder() {
+  const list = $("lvFilterList");
+  if (!list || !listViewDraft) return;
+  list.innerHTML = (listViewDraft.filters || []).map((filter, index) => {
+    const valueNotNeeded = ["blank", "not_blank", "true", "false", "today", "yesterday", "last_7_days", "last_30_days", "this_month", "last_month"].includes(filter.operator);
+    return `
+      <span class="lv-filter-chip">
+        ${escapeHtml(labelFor(filter.field))} ${escapeHtml(operatorLabel(filter.operator))}${valueNotNeeded ? "" : ` ${escapeHtml(filter.value)}`}
+        <button type="button" onclick="removeListViewDraftFilter(${index})">x</button>
+      </span>
+    `;
+  }).join("") || '<div class="lv-empty">No filters. All records allowed by security are included.</div>';
 }
 
 function overlayClick(event, overlayId, closeFn) {
@@ -6728,7 +8006,7 @@ function toast(message, type = 'info', duration = 6000) {
   if (!stack) return;
 
   // Map raw error messages to human-friendly ones
-  const friendlyMessage = friendlyError(message);
+  const friendlyMessage = type === 'err' ? friendlyError(message) : message;
   const toastKey = `${type}:${friendlyMessage}`;
   const now = Date.now();
   if (toastKey === lastToastKey && now - lastToastAt < 1200) return;
@@ -6875,7 +8153,6 @@ document.addEventListener("DOMContentLoaded", async () => {
     showLoginPage();
     return; // Don't load any data until logged in
   }
-
   // Token exists — load cached perms immediately (so UI guards work instantly)
   window.userPerms = getStoredPerms();
   currentObject = initialReadableObject();
@@ -6905,3 +8182,943 @@ document.addEventListener("DOMContentLoaded", async () => {
       }
     });
 });
+
+/* ── Record Detail Layout Editor & Drag-and-Drop ─────────────────── */
+let isEditingLayout = false;
+let editingLayoutData = null;
+let layoutFieldSearchQuery = "";
+
+function startRearrangingFields() {
+  if (!detailRecordState) return;
+  const objectName = detailRecordState.objectName;
+  const allFields = detailRecordState.fields || [];
+  
+  // Clone, normalize, and filter active layout fields to only keep fields in metadata
+  const rawLayout = getActiveLayout(objectName);
+  const normalized = normalizeLayoutData(rawLayout);
+  
+  editingLayoutData = normalized.map(section => {
+    const leftFiltered = (section.leftFields || []).filter(fieldEntry => {
+      const name = typeof fieldEntry === "string" ? fieldEntry : fieldEntry.name;
+      return findLayoutField(name, allFields) !== undefined;
+    });
+    
+    const rightFiltered = (section.rightFields || []).filter(fieldEntry => {
+      const name = typeof fieldEntry === "string" ? fieldEntry : fieldEntry.name;
+      return findLayoutField(name, allFields) !== undefined;
+    });
+    
+    return {
+      title: section.title,
+      columns: section.columns || 2,
+      leftFields: leftFiltered,
+      rightFields: rightFiltered
+    };
+  });
+  
+  isEditingLayout = true;
+  layoutFieldSearchQuery = "";
+  
+  // Open modal
+  const existing = $("layoutEditorModalOverlay");
+  if (existing) existing.remove();
+
+  const overlay = document.createElement("div");
+  overlay.id = "layoutEditorModalOverlay";
+  overlay.className = "overlay open";
+  overlay.style.zIndex = "9998";
+  
+  overlay.addEventListener("click", (e) => {
+    if (e.target === overlay) {
+      cancelCustomLayout();
+    }
+  });
+
+  // Render stable modal wrapper
+  overlay.innerHTML = `
+    <div class="modal modal-wide layout-editor-modal" style="width: min(1300px, calc(100vw - 40px)); height: min(90vh, 850px); max-width: 1300px; max-height: 90vh; display: flex; flex-direction: column; padding: 0;">
+      <div class="modal-head">
+        <div class="modal-title-group">
+          <div class="modal-obj-icon">🛠️</div>
+          <h2>Page Layout Editor - ${escapeHtml(objectName)}</h2>
+        </div>
+        <button class="close-btn" onclick="cancelCustomLayout()">
+          <svg viewBox="0 0 20 20" width="18" height="18" fill="currentColor">
+            <path fill-rule="evenodd"
+              d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z"
+              clip-rule="evenodd" />
+          </svg>
+        </button>
+      </div>
+      <div class="modal-body" id="layoutEditorModalBody" style="flex: 1; display: flex; flex-direction: column; overflow: hidden; padding: 20px; background: var(--bg-canvas, #f3f5f9);">
+        ${renderLayoutEditorBodyHtml(objectName)}
+      </div>
+    </div>
+  `;
+
+  document.body.appendChild(overlay);
+  
+  // Initialize available fields search and drag-and-drop
+  setupAvailableFieldsFilter();
+}
+
+function getActiveLayout(objectName) {
+  if (DB_LAYOUT_CACHE[objectName]) {
+    return DB_LAYOUT_CACHE[objectName];
+  }
+  if (LAYOUT_CACHE[objectName]) {
+    return LAYOUT_CACHE[objectName];
+  }
+  return OBJECT_FIELD_LAYOUTS[objectName] || [];
+}
+
+function normalizeLayoutData(layout) {
+  return layout.map(section => ({
+    title: section.title || "Information",
+    columns: section.columns || 2,
+    leftFields: section.leftFields || section.fields || [],
+    rightFields: section.rightFields || []
+  }));
+}
+
+function renderLayoutEditorBodyHtml(objectName) {
+  // Collect all field names currently in the layout
+  const activeFieldNames = new Set();
+  editingLayoutData.forEach(section => {
+    (section.leftFields || []).forEach(f => {
+      const name = typeof f === 'string' ? f : f.name;
+      activeFieldNames.add(name);
+    });
+    (section.rightFields || []).forEach(f => {
+      const name = typeof f === 'string' ? f : f.name;
+      activeFieldNames.add(name);
+    });
+  });
+  
+  // Filter all fields from detailRecordState to find available fields
+  const allFields = detailRecordState.fields || [];
+  const availableFields = allFields.filter(f => !activeFieldNames.has(f.name));
+  
+  return `
+    <div class="layout-editor-container" style="display: flex; gap: 20px; background: transparent; border: none; border-radius: 0; padding: 0; margin-top: 0; height: 100%; box-shadow: none;">
+      <div class="layout-editor-sidebar" style="width: 280px; border-right: 1px solid var(--border-color, #e0e0e0); padding-right: 20px; display: flex; flex-direction: column; height: 100%;">
+        <div class="sidebar-header" style="margin-bottom: 12px;">
+          <h3 style="font-size: 14px; font-weight: 600; margin-bottom: 8px;">Available Fields</h3>
+          <input type="text" id="layoutFieldSearch" placeholder="Search fields..." class="layout-search-input">
+        </div>
+        <div class="available-fields-list" id="availableFieldsList" style="flex: 1; overflow-y: auto;">
+          ${renderAvailableFieldsList(availableFields)}
+        </div>
+      </div>
+      
+      <div class="layout-editor-canvas" style="flex: 1; display: flex; flex-direction: column; height: 100%; overflow: hidden;">
+        <div class="canvas-header" style="display: flex; align-items: center; gap: 10px; margin-bottom: 16px; padding-bottom: 12px; border-bottom: 1px solid var(--border-color, #e0e0e0); justify-content: flex-end;">
+          <button class="btn btn-primary btn-sm" onclick="saveCustomLayout()">${utilityIconSvg("like")} Save Layout</button>
+          <button class="btn btn-ghost btn-sm" onclick="cancelCustomLayout()">Cancel</button>
+          <button class="btn btn-ghost btn-danger-link btn-sm" onclick="resetCustomLayoutToDefault()">${utilityIconSvg("refresh")} Reset</button>
+          <button class="btn btn-ghost btn-sm" onclick="addNewLayoutSection()">${utilityIconSvg("comment")} + Add Section</button>
+        </div>
+        <div class="canvas-sections" id="canvasSections" style="flex: 1; overflow-y: auto; padding-right: 8px; display: flex; flex-direction: column; gap: 20px;">
+          ${editingLayoutData.map((section, sIdx) => renderEditorSection(section, sIdx)).join("")}
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function renderAvailableFieldsList(availableFields) {
+  if (availableFields.length === 0) {
+    return `<div class="sidebar-empty">All fields are on the layout</div>`;
+  }
+  return availableFields.map(field => `
+    <div class="available-field-item" 
+         draggable="true" 
+         ondragstart="layoutDragStartFromSidebar(event, '${field.name}')"
+         data-field-name="${field.name}"
+         data-field-label="${field.label || labelFor(field.name)}">
+      <div>
+        <span class="field-item-label">${escapeHtml(field.label || labelFor(field.name))}</span>
+        <span class="field-item-name">${escapeHtml(field.name)}</span>
+      </div>
+      <button class="btn btn-icon-only btn-ghost-link" onclick="addFieldToSectionFromSidebar('${field.name}')" title="Add to Section">
+        +
+      </button>
+    </div>
+  `).join("");
+}
+
+function renderEditorSection(section, sIdx) {
+  const cols = section.columns || 2;
+  return `
+    <div class="layout-edit-section" data-section-index="${sIdx}">
+      <div class="layout-edit-section-header" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+        <input type="text" class="layout-edit-section-title-input" value="${escapeHtml(section.title)}" onchange="updateSectionTitle(${sIdx}, this.value)" style="width: 40%;">
+        
+        <div class="section-actions" style="display: flex; align-items: center; gap: 8px;">
+          <select class="btn btn-ghost btn-sm" onchange="changeSectionLayout(${sIdx}, this.value)" style="font-size: 12px; height: 28px; padding: 0 8px; border-radius: 4px; border: 1px solid var(--border-color, #d8dde6); background: white; cursor: pointer; font-weight: 500;">
+            <option value="2" ${cols === 2 ? 'selected' : ''}>2 Columns</option>
+            <option value="1" ${cols === 1 ? 'selected' : ''}>1 Column</option>
+          </select>
+          
+          <button class="btn btn-icon-only btn-ghost-link" onclick="moveSection(${sIdx}, -1)" ${sIdx === 0 ? 'disabled' : ''} title="Move Section Up">
+            ▲
+          </button>
+          <button class="btn btn-icon-only btn-ghost-link" onclick="moveSection(${sIdx}, 1)" ${sIdx === editingLayoutData.length - 1 ? 'disabled' : ''} title="Move Section Down">
+            ▼
+          </button>
+          <button class="btn btn-icon-only btn-danger-link" onclick="deleteLayoutSection(${sIdx})" title="Delete Section">
+            ${utilityIconSvg("trash")}
+          </button>
+        </div>
+      </div>
+      
+      ${cols === 1 
+        ? `
+        <div class="layout-edit-columns cols-1">
+          <div class="layout-edit-column" 
+               data-column="left"
+               ondragover="layoutAllowDrop(event)"
+               ondragenter="layoutDragEnter(event)"
+               ondragleave="layoutDragLeave(event)"
+               ondrop="layoutDropOnColumn(event, ${sIdx}, 'left')"
+               style="display: flex; flex-direction: column; gap: 8px; min-height: 80px; padding: 8px; border: 1px dashed transparent; border-radius: 6px; transition: all 0.2s;">
+            ${(section.leftFields || []).map((fieldEntry, fIdx) => renderEditorField(fieldEntry, sIdx, 'left', fIdx)).join("")}
+            ${(section.leftFields || []).length === 0 ? '<div class="grid-empty-msg">Drag fields here or add from sidebar</div>' : ''}
+          </div>
+        </div>
+        ` 
+        : `
+        <div class="layout-edit-columns cols-2" style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
+          <div class="layout-edit-column" 
+               data-column="left"
+               ondragover="layoutAllowDrop(event)"
+               ondragenter="layoutDragEnter(event)"
+               ondragleave="layoutDragLeave(event)"
+               ondrop="layoutDropOnColumn(event, ${sIdx}, 'left')"
+               style="display: flex; flex-direction: column; gap: 8px; min-height: 80px; padding: 8px; border: 1px dashed transparent; border-radius: 6px; transition: all 0.2s;">
+            ${(section.leftFields || []).map((fieldEntry, fIdx) => renderEditorField(fieldEntry, sIdx, 'left', fIdx)).join("")}
+            ${(section.leftFields || []).length === 0 ? '<div class="grid-empty-msg">Drag fields here</div>' : ''}
+          </div>
+          <div class="layout-edit-column" 
+               data-column="right"
+               ondragover="layoutAllowDrop(event)"
+               ondragenter="layoutDragEnter(event)"
+               ondragleave="layoutDragLeave(event)"
+               ondrop="layoutDropOnColumn(event, ${sIdx}, 'right')"
+               style="display: flex; flex-direction: column; gap: 8px; min-height: 80px; padding: 8px; border: 1px dashed transparent; border-radius: 6px; transition: all 0.2s;">
+            ${(section.rightFields || []).map((fieldEntry, fIdx) => renderEditorField(fieldEntry, sIdx, 'right', fIdx)).join("")}
+            ${(section.rightFields || []).length === 0 ? '<div class="grid-empty-msg">Drag fields here</div>' : ''}
+          </div>
+        </div>
+        `
+      }
+    </div>
+  `;
+}
+
+function renderEditorField(fieldEntry, sIdx, columnKey, fIdx) {
+  const name = typeof fieldEntry === "string" ? fieldEntry : fieldEntry.name;
+  const readOnly = typeof fieldEntry === "object" ? fieldEntry.readOnly : false;
+  const label = labelFor(name);
+  return `
+    <div class="layout-edit-field" 
+         draggable="true" 
+         ondragstart="layoutDragStart(event, ${sIdx}, '${columnKey}', ${fIdx})"
+         ondragover="layoutAllowDrop(event)"
+         ondragenter="layoutFieldDragEnter(event)"
+         ondragleave="layoutFieldDragLeave(event)"
+         ondrop="layoutDropOnField(event, ${sIdx}, '${columnKey}', ${fIdx})"
+         data-field-name="${name}">
+      <span class="layout-field-drag-handle">${utilityIconSvg("sort")}</span>
+      <div class="layout-field-info">
+        <span class="layout-field-label">${escapeHtml(label)}</span>
+        <span class="layout-field-name">${escapeHtml(name)}${readOnly ? ' (Read Only)' : ''}</span>
+      </div>
+      <button class="layout-field-remove" onclick="removeFieldFromLayout(${sIdx}, '${columnKey}', ${fIdx})" title="Remove Field">
+        &times;
+      </button>
+    </div>
+  `;
+}
+
+function changeSectionLayout(sIdx, value) {
+  const cols = parseInt(value, 10);
+  const section = editingLayoutData[sIdx];
+  section.columns = cols;
+  
+  if (cols === 1) {
+    section.leftFields = [...(section.leftFields || []), ...(section.rightFields || [])];
+    section.rightFields = [];
+  } else {
+    // Split alternating
+    const left = [];
+    const right = [];
+    (section.leftFields || []).forEach((f, idx) => {
+      if (idx % 2 === 0) left.push(f);
+      else right.push(f);
+    });
+    section.leftFields = left;
+    section.rightFields = right;
+  }
+  reRenderLayoutEditor();
+}
+
+function updateSectionTitle(sIdx, newTitle) {
+  if (editingLayoutData && editingLayoutData[sIdx]) {
+    editingLayoutData[sIdx].title = newTitle || "Information";
+  }
+}
+
+function moveSection(sIdx, direction) {
+  if (!editingLayoutData) return;
+  const targetIdx = sIdx + direction;
+  if (targetIdx < 0 || targetIdx >= editingLayoutData.length) return;
+  
+  const temp = editingLayoutData[sIdx];
+  editingLayoutData[sIdx] = editingLayoutData[targetIdx];
+  editingLayoutData[targetIdx] = temp;
+  
+  reRenderLayoutEditor();
+}
+
+function deleteLayoutSection(sIdx) {
+  if (!editingLayoutData) return;
+  
+  editingLayoutData.splice(sIdx, 1);
+  
+  if (editingLayoutData.length === 0) {
+    editingLayoutData.push({ title: "Information", columns: 2, leftFields: [], rightFields: [] });
+  }
+  
+  reRenderLayoutEditor();
+}
+
+function removeFieldFromLayout(sIdx, columnKey, fIdx) {
+  if (!editingLayoutData) return;
+  const colArray = columnKey === "left" ? "leftFields" : "rightFields";
+  editingLayoutData[sIdx][colArray].splice(fIdx, 1);
+  reRenderLayoutEditor();
+}
+
+function addFieldToSectionFromSidebar(fieldName) {
+  if (!editingLayoutData) return;
+  if (!editingLayoutData[0].leftFields) {
+    editingLayoutData[0].leftFields = [];
+  }
+  editingLayoutData[0].leftFields.push(fieldName);
+  reRenderLayoutEditor();
+}
+
+function addNewLayoutSection() {
+  showAddSectionModal();
+}
+
+function showAddSectionModal() {
+  // Remove any existing section modal first
+  const existing = $("addSectionModalOverlay");
+  if (existing) existing.remove();
+
+  // Create overlay element
+  const overlay = document.createElement("div");
+  overlay.id = "addSectionModalOverlay";
+  overlay.className = "overlay open";
+  overlay.style.zIndex = "9999";
+
+  // Make clicking on overlay close the modal
+  overlay.addEventListener("click", (e) => {
+    if (e.target === overlay) {
+      closeAddSectionModal();
+    }
+  });
+
+  overlay.innerHTML = `
+    <div class="modal modal-sm" style="display: flex; flex-direction: column;">
+      <div class="modal-head">
+        <div class="modal-title-group">
+          <div class="modal-obj-icon">📁</div>
+          <h2>Add New Section</h2>
+        </div>
+        <button class="close-btn" onclick="closeAddSectionModal()">
+          <svg viewBox="0 0 20 20" width="18" height="18" fill="currentColor">
+            <path fill-rule="evenodd"
+              d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z"
+              clip-rule="evenodd" />
+          </svg>
+        </button>
+      </div>
+      <div class="modal-body">
+        <div class="form-group" style="margin-bottom: 20px;">
+          <label style="display: block; font-weight: 600; margin-bottom: 8px; font-size: 13px;">Section Name</label>
+          <input type="text" id="newSectionNameInput" class="layout-search-input" value="New Section" style="width: 100%;">
+        </div>
+      </div>
+      <div class="modal-foot">
+        <button class="btn btn-ghost" style="margin-right: 8px;" onclick="closeAddSectionModal()">Cancel</button>
+        <button class="btn btn-primary" onclick="confirmAddNewSection()">Add Section</button>
+      </div>
+    </div>
+  `;
+
+  document.body.appendChild(overlay);
+  
+  // Focus and select the text
+  setTimeout(() => {
+    const input = $("newSectionNameInput");
+    if (input) {
+      input.focus();
+      input.select();
+      
+      // Allow pressing Enter to submit
+      input.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") {
+          confirmAddNewSection();
+        }
+      });
+    }
+  }, 50);
+}
+
+function closeAddSectionModal() {
+  const overlay = $("addSectionModalOverlay");
+  if (overlay) overlay.remove();
+}
+
+function confirmAddNewSection() {
+  const input = $("newSectionNameInput");
+  if (!input) return;
+  const title = input.value.trim();
+  if (!title) {
+    toast("Section name cannot be empty", "err");
+    return;
+  }
+  
+  if (editingLayoutData) {
+    editingLayoutData.push({ title: title, columns: 2, leftFields: [], rightFields: [] });
+    reRenderLayoutEditor();
+  }
+  
+  closeAddSectionModal();
+}
+
+function isFieldInLayout(fieldName) {
+  if (!editingLayoutData) return false;
+  return editingLayoutData.some(section => {
+    const leftMatch = (section.leftFields || []).some(f => (typeof f === 'string' ? f : f.name) === fieldName);
+    const rightMatch = (section.rightFields || []).some(f => (typeof f === 'string' ? f : f.name) === fieldName);
+    return leftMatch || rightMatch;
+  });
+}
+
+// Drag and Drop handlers
+function layoutDragStartFromSidebar(event, fieldName) {
+  event.dataTransfer.setData("text/plain", JSON.stringify({
+    source: "sidebar",
+    fieldName: fieldName
+  }));
+  event.dataTransfer.effectAllowed = "move";
+}
+
+function layoutDragStart(event, sectionIdx, columnKey, fieldIdx) {
+  event.dataTransfer.setData("text/plain", JSON.stringify({
+    source: "canvas",
+    sectionIdx: sectionIdx,
+    columnKey: columnKey,
+    fieldIdx: fieldIdx
+  }));
+  event.dataTransfer.effectAllowed = "move";
+}
+
+function layoutAllowDrop(event) {
+  event.preventDefault();
+}
+
+function layoutDragEnter(event) {
+  event.preventDefault();
+  event.currentTarget.classList.add("drag-over");
+}
+
+function layoutDragLeave(event) {
+  event.currentTarget.classList.remove("drag-over");
+}
+
+function layoutFieldDragEnter(event) {
+  event.preventDefault();
+  event.stopPropagation();
+  event.currentTarget.classList.add("drag-over");
+}
+
+function layoutFieldDragLeave(event) {
+  event.stopPropagation();
+  event.currentTarget.classList.remove("drag-over");
+}
+
+function layoutDropOnColumn(event, targetSectionIdx, targetColumnKey) {
+  event.preventDefault();
+  event.stopPropagation();
+  
+  // Clear highlights
+  document.querySelectorAll(".layout-edit-field, .layout-edit-column").forEach(el => el.classList.remove("drag-over"));
+  
+  const dataStr = event.dataTransfer.getData("text/plain");
+  if (!dataStr) return;
+  
+  try {
+    const data = JSON.parse(dataStr);
+    const targetColArray = targetColumnKey === "left" ? "leftFields" : "rightFields";
+    
+    if (data.source === "sidebar") {
+      const fieldName = data.fieldName;
+      if (!isFieldInLayout(fieldName)) {
+        if (!editingLayoutData[targetSectionIdx][targetColArray]) {
+          editingLayoutData[targetSectionIdx][targetColArray] = [];
+        }
+        editingLayoutData[targetSectionIdx][targetColArray].push(fieldName);
+        reRenderLayoutEditor();
+      }
+    } else if (data.source === "canvas") {
+      const sourceSecIdx = data.sectionIdx;
+      const sourceColKey = data.columnKey;
+      const sourceFieldIdx = data.fieldIdx;
+      
+      const sourceColArray = sourceColKey === "left" ? "leftFields" : "rightFields";
+      const fieldObj = editingLayoutData[sourceSecIdx][sourceColArray][sourceFieldIdx];
+      
+      editingLayoutData[sourceSecIdx][sourceColArray].splice(sourceFieldIdx, 1);
+      
+      if (!editingLayoutData[targetSectionIdx][targetColArray]) {
+        editingLayoutData[targetSectionIdx][targetColArray] = [];
+      }
+      editingLayoutData[targetSectionIdx][targetColArray].push(fieldObj);
+      
+      reRenderLayoutEditor();
+    }
+  } catch (e) {
+    console.error(e);
+  }
+}
+
+function layoutDropOnField(event, targetSectionIdx, targetColumnKey, targetFieldIdx) {
+  event.preventDefault();
+  event.stopPropagation();
+  
+  // Clear highlights
+  document.querySelectorAll(".layout-edit-field, .layout-edit-column").forEach(el => el.classList.remove("drag-over"));
+  
+  const dataStr = event.dataTransfer.getData("text/plain");
+  if (!dataStr) return;
+  
+  try {
+    const data = JSON.parse(dataStr);
+    const targetColArray = targetColumnKey === "left" ? "leftFields" : "rightFields";
+    
+    if (data.source === "sidebar") {
+      const fieldName = data.fieldName;
+      if (!isFieldInLayout(fieldName)) {
+        if (!editingLayoutData[targetSectionIdx][targetColArray]) {
+          editingLayoutData[targetSectionIdx][targetColArray] = [];
+        }
+        editingLayoutData[targetSectionIdx][targetColArray].splice(targetFieldIdx, 0, fieldName);
+        reRenderLayoutEditor();
+      }
+    } else if (data.source === "canvas") {
+      const sourceSecIdx = data.sectionIdx;
+      const sourceColKey = data.columnKey;
+      const sourceFieldIdx = data.fieldIdx;
+      
+      const sourceColArray = sourceColKey === "left" ? "leftFields" : "rightFields";
+      const fieldObj = editingLayoutData[sourceSecIdx][sourceColArray][sourceFieldIdx];
+      
+      editingLayoutData[sourceSecIdx][sourceColArray].splice(sourceFieldIdx, 1);
+      
+      let insertIdx = targetFieldIdx;
+      if (sourceSecIdx === targetSectionIdx && sourceColKey === targetColumnKey && sourceFieldIdx < targetFieldIdx) {
+        insertIdx = targetFieldIdx - 1;
+      }
+      
+      if (!editingLayoutData[targetSectionIdx][targetColArray]) {
+        editingLayoutData[targetSectionIdx][targetColArray] = [];
+      }
+      editingLayoutData[targetSectionIdx][targetColArray].splice(insertIdx, 0, fieldObj);
+      
+      reRenderLayoutEditor();
+    }
+  } catch (e) {
+    console.error(e);
+  }
+}
+
+function setupAvailableFieldsFilter() {
+  const searchInput = $("layoutFieldSearch");
+  if (!searchInput) return;
+  
+  // Restore current search query
+  searchInput.value = layoutFieldSearchQuery || "";
+  
+  const applyFilter = (query) => {
+    const q = query.toLowerCase().trim();
+    document.querySelectorAll("#availableFieldsList .available-field-item").forEach(item => {
+      const name = item.dataset.fieldName.toLowerCase();
+      const label = item.dataset.fieldLabel.toLowerCase();
+      if (name.includes(q) || label.includes(q)) {
+        item.style.display = "flex";
+      } else {
+        item.style.display = "none";
+      }
+    });
+  };
+
+  // Run the filter immediately on render
+  applyFilter(layoutFieldSearchQuery);
+
+  searchInput.addEventListener("input", (e) => {
+    layoutFieldSearchQuery = e.target.value;
+    applyFilter(layoutFieldSearchQuery);
+  });
+}
+
+function reRenderLayoutEditor() {
+  if (!detailRecordState) return;
+  
+  // 1. Save scroll positions
+  const canvasScroll = $("canvasSections") ? $("canvasSections").scrollTop : 0;
+  const sidebarScroll = $("availableFieldsList") ? $("availableFieldsList").scrollTop : 0;
+  
+  // 2. Re-render Layout Editor HTML inside stable body
+  const body = $("layoutEditorModalBody");
+  if (body) {
+    body.innerHTML = renderLayoutEditorBodyHtml(detailRecordState.objectName);
+  }
+  
+  // 3. Restore scroll positions immediately & with a safe timeout
+  const canvasEl = $("canvasSections");
+  const sidebarEl = $("availableFieldsList");
+  if (canvasEl) canvasEl.scrollTop = canvasScroll;
+  if (sidebarEl) sidebarEl.scrollTop = sidebarScroll;
+  
+  setTimeout(() => {
+    const cEl = $("canvasSections");
+    const sEl = $("availableFieldsList");
+    if (cEl) cEl.scrollTop = canvasScroll;
+    if (sEl) sEl.scrollTop = sidebarScroll;
+  }, 0);
+  
+  // 4. Initialize available fields search
+  setupAvailableFieldsFilter();
+}
+
+async function saveCustomLayout() {
+  if (!detailRecordState || !editingLayoutData) return;
+  const objectName = detailRecordState.objectName;
+  
+  try {
+    const res = await api(`/api/portal/layouts/${objectName}`, {
+      method: 'POST',
+      body: JSON.stringify({ layout: editingLayoutData })
+    });
+    if (res && res.success) {
+      DB_LAYOUT_CACHE[objectName] = editingLayoutData;
+      toast("Layout saved successfully!", "success");
+    } else {
+      toast("Failed to save layout to database", "err");
+    }
+  } catch (err) {
+    console.error("Failed to save custom layout:", err);
+    toast("Network error saving layout", "err");
+  }
+  
+  isEditingLayout = false;
+  editingLayoutData = null;
+  
+  // Re-render record detail view
+  restoreStandardDetailView();
+}
+
+function cancelCustomLayout() {
+  isEditingLayout = false;
+  editingLayoutData = null;
+  restoreStandardDetailView();
+}
+
+async function resetCustomLayoutToDefault() {
+  if (!detailRecordState) return;
+  const objectName = detailRecordState.objectName;
+  
+  if (confirm("Are you sure you want to reset layout to standard Salesforce default?")) {
+    try {
+      const res = await api(`/api/portal/layouts/${objectName}`, {
+        method: 'DELETE'
+      });
+      if (res && res.success) {
+        delete DB_LAYOUT_CACHE[objectName];
+        toast("Layout reset to default", "success");
+      } else {
+        toast("Failed to reset layout", "err");
+      }
+    } catch (err) {
+      console.error("Failed to reset layout:", err);
+      toast("Network error resetting layout", "err");
+    }
+    
+    isEditingLayout = false;
+    editingLayoutData = null;
+    restoreStandardDetailView();
+  }
+}
+
+function restoreStandardDetailView() {
+  if (!detailRecordState) return;
+  
+  // Close the modal layout editor overlay if it exists
+  const overlay = $("layoutEditorModalOverlay");
+  if (overlay) overlay.remove();
+  
+  const { objectName, record, fields } = detailRecordState;
+  
+  const displayFields = fields
+    .filter(
+      (field) =>
+        record[field.name] !== null &&
+        record[field.name] !== undefined &&
+        field.name !== "attributes",
+    )
+    .slice(0, 80);
+    
+  // Re-render Details Tab
+  $("recordDetailsPanel").innerHTML = `
+    <div id="detailsContent">
+      ${renderConfiguredDetailSections(objectName, record, fields, displayFields)}
+    </div>
+  `;
+}
+
+/* ── Customize Compact Layout Modal & Supabase Persistence ───────── */
+let compactLayoutDraft = [];
+
+async function openCustomizeCompactLayoutModal() {
+  if (!detailRecordState) return;
+  const objectName = detailRecordState.objectName;
+  
+  // Load current custom compact fields as draft
+  compactLayoutDraft = [...getCustomCompactFields(objectName)];
+  
+  // Open modal
+  const existing = $("compactLayoutModalOverlay");
+  if (existing) existing.remove();
+
+  const overlay = document.createElement("div");
+  overlay.id = "compactLayoutModalOverlay";
+  overlay.className = "overlay open";
+  overlay.style.zIndex = "9999";
+  
+  overlay.addEventListener("click", (e) => {
+    if (e.target === overlay) {
+      closeCompactLayoutModal();
+    }
+  });
+
+  overlay.innerHTML = `
+    <div class="modal modal-sm" style="display: flex; flex-direction: column; max-width: 500px; padding: 0;">
+      <div class="modal-head">
+        <div class="modal-title-group">
+          <div class="modal-obj-icon">⚙️</div>
+          <h2>Customize Compact Layout</h2>
+        </div>
+        <button class="close-btn" onclick="closeCompactLayoutModal()">
+          <svg viewBox="0 0 20 20" width="18" height="18" fill="currentColor">
+            <path fill-rule="evenodd"
+              d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z"
+              clip-rule="evenodd" />
+          </svg>
+        </button>
+      </div>
+      <div class="modal-body" style="display: flex; gap: 15px; height: 350px; overflow: hidden; padding: 15px;">
+        <div style="flex: 1; display: flex; flex-direction: column; border-right: 1px solid var(--border-color, #e0e0e0); padding-right: 15px;">
+          <h4 style="font-size: 13px; font-weight: 600; margin-bottom: 8px;">Selected Fields</h4>
+          <div id="compactSelectedFields" style="flex: 1; overflow-y: auto;">
+            ${renderCompactSelectedFieldsHtml()}
+          </div>
+        </div>
+        <div style="flex: 1; display: flex; flex-direction: column;">
+          <h4 style="font-size: 13px; font-weight: 600; margin-bottom: 8px;">Available Fields</h4>
+          <input type="text" id="compactFieldSearch" placeholder="Search..." class="layout-search-input" style="margin-bottom: 8px; font-size: 12px; padding: 6px 10px;">
+          <div id="compactAvailableFields" style="flex: 1; overflow-y: auto;">
+            ${renderCompactAvailableFieldsHtml(objectName)}
+          </div>
+        </div>
+      </div>
+      <div class="modal-foot">
+        <button class="btn btn-ghost" style="margin-right: auto;" onclick="resetCompactLayoutToDefault()">Reset to Default</button>
+        <button class="btn btn-ghost" style="margin-right: 8px;" onclick="closeCompactLayoutModal()">Cancel</button>
+        <button class="btn btn-primary" onclick="saveCompactLayout()">Save</button>
+      </div>
+    </div>
+  `;
+
+  document.body.appendChild(overlay);
+  setupCompactFieldsSearch();
+}
+
+function renderCompactSelectedFieldsHtml() {
+  if (compactLayoutDraft.length === 0) {
+    return `<div style="text-align: center; color: var(--text-muted, #706e6b); font-size: 12px; padding: 20px;">No fields selected</div>`;
+  }
+  return compactLayoutDraft.map((field, idx) => `
+    <div style="display: flex; align-items: center; justify-content: space-between; padding: 8px 10px; background: var(--bg-hover, #f3f5f9); border: 1px solid var(--border-color, #d8dde6); border-radius: 4px; margin-bottom: 6px; font-size: 12.5px;">
+      <div style="display: flex; align-items: center; gap: 6px;">
+        <div style="display: flex; flex-direction: column; gap: 2px;">
+          <button style="border: none; background: none; font-size: 10px; cursor: pointer; line-height: 1; padding: 0;" onclick="moveCompactField(${idx}, -1)" ${idx === 0 ? 'disabled' : ''}>▲</button>
+          <button style="border: none; background: none; font-size: 10px; cursor: pointer; line-height: 1; padding: 0;" onclick="moveCompactField(${idx}, 1)" ${idx === compactLayoutDraft.length - 1 ? 'disabled' : ''}>▼</button>
+        </div>
+        <span style="font-weight: 600;">${escapeHtml(labelFor(field))}</span>
+      </div>
+      <button style="border: none; background: none; color: #c23934; cursor: pointer; font-size: 16px; padding: 0 4px;" onclick="removeCompactField(${idx})">&times;</button>
+    </div>
+  `).join("");
+}
+
+function renderCompactAvailableFieldsHtml(objectName) {
+  const allFields = detailRecordState.fields || [];
+  const selectedSet = new Set(compactLayoutDraft);
+  const available = allFields.filter(f => !selectedSet.has(f.name));
+  
+  if (available.length === 0) {
+    return `<div style="text-align: center; color: var(--text-muted, #706e6b); font-size: 12px; padding: 20px;">All fields added</div>`;
+  }
+  
+  return available.map(field => `
+    <div class="compact-available-item" 
+         style="display: flex; align-items: center; justify-content: space-between; padding: 6px 8px; background: #fff; border: 1px solid var(--border-color, #d8dde6); border-radius: 4px; margin-bottom: 6px; font-size: 12px;"
+         data-name="${field.name.toLowerCase()}"
+         data-label="${(field.label || labelFor(field.name)).toLowerCase()}">
+      <div style="display: flex; flex-direction: column;">
+        <span style="font-weight: 500;">${escapeHtml(field.label || labelFor(field.name))}</span>
+        <span style="font-size: 10px; color: var(--text-muted, #706e6b);">${escapeHtml(field.name)}</span>
+      </div>
+      <button class="btn btn-icon-only btn-ghost-link btn-sm" onclick="addCompactField('${field.name}')" title="Add Field">+</button>
+    </div>
+  `).join("");
+}
+
+function moveCompactField(idx, direction) {
+  const targetIdx = idx + direction;
+  if (targetIdx < 0 || targetIdx >= compactLayoutDraft.length) return;
+  const temp = compactLayoutDraft[idx];
+  compactLayoutDraft[idx] = compactLayoutDraft[targetIdx];
+  compactLayoutDraft[targetIdx] = temp;
+  
+  reRenderCompactModal();
+}
+
+function removeCompactField(idx) {
+  compactLayoutDraft.splice(idx, 1);
+  reRenderCompactModal();
+}
+
+function addCompactField(fieldName) {
+  compactLayoutDraft.push(fieldName);
+  reRenderCompactModal();
+}
+
+function reRenderCompactModal() {
+  const selectedContainer = $("compactSelectedFields");
+  const availableContainer = $("compactAvailableFields");
+  if (selectedContainer) selectedContainer.innerHTML = renderCompactSelectedFieldsHtml();
+  if (availableContainer) availableContainer.innerHTML = renderCompactAvailableFieldsHtml(detailRecordState.objectName);
+  setupCompactFieldsSearch();
+}
+
+function setupCompactFieldsSearch() {
+  const searchInput = $("compactFieldSearch");
+  if (!searchInput) return;
+  searchInput.addEventListener("input", (e) => {
+    const q = e.target.value.toLowerCase().trim();
+    document.querySelectorAll("#compactAvailableFields .compact-available-item").forEach(item => {
+      const name = item.dataset.name;
+      const label = item.dataset.label;
+      if (name.includes(q) || label.includes(q)) {
+        item.style.display = "flex";
+      } else {
+        item.style.display = "none";
+      }
+    });
+  });
+}
+
+function closeCompactLayoutModal() {
+  const overlay = $("compactLayoutModalOverlay");
+  if (overlay) overlay.remove();
+}
+
+async function saveCompactLayout() {
+  if (!detailRecordState) return;
+  const objectName = detailRecordState.objectName;
+  
+  try {
+    const res = await api(`/api/portal/compact-layouts/${objectName}`, {
+      method: 'POST',
+      body: JSON.stringify({ fields: compactLayoutDraft })
+    });
+    if (res && res.success) {
+      COMPACT_LAYOUT_CACHE[objectName] = compactLayoutDraft;
+      toast("Compact layout saved successfully!", "success");
+      closeCompactLayoutModal();
+      
+      // Refresh details page header by re-rendering
+      refreshRecordDetailPageHeader();
+    } else {
+      toast("Failed to save compact layout", "err");
+    }
+  } catch (err) {
+    console.error(err);
+    toast("Network error saving compact layout", "err");
+  }
+}
+
+async function resetCompactLayoutToDefault() {
+  if (!detailRecordState) return;
+  const objectName = detailRecordState.objectName;
+  
+  if (confirm("Reset compact layout to default?")) {
+    try {
+      const res = await api(`/api/portal/compact-layouts/${objectName}`, {
+        method: 'DELETE'
+      });
+      if (res && res.success) {
+        delete COMPACT_LAYOUT_CACHE[objectName];
+        toast("Compact layout reset to default", "success");
+        closeCompactLayoutModal();
+        refreshRecordDetailPageHeader();
+      } else {
+        toast("Failed to reset compact layout", "err");
+      }
+    } catch (err) {
+      console.error(err);
+      toast("Network error resetting compact layout", "err");
+    }
+  }
+}
+
+function refreshRecordDetailPageHeader() {
+  if (!detailRecordState) return;
+  const { objectName, record, fields } = detailRecordState;
+  
+  // Re-run getSummaryFields
+  const summaryFields = getResolvedCompactFields(objectName, fields);
+    
+  // Find record-summary container and replace its contents
+  const summaryContainer = document.querySelector(".record-summary");
+  if (summaryContainer) {
+    summaryContainer.innerHTML = `
+      ${summaryFields
+        .map(
+          (field) => `
+        <div>
+          <span>${escapeHtml(labelFor(field))}</span>
+          <strong>${formatValue(field, getValue(record, field), record)}</strong>
+        </div>
+      `,
+        )
+        .join("")}
+    `;
+  }
+}

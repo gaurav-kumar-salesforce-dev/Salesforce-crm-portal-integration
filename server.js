@@ -2183,6 +2183,11 @@ async function getAccessToken() {
 
 // ─── Axios Helpers ────────────────────────────────────────────
 const baseUrl = () => `${SF.instanceUrl}/services/data/${SF.version}`;
+const uiApiListViewBaseUrl = () => {
+  const configuredVersion = Number(String(SF.version || '').replace(/^v/i, ''));
+  const version = configuredVersion >= 61 ? SF.version : 'v61.0';
+  return `${SF.instanceUrl}/services/data/${version}`;
+};
 
 async function sfGet(endpoint, params = {}, config = {}) {
   const token = await getAccessToken();
@@ -2221,6 +2226,42 @@ async function sfPost(endpoint, body) {
     headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }
   });
   return res.data;
+}
+
+async function sfUiPost(endpoint, body) {
+  const token = await getAccessToken();
+  const res = await axios.post(`${uiApiListViewBaseUrl()}${endpoint}`, body, {
+    timeout: 30000,
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }
+  });
+  return res.data;
+}
+
+async function sfUiGet(endpoint, params = {}) {
+  const token = await getAccessToken();
+  const res = await axios.get(`${uiApiListViewBaseUrl()}${endpoint}`, {
+    timeout: 30000,
+    headers: { Authorization: `Bearer ${token}` },
+    params
+  });
+  return res.data;
+}
+
+async function sfUiPatch(endpoint, body) {
+  const token = await getAccessToken();
+  const res = await axios.patch(`${uiApiListViewBaseUrl()}${endpoint}`, body, {
+    timeout: 30000,
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }
+  });
+  return res.data;
+}
+
+async function sfUiDelete(endpoint) {
+  const token = await getAccessToken();
+  await axios.delete(`${uiApiListViewBaseUrl()}${endpoint}`, {
+    timeout: 30000,
+    headers: { Authorization: `Bearer ${token}` }
+  });
 }
 
 async function sfPatch(endpoint, body, config = {}) {
@@ -3230,6 +3271,13 @@ function formatSalesforceError(value) {
   if (value.message) return value.message;
   if (value.error_description) return value.error_description;
   if (value.errors) return formatSalesforceError(value.errors);
+  if (value.output?.fieldErrors) {
+    const details = Object.entries(value.output.fieldErrors)
+      .flatMap(([field, errors]) => (Array.isArray(errors) ? errors : [errors])
+        .map((error) => `${field}: ${formatSalesforceError(error)}`));
+    if (details.length) return details.join('; ');
+  }
+  if (value.output?.errors) return formatSalesforceError(value.output.errors);
   if (value.outputValues?.errors) return formatSalesforceError(value.outputValues.errors);
   try {
     return JSON.stringify(value);
@@ -5422,6 +5470,200 @@ app.get('/api/:object/listviews', checkAuth, async (req, res) => {
   }
 });
 
+function developerNameFromLabel(label) {
+  const base = String(label || 'Portal List View')
+    .replace(/[^A-Za-z0-9_]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .replace(/_{2,}/g, '_')
+    .slice(0, 35) || 'Portal_List_View';
+  const safeBase = /^[A-Za-z]/.test(base) ? base : `List_${base}`;
+  return `${safeBase}_${Date.now().toString(36)}`.slice(0, 40);
+}
+
+function salesforceListViewOperation(operator) {
+  return ({
+    equals: 'Equals',
+    not_equals: 'NotEqual',
+    contains: 'Contains',
+    not_contains: 'NotContains',
+    starts_with: 'StartsWith',
+    ends_with: 'EndsWith',
+    gt: 'GreaterThan',
+    gte: 'GreaterOrEqual',
+    lt: 'LessThan',
+    lte: 'LessOrEqual',
+    blank: 'Equals',
+    not_blank: 'NotEqual',
+    true: 'Equals',
+    false: 'Equals',
+    today: 'Equals',
+    yesterday: 'Equals',
+    last_7_days: 'Equals',
+    last_30_days: 'Equals',
+    this_month: 'Equals',
+    last_month: 'Equals'
+  })[operator] || 'Equals';
+}
+
+function salesforceListViewFilterValue(filter) {
+  const operator = filter?.operator;
+  if (operator === 'blank' || operator === 'not_blank') return '';
+  if (operator === 'true') return 'true';
+  if (operator === 'false') return 'false';
+  if (operator === 'today') return 'TODAY';
+  if (operator === 'yesterday') return 'YESTERDAY';
+  if (operator === 'last_7_days') return 'LAST_N_DAYS:7';
+  if (operator === 'last_30_days') return 'LAST_N_DAYS:30';
+  if (operator === 'this_month') return 'THIS_MONTH';
+  if (operator === 'last_month') return 'LAST_MONTH';
+  return String(filter?.value ?? '');
+}
+
+function buildSalesforceListViewPayload(object, body = {}) {
+  const label = String(body.name || body.label || '').trim();
+  const columns = Array.isArray(body.columns) ? body.columns : [];
+  if (!label) throw new Error('List view name is required');
+  if (!columns.length) throw new Error('Select at least one visible field');
+
+  const filteredByInfo = (Array.isArray(body.filters) ? body.filters : [])
+    .filter((filter) => filter?.field)
+    .map((filter) => ({
+      fieldApiName: filter.field,
+      operandLabels: [salesforceListViewFilterValue(filter)],
+      operator: salesforceListViewOperation(filter.operator)
+    }));
+
+  let filterLogicString = undefined;
+  if (filteredByInfo.length > 1) {
+    const logic = String(body.filterLogic || 'AND').trim().toUpperCase();
+    if (logic === 'AND' || logic === 'OR') {
+      filterLogicString = filteredByInfo.map((_, index) => String(index + 1)).join(` ${logic} `);
+    } else {
+      filterLogicString = body.filterLogic;
+    }
+  }
+
+  return {
+    displayColumns: columns,
+    filteredByInfo,
+    ...(filterLogicString ? { filterLogicString } : {}),
+    label,
+    listViewApiName: developerNameFromLabel(label),
+    visibility: String(body.visibility || '').toLowerCase() === 'public' ? 'Public' : 'Private'
+  };
+}
+
+app.post('/api/:object/listviews', checkAuth, async (req, res) => {
+  const { object } = req.params;
+  if (!OBJECTS[object]) return res.status(400).json({ error: `Unknown object: ${object}` });
+
+  try {
+    const payload = buildSalesforceListViewPayload(object, req.body || {});
+    const created = await sfUiPost(`/ui-api/list-info/${object}`, payload);
+    const listData = await sfGet(`/sobjects/${object}/listviews`);
+    const listviews = listData.listviews || [];
+    const createdView = listviews.find((view) =>
+      view.developerName === payload.listViewApiName ||
+      view.name === payload.listViewApiName ||
+      view.label === payload.label
+    ) || null;
+
+    res.json({
+      synced: true,
+      listView: createdView || {
+        id: created?.id || created?.listViewId || created?.listViewReference?.id,
+        label: payload.label,
+        developerName: payload.listViewApiName
+      },
+      salesforce: created
+    });
+  } catch (err) {
+    handleSFError(err, res, `Create list view ${object}`);
+  }
+});
+
+app.patch('/api/:object/listviews/:apiName', checkAuth, async (req, res) => {
+  const { object, apiName } = req.params;
+  if (!OBJECTS[object]) return res.status(400).json({ error: `Unknown object: ${object}` });
+
+  try {
+    const body = req.body || {};
+    const label = String(body.name || body.label || '').trim();
+    const columns = Array.isArray(body.columns) ? body.columns : [];
+    if (!label) return res.status(400).json({ error: 'List view name is required' });
+    if (!columns.length) return res.status(400).json({ error: 'Select at least one visible field' });
+
+    const filteredByInfo = (Array.isArray(body.filters) ? body.filters : [])
+      .filter((filter) => filter?.field)
+      .map((filter) => ({
+        fieldApiName: filter.field,
+        operandLabels: [salesforceListViewFilterValue(filter)],
+        operator: salesforceListViewOperation(filter.operator)
+      }));
+
+    let filterLogicString = undefined;
+    if (filteredByInfo.length > 1) {
+      const logic = String(body.filterLogic || 'AND').trim().toUpperCase();
+      if (logic === 'AND' || logic === 'OR') {
+        filterLogicString = filteredByInfo.map((_, index) => String(index + 1)).join(` ${logic} `);
+      } else {
+        filterLogicString = body.filterLogic;
+      }
+    }
+
+    const payload = {
+      displayColumns: columns,
+      filteredByInfo,
+      ...(filterLogicString ? { filterLogicString } : {}),
+      label,
+      visibility: String(body.visibility || '').toLowerCase() === 'public' ? 'Public' : 'Private'
+    };
+
+    const updated = await sfUiPatch(`/ui-api/list-info/${object}/${apiName}`, payload);
+    const listData = await sfGet(`/sobjects/${object}/listviews`);
+    const listviews = listData.listviews || [];
+    const matchedView = listviews.find((view) =>
+      view.developerName === apiName || view.label === label
+    ) || null;
+
+    res.json({
+      synced: true,
+      listView: matchedView || {
+        id: updated?.id || updated?.listViewId,
+        label,
+        developerName: apiName
+      },
+      salesforce: updated
+    });
+  } catch (err) {
+    handleSFError(err, res, `Update list view ${object}/${apiName}`);
+  }
+});
+
+app.delete('/api/:object/listviews/:apiName', checkAuth, async (req, res) => {
+  const { object, apiName } = req.params;
+  if (!OBJECTS[object]) return res.status(400).json({ error: `Unknown object: ${object}` });
+
+  try {
+    await sfUiDelete(`/ui-api/list-info/${object}/${apiName}`);
+    res.json({ deleted: true });
+  } catch (err) {
+    handleSFError(err, res, `Delete list view ${object}/${apiName}`);
+  }
+});
+
+app.get('/api/:object/listviews/:id/describe', checkAuth, async (req, res) => {
+  const { object, id } = req.params;
+  if (!OBJECTS[object]) return res.status(400).json({ error: `Unknown object: ${object}` });
+
+  try {
+    const data = await sfUiGet(`/ui-api/list-info/${id}`);
+    res.json(data);
+  } catch (err) {
+    handleSFError(err, res, `Describe list view ${object}/${id}`);
+  }
+});
+
 app.get('/api/:object/count', checkAuth, async (req, res, next) => {
   const { object } = req.params;
   if (OBJECTS[object]) return checkPermission(object, 'can_read')(req, res, next);
@@ -5522,6 +5764,16 @@ app.get('/api/:object/listviews/:id/results', checkAuth, async (req, res, next) 
 
     const describeStartedAt = performance.now();
     const detail = await sfGet(`/sobjects/${object}/listviews/${id}/describe`);
+    let displayColumnNames = null;
+    try {
+      const uiInfo = await sfUiGet(`/ui-api/list-info/${id}`);
+      if (uiInfo && Array.isArray(uiInfo.displayColumns)) {
+        displayColumnNames = new Set(uiInfo.displayColumns.map(c => c.fieldApiName));
+      }
+    } catch (e) {
+      // Fallback if UI API fails
+    }
+
     const scope = await buildReadableRecordScopeFilter(object, req.user, requestId);
     const scopedQuery = appendExtraWhereToSOQL(detail.query, scope.clause);
     const sfStartedAt = performance.now();
@@ -5542,9 +5794,16 @@ app.get('/api/:object/listviews/:id/results', checkAuth, async (req, res, next) 
     const hiddenFields = new Set(req.fieldPerms?.hiddenFields || []);
     const owdAccess = await getOrgWideDefaultAccess(object);
     const canUseSalesforceTotal = req.user.isSystemAdmin || ['public_read', 'public_read_write'].includes(owdAccess);
+
+    const returnedColumns = (detail.columns || []).filter(column => {
+      if (hiddenFields.has(column.fieldNameOrPath)) return false;
+      if (displayColumnNames && !displayColumnNames.has(column.fieldNameOrPath)) return false;
+      return true;
+    });
+
     res.json({
       label: detail.label,
-      columns: (detail.columns || []).filter(column => !hiddenFields.has(column.fieldNameOrPath)),
+      columns: returnedColumns,
       query: detail.query,
       records,
       totalSize: canUseSalesforceTotal ? (data.totalSize || 0) : records.length,
@@ -5598,6 +5857,210 @@ app.get('/api/:object/fields', checkAuth, async (req, res, next) => {
     });
   } catch (err) {
     handleSFError(err, res, `Fields ${object}`);
+  }
+});
+
+app.get('/api/:object/layouts', checkAuth, async (req, res) => {
+  const { object } = req.params;
+  if (!OBJECTS[object]) {
+    return res.status(400).json({ error: `Unknown object: ${object}` });
+  }
+
+  try {
+    const data = await sfGet(`/sobjects/${object}/describe/layouts`);
+    const layout = data.layouts && data.layouts[0];
+    if (!layout) {
+      return res.status(404).json({ error: `Layout not found for object: ${object}` });
+    }
+
+    const detailSections = layout.detailLayoutSections || [];
+    const mappedLayout = detailSections.map(section => {
+      const fields = [];
+      const layoutRows = section.layoutRows || [];
+      for (const row of layoutRows) {
+        const layoutItems = row.layoutItems || [];
+        for (const item of layoutItems) {
+          const layoutComponents = item.layoutComponents || [];
+          for (const component of layoutComponents) {
+            if (component.componentType === 'Field') {
+              const fieldName = component.value || (component.details && component.details.name);
+              if (fieldName) {
+                const readOnly = item.editableForUpdate === false || item.editableForNew === false;
+                if (readOnly) {
+                  fields.push({ name: fieldName, readOnly: true });
+                } else {
+                  fields.push(fieldName);
+                }
+              }
+            }
+          }
+        }
+      }
+      return {
+        title: section.heading || "Information",
+        fields: fields
+      };
+    }).filter(s => s.fields.length > 0);
+
+    res.json({ layouts: mappedLayout });
+  } catch (err) {
+    handleSFError(err, res, `Layouts ${object}`);
+  }
+});
+
+// GET user custom layout from Supabase
+app.get('/api/portal/layouts/:object', checkAuth, async (req, res) => {
+  const { object } = req.params;
+  try {
+    const { data, error } = await supabase
+      .from('portal_custom_layouts')
+      .select('layout_data')
+      .eq('user_id', req.user.id)
+      .eq('object_name', object)
+      .maybeSingle();
+
+    if (error) {
+      console.error('[GET /api/portal/layouts/:object] Supabase lookup error:', error);
+      return res.status(500).json({ error: 'Failed to retrieve layout from database' });
+    }
+
+    res.json({ layout: data ? data.layout_data : null });
+  } catch (err) {
+    console.error('[GET /api/portal/layouts/:object] Exception:', err);
+    res.status(500).json({ error: 'Server error retrieving layout' });
+  }
+});
+
+// POST user custom layout to Supabase (save/upsert)
+app.post('/api/portal/layouts/:object', checkAuth, async (req, res) => {
+  const { object } = req.params;
+  const { layout } = req.body;
+
+  if (!layout || !Array.isArray(layout)) {
+    return res.status(400).json({ error: 'Invalid layout data' });
+  }
+
+  try {
+    const { error } = await supabase
+      .from('portal_custom_layouts')
+      .upsert({
+        user_id: req.user.id,
+        object_name: object,
+        layout_data: layout,
+        updated_at: new Date()
+      }, {
+        onConflict: 'user_id,object_name'
+      });
+
+    if (error) {
+      console.error('[POST /api/portal/layouts/:object] Supabase upsert error:', error);
+      return res.status(500).json({ error: 'Failed to save layout to database' });
+    }
+
+    res.json({ success: true });
+  } catch (err) {
+    console.error('[POST /api/portal/layouts/:object] Exception:', err);
+    res.status(500).json({ error: 'Server error saving layout' });
+  }
+});
+
+// DELETE user custom layout from Supabase (reset to default)
+app.delete('/api/portal/layouts/:object', checkAuth, async (req, res) => {
+  const { object } = req.params;
+  try {
+    const { error } = await supabase
+      .from('portal_custom_layouts')
+      .delete()
+      .eq('user_id', req.user.id)
+      .eq('object_name', object);
+
+    if (error) {
+      console.error('[DELETE /api/portal/layouts/:object] Supabase delete error:', error);
+      return res.status(500).json({ error: 'Failed to delete layout from database' });
+    }
+
+    res.json({ success: true });
+  } catch (err) {
+    console.error('[DELETE /api/portal/layouts/:object] Exception:', err);
+    res.status(500).json({ error: 'Server error deleting layout' });
+  }
+});
+
+// GET user custom compact layout from Supabase
+app.get('/api/portal/compact-layouts/:object', checkAuth, async (req, res) => {
+  const { object } = req.params;
+  try {
+    const { data, error } = await supabase
+      .from('portal_compact_layouts')
+      .select('fields')
+      .eq('user_id', req.user.id)
+      .eq('object_name', object)
+      .maybeSingle();
+
+    if (error) {
+      console.error('[GET /api/portal/compact-layouts/:object] Supabase lookup error:', error);
+      return res.status(500).json({ error: 'Failed to retrieve compact layout from database' });
+    }
+
+    res.json({ fields: data ? data.fields : null });
+  } catch (err) {
+    console.error('[GET /api/portal/compact-layouts/:object] Exception:', err);
+    res.status(500).json({ error: 'Server error retrieving compact layout' });
+  }
+});
+
+// POST user custom compact layout to Supabase (save/upsert)
+app.post('/api/portal/compact-layouts/:object', checkAuth, async (req, res) => {
+  const { object } = req.params;
+  const { fields } = req.body;
+
+  if (!fields || !Array.isArray(fields)) {
+    return res.status(400).json({ error: 'Invalid compact layout fields' });
+  }
+
+  try {
+    const { error } = await supabase
+      .from('portal_compact_layouts')
+      .upsert({
+        user_id: req.user.id,
+        object_name: object,
+        fields: fields,
+        updated_at: new Date()
+      }, {
+        onConflict: 'user_id,object_name'
+      });
+
+    if (error) {
+      console.error('[POST /api/portal/compact-layouts/:object] Supabase upsert error:', error);
+      return res.status(500).json({ error: 'Failed to save compact layout to database' });
+    }
+
+    res.json({ success: true });
+  } catch (err) {
+    console.error('[POST /api/portal/compact-layouts/:object] Exception:', err);
+    res.status(500).json({ error: 'Server error saving compact layout' });
+  }
+});
+
+// DELETE user custom compact layout from Supabase (reset to default)
+app.delete('/api/portal/compact-layouts/:object', checkAuth, async (req, res) => {
+  const { object } = req.params;
+  try {
+    const { error } = await supabase
+      .from('portal_compact_layouts')
+      .delete()
+      .eq('user_id', req.user.id)
+      .eq('object_name', object);
+
+    if (error) {
+      console.error('[DELETE /api/portal/compact-layouts/:object] Supabase delete error:', error);
+      return res.status(500).json({ error: 'Failed to delete compact layout from database' });
+    }
+
+    res.json({ success: true });
+  } catch (err) {
+    console.error('[DELETE /api/portal/compact-layouts/:object] Exception:', err);
+    res.status(500).json({ error: 'Server error deleting compact layout' });
   }
 });
 
@@ -5685,6 +6148,7 @@ app.delete('/api/campaigns/:id/members/:memberId', async (req, res) => {
     if (!data.records?.length) return res.status(404).json({ error: 'Campaign member not found' });
 
     await sfDelete(`/sobjects/CampaignMember/${memberId}`);
+    invalidateCampaignMemberIdCache(id);
     res.json({ success: true });
   } catch (err) {
     handleSFError(err, res, `Delete campaign member ${memberId}`);
@@ -6006,28 +6470,152 @@ app.post('/api/:object/:id/activity', checkAuth, async (req, res, next) => {
   }
 });
 
+// ─── Candidate Explorer: Caching, Metadata & Advanced Filters ────
+const CANDIDATE_CACHE = new Map();
+const CANDIDATE_COUNT_CACHE = new Map();
+const CAMPAIGN_MEMBER_ID_CACHE = new Map();
+const CANDIDATE_CACHE_TTL = 30000;
+
+const objectFieldDetailsCache = new Map();
+
+async function getObjectFieldDetails(objectName) {
+  const cacheKey = `${orgStore.activeOrgKey}:${objectName}`;
+  if (objectFieldDetailsCache.has(cacheKey)) return objectFieldDetailsCache.get(cacheKey);
+  const meta = await sfGet(`/sobjects/${objectName}/describe`);
+  const fields = (meta.fields || [])
+    .filter(f => !f.deprecatedAndHidden)
+    .filter(f => !['address', 'location'].includes(f.type))
+    .map(f => ({ name: f.name, label: f.label, type: f.type, filterable: f.filterable, picklistValues: (f.picklistValues || []).filter(p => p.active).map(p => ({ label: p.label, value: p.value })) }))
+    .sort((a, b) => a.label.localeCompare(b.label));
+  objectFieldDetailsCache.set(cacheKey, fields);
+  return fields;
+}
+
+function invalidateCampaignMemberIdCache(campaignId) {
+  CAMPAIGN_MEMBER_ID_CACHE.delete(campaignId);
+}
+
+function getCachedOr(cache, key, ttl) {
+  const hit = cache.get(key);
+  if (hit && (Date.now() - hit.ts < ttl)) return hit.data;
+  return undefined;
+}
+
+app.get('/api/metadata/filterable-fields/:object', async (req, res) => {
+  const { object } = req.params;
+  if (!['Contact', 'Lead'].includes(object)) return res.status(400).json({ error: 'Object must be Contact or Lead' });
+  try {
+    const allFields = await getObjectFieldDetails(object);
+    const filterable = allFields.filter(f => f.filterable !== false && ['string', 'picklist', 'email', 'phone', 'url', 'boolean', 'double', 'integer', 'currency', 'percent', 'date', 'datetime', 'textarea', 'reference', 'id'].includes(f.type));
+    res.json({ fields: filterable });
+  } catch (err) {
+    handleSFError(err, res, `Filterable fields ${object}`);
+  }
+});
+
 app.get('/api/campaigns/:id/candidates/:object', async (req, res) => {
   const { id, object } = req.params;
   if (!['Contact', 'Lead'].includes(object)) return res.status(400).json({ error: 'Object must be Contact or Lead' });
 
   try {
     const search = String(req.query.search || '').trim();
-    const cfg = OBJECTS[object];
+    const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 50, 1), 200);
+    const offset = Math.max(parseInt(req.query.offset, 10) || 0, 0);
+    let filters = [];
+    if (req.query.filters) { try { filters = JSON.parse(req.query.filters); } catch (_) {} }
+
+    const allFieldDetails = await getObjectFieldDetails(object);
+    const detailsMap = new Map(allFieldDetails.map(f => [f.name, f]));
+    detailsMap.set('Account.Name', { name: 'Account.Name', type: 'string', label: 'Account Name' });
+    detailsMap.set('Account.Industry', { name: 'Account.Industry', type: 'string', label: 'Account Industry' });
     const availableFields = await getObjectFieldSet(object);
-    const where = buildWhereClause(object, search, object === 'Lead' && availableFields.has('IsConverted') ? "IsConverted = false" : '', availableFields);
-    const soql = `SELECT ${await fieldsCsvForObject(object)} FROM ${object}${where} ORDER BY ${cfg.orderBy} LIMIT 100`;
-    const [people, members] = await Promise.all([
-      sfGet('/query', { q: soql }),
-      sfGet('/query', {
-        q: `SELECT ContactId, LeadId FROM CampaignMember WHERE CampaignId = '${escapeSOQL(id)}' LIMIT 2000`
-      })
-    ]);
-    const existing = new Set((members.records || []).map((record) => record.ContactId || record.LeadId).filter(Boolean));
+    const cfg = OBJECTS[object];
+    const conditions = [];
+
+    if (search) {
+      const safe = escapeSOQL(search);
+      const parts = cfg.searchFields.filter(f => availableFields.has(f)).map(f => `${f} LIKE '%${safe}%'`);
+      if (parts.length) conditions.push(`(${parts.join(' OR ')})`);
+    }
+    if (object === 'Lead' && availableFields.has('IsConverted')) conditions.push('IsConverted = false');
+
+    if (Array.isArray(filters)) {
+      for (const { field, operator, value } of filters) {
+        if (!field || !operator) continue;
+        const meta = detailsMap.get(field);
+        if (!meta && !isSelectableField(field, availableFields)) continue;
+        const type = meta ? meta.type : 'string';
+        const sv = escapeSOQL(String(value || '').trim());
+        let cond = '';
+        if (operator === 'equals' || operator === 'eq') {
+          if (type === 'boolean') cond = `${field} = ${String(value).toLowerCase() === 'true' ? 'true' : 'false'}`;
+          else if (['double','integer','currency','percent'].includes(type)) cond = `${field} = ${parseFloat(sv) || 0}`;
+          else if (['date','datetime'].includes(type)) { if (sv) cond = `${field} = ${sv}`; }
+          else cond = `${field} = '${sv}'`;
+        } else if (operator === 'not_equal' || operator === 'ne') {
+          if (type === 'boolean') cond = `${field} != ${String(value).toLowerCase() === 'true' ? 'true' : 'false'}`;
+          else if (['double','integer','currency','percent'].includes(type)) cond = `${field} != ${parseFloat(sv) || 0}`;
+          else if (['date','datetime'].includes(type)) { if (sv) cond = `${field} != ${sv}`; }
+          else cond = `${field} != '${sv}'`;
+        } else if (operator === 'contains') { cond = `${field} LIKE '%${sv}%'`; }
+        else if (operator === 'starts_with') { cond = `${field} LIKE '${sv}%'`; }
+        else if (operator === 'ends_with') { cond = `${field} LIKE '%${sv}'`; }
+        else if (operator === 'greater_than' || operator === 'gt') {
+          if (['double','integer','currency','percent'].includes(type)) cond = `${field} > ${parseFloat(sv) || 0}`;
+          else if (['date','datetime'].includes(type)) { if (sv) cond = `${field} > ${sv}`; }
+          else cond = `${field} > '${sv}'`;
+        } else if (operator === 'less_than' || operator === 'lt') {
+          if (['double','integer','currency','percent'].includes(type)) cond = `${field} < ${parseFloat(sv) || 0}`;
+          else if (['date','datetime'].includes(type)) { if (sv) cond = `${field} < ${sv}`; }
+          else cond = `${field} < '${sv}'`;
+        } else if (operator === 'is_null') {
+          if (['string', 'textarea', 'picklist', 'phone', 'email', 'url', 'id', 'reference'].includes(type)) {
+            cond = `(${field} = null OR ${field} = '')`;
+          } else {
+            cond = `${field} = null`;
+          }
+        } else if (operator === 'is_not_null') {
+          if (['string', 'textarea', 'picklist', 'phone', 'email', 'url', 'id', 'reference'].includes(type)) {
+            cond = `(${field} != null AND ${field} != '')`;
+          } else {
+            cond = `${field} != null`;
+          }
+        }
+        if (cond) conditions.push(cond);
+      }
+    }
+
+    const where = conditions.length ? ` WHERE ${conditions.join(' AND ')}` : '';
+    const dataSoql = `SELECT ${await fieldsCsvForObject(object)} FROM ${object}${where} ORDER BY ${cfg.orderBy} LIMIT ${limit} OFFSET ${offset}`;
+    const countSoql = `SELECT COUNT() FROM ${object}${where}`;
+
+    // Cache layer: campaign member IDs
+    let memberIds = getCachedOr(CAMPAIGN_MEMBER_ID_CACHE, id, CANDIDATE_CACHE_TTL);
+    if (!memberIds) {
+      const md = await sfGet('/query', { q: `SELECT ContactId, LeadId FROM CampaignMember WHERE CampaignId = '${escapeSOQL(id)}' LIMIT 10000` });
+      memberIds = new Set((md.records || []).map(r => r.ContactId || r.LeadId).filter(Boolean));
+      CAMPAIGN_MEMBER_ID_CACHE.set(id, { data: memberIds, ts: Date.now() });
+    }
+
+    // Cache layer: people records
+    let records = getCachedOr(CANDIDATE_CACHE, dataSoql, CANDIDATE_CACHE_TTL);
+    if (!records) {
+      const d = await sfGet('/query', { q: dataSoql });
+      records = d.records || [];
+      CANDIDATE_CACHE.set(dataSoql, { data: records, ts: Date.now() });
+    }
+
+    // Cache layer: total count
+    let totalSize = getCachedOr(CANDIDATE_COUNT_CACHE, countSoql, CANDIDATE_CACHE_TTL);
+    if (totalSize === undefined) {
+      const d = await sfGet('/query', { q: countSoql });
+      totalSize = d.totalSize || 0;
+      CANDIDATE_COUNT_CACHE.set(countSoql, { data: totalSize, ts: Date.now() });
+    }
+
     res.json({
-      records: (people.records || []).map((record) => ({
-        ...record,
-        alreadyMember: existing.has(record.Id)
-      }))
+      records: records.map(record => ({ ...record, alreadyMember: memberIds.has(record.Id) })),
+      totalSize
     });
   } catch (err) {
     handleSFError(err, res, `Campaign ${req.params.id} candidates ${object}`);
@@ -6064,6 +6652,7 @@ app.post('/api/campaigns/:id/members', async (req, res) => {
 
     const result = await sfPost('/composite/sobjects', { allOrNone: false, records });
     const results = Array.isArray(result) ? result : result.results || [];
+    invalidateCampaignMemberIdCache(id);
     res.json({
       success: true,
       created: results.filter((item) => item.success).length,
