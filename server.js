@@ -5986,6 +5986,84 @@ app.delete('/api/portal/layouts/:object', checkAuth, async (req, res) => {
   }
 });
 
+// GET user custom compact layout from Supabase
+app.get('/api/portal/compact-layouts/:object', checkAuth, async (req, res) => {
+  const { object } = req.params;
+  try {
+    const { data, error } = await supabase
+      .from('portal_compact_layouts')
+      .select('fields')
+      .eq('user_id', req.user.id)
+      .eq('object_name', object)
+      .maybeSingle();
+
+    if (error) {
+      console.error('[GET /api/portal/compact-layouts/:object] Supabase lookup error:', error);
+      return res.status(500).json({ error: 'Failed to retrieve compact layout from database' });
+    }
+
+    res.json({ fields: data ? data.fields : null });
+  } catch (err) {
+    console.error('[GET /api/portal/compact-layouts/:object] Exception:', err);
+    res.status(500).json({ error: 'Server error retrieving compact layout' });
+  }
+});
+
+// POST user custom compact layout to Supabase (save/upsert)
+app.post('/api/portal/compact-layouts/:object', checkAuth, async (req, res) => {
+  const { object } = req.params;
+  const { fields } = req.body;
+
+  if (!fields || !Array.isArray(fields)) {
+    return res.status(400).json({ error: 'Invalid compact layout fields' });
+  }
+
+  try {
+    const { error } = await supabase
+      .from('portal_compact_layouts')
+      .upsert({
+        user_id: req.user.id,
+        object_name: object,
+        fields: fields,
+        updated_at: new Date()
+      }, {
+        onConflict: 'user_id,object_name'
+      });
+
+    if (error) {
+      console.error('[POST /api/portal/compact-layouts/:object] Supabase upsert error:', error);
+      return res.status(500).json({ error: 'Failed to save compact layout to database' });
+    }
+
+    res.json({ success: true });
+  } catch (err) {
+    console.error('[POST /api/portal/compact-layouts/:object] Exception:', err);
+    res.status(500).json({ error: 'Server error saving compact layout' });
+  }
+});
+
+// DELETE user custom compact layout from Supabase (reset to default)
+app.delete('/api/portal/compact-layouts/:object', checkAuth, async (req, res) => {
+  const { object } = req.params;
+  try {
+    const { error } = await supabase
+      .from('portal_compact_layouts')
+      .delete()
+      .eq('user_id', req.user.id)
+      .eq('object_name', object);
+
+    if (error) {
+      console.error('[DELETE /api/portal/compact-layouts/:object] Supabase delete error:', error);
+      return res.status(500).json({ error: 'Failed to delete compact layout from database' });
+    }
+
+    res.json({ success: true });
+  } catch (err) {
+    console.error('[DELETE /api/portal/compact-layouts/:object] Exception:', err);
+    res.status(500).json({ error: 'Server error deleting compact layout' });
+  }
+});
+
 // Global SOSL search
 app.get('/api/search/global', checkAuth, async (req, res) => {
   const q = (req.query.q || '').trim();

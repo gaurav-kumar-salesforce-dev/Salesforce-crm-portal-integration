@@ -2062,14 +2062,17 @@ textarea.form-ctrl { resize: vertical; min-height: 80px; line-height: 1.5; }
 
 .record-summary {
   display: grid;
-  grid-template-columns: repeat(4, minmax(120px, 1fr));
-  gap: 0;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  row-gap: 16px;
+  column-gap: 0;
   padding: 12px 20px;
 }
 
 .record-summary div {
+  display: flex;
+  flex-direction: column;
+  padding: 2px 24px 2px 0;
   min-width: 0;
-  padding-right: 16px;
 }
 
 .record-summary span {
@@ -2077,7 +2080,9 @@ textarea.form-ctrl { resize: vertical; min-height: 80px; line-height: 1.5; }
   color: var(--text-3);
   font-size: 11px;
   font-weight: 700;
-  margin-bottom: 4px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 6px;
 }
 
 .record-summary strong {
@@ -2085,6 +2090,7 @@ textarea.form-ctrl { resize: vertical; min-height: 80px; line-height: 1.5; }
   color: var(--text-1);
   font-size: 13px;
   font-weight: 600;
+  line-height: 1.4;
   overflow-wrap: anywhere;
 }
 
@@ -3855,7 +3861,7 @@ html[data-theme="dark"] .theme-toggle .icon-moon { display: block; }
   .page-actions { align-self: flex-start; }
   .detail-grid { grid-template-columns: 1fr; }
   .record-title-row { flex-direction: column; }
-  .record-summary { grid-template-columns: 1fr 1fr; gap: 12px; }
+  .record-summary { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); row-gap: 12px; }
   .record-layout { grid-template-columns: 1fr; }
 }
 
@@ -5175,7 +5181,7 @@ body.sidebar-collapsed .content {
   }
 
   .record-summary {
-    grid-template-columns: 1fr 1fr;
+    grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
   }
 
   .record-tabs {
@@ -5332,8 +5338,19 @@ body.sidebar-collapsed .content {
   }
 
   .record-summary {
-    grid-template-columns: 1fr;
-    gap: 10px;
+    display: flex;
+    flex-direction: column;
+    row-gap: 12px;
+  }
+  .record-summary div {
+    border-right: none;
+    border-bottom: 1px solid var(--border, #cbd5e1);
+    padding: 0 0 8px 0;
+    margin-right: 0;
+  }
+  .record-summary div:last-child {
+    border-bottom: none;
+    padding-bottom: 0;
   }
 
   .activity-actions {

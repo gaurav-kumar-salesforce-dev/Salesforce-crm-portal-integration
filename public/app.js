@@ -3684,6 +3684,43 @@ async function getEditableFields(record, objectName = currentObject) {
   }
 }
 
+const COMPACT_LAYOUT_CACHE = {};
+
+function getCustomCompactFields(objectName) {
+  if (COMPACT_LAYOUT_CACHE[objectName]) {
+    return COMPACT_LAYOUT_CACHE[objectName];
+  }
+  return (
+    {
+      Account: ["Type", "Industry", "Phone", "BillingCity"],
+      Contact: ["Title", "Email", "Phone", "Account.Name"],
+      Lead: ["Company", "Status", "Email", "Phone"],
+      Opportunity: ["StageName", "Amount", "CloseDate", "Probability"],
+      Case: ["Status", "Priority", "Type", "CreatedDate"],
+      Campaign: ["Type", "Status", "StartDate", "EndDate"],
+      User: ["Email", "Username", "Title"],
+    }[objectName] ||
+    OBJECT_META[objectName]?.columns ||
+    []
+  );
+}
+
+async function loadCompactLayoutForObject(objectName) {
+  if (COMPACT_LAYOUT_CACHE[objectName]) {
+    return COMPACT_LAYOUT_CACHE[objectName];
+  }
+  try {
+    const res = await api(`/api/portal/compact-layouts/${objectName}`);
+    if (res && res.fields) {
+      COMPACT_LAYOUT_CACHE[objectName] = res.fields;
+      return res.fields;
+    }
+  } catch (err) {
+    console.warn(`Failed to fetch Supabase compact layout for ${objectName}:`, err);
+  }
+  return getCustomCompactFields(objectName);
+}
+
 const LAYOUT_CACHE = {};
 const DB_LAYOUT_CACHE = {};
 
@@ -4151,7 +4188,8 @@ async function openRecordDetail(objectName, id) {
 
     const [data] = await Promise.all([
       api(`/api/${objectName}/${id}`),
-      loadLayoutForObject(objectName)
+      loadLayoutForObject(objectName),
+      loadCompactLayoutForObject(objectName)
     ]);
     const record = data.record || {};
     const fields = data.fields || [];
@@ -4217,9 +4255,8 @@ function renderRecordDetailPage(
   title,
   id,
 ) {
-  const summaryFields = getSummaryFields(objectName)
-    .filter((field) => getValue(record, field) !== undefined)
-    .slice(0, 4);
+  const summaryFields = getCustomCompactFields(objectName)
+    .filter((field) => getValue(record, field) !== undefined);
   const canEditThisRecord = currentDetailCanEdit();
   $("content").innerHTML = `
     <div class="record-page">
@@ -4232,11 +4269,19 @@ function renderRecordDetailPage(
               <h1 class="page-title">${escapeHtml(title)}</h1>
             </div>
           </div>
-          <div class="page-actions">
+          <div class="page-actions" style="display: flex; gap: 8px; align-items: center;">
             <button class="btn btn-ghost" onclick="restoreListContent()">Back</button>
             ${canDo(objectName, "can_edit") && canEditThisRecord
               ? '<button class="btn btn-primary" onclick="editCurrentDetailRecord()">Edit</button>'
               : ""}
+            <button class="btn btn-ghost" 
+                    style="display: inline-flex; align-items: center; justify-content: center; width: 34px; height: 34px; padding: 0; cursor: pointer;" 
+                    onclick="openCustomizeCompactLayoutModal()" 
+                    title="Customize Compact Layout">
+              <span style="display: flex; width: 16px; height: 16px; align-items: center; justify-content: center; fill: currentColor;">
+                ${utilityIconSvg("settings")}
+              </span>
+            </button>
           </div>
         </div>
         <div class="record-summary">
@@ -8364,4 +8409,237 @@ function restoreStandardDetailView() {
       ${renderConfiguredDetailSections(objectName, record, fields, displayFields)}
     </div>
   `;
+}
+
+/* ── Customize Compact Layout Modal & Supabase Persistence ───────── */
+let compactLayoutDraft = [];
+
+async function openCustomizeCompactLayoutModal() {
+  if (!detailRecordState) return;
+  const objectName = detailRecordState.objectName;
+  
+  // Load current custom compact fields as draft
+  compactLayoutDraft = [...getCustomCompactFields(objectName)];
+  
+  // Open modal
+  const existing = $("compactLayoutModalOverlay");
+  if (existing) existing.remove();
+
+  const overlay = document.createElement("div");
+  overlay.id = "compactLayoutModalOverlay";
+  overlay.className = "overlay open";
+  overlay.style.zIndex = "9999";
+  
+  overlay.addEventListener("click", (e) => {
+    if (e.target === overlay) {
+      closeCompactLayoutModal();
+    }
+  });
+
+  overlay.innerHTML = `
+    <div class="modal modal-sm" style="display: flex; flex-direction: column; max-width: 500px; padding: 0;">
+      <div class="modal-head">
+        <div class="modal-title-group">
+          <div class="modal-obj-icon">⚙️</div>
+          <h2>Customize Compact Layout</h2>
+        </div>
+        <button class="close-btn" onclick="closeCompactLayoutModal()">
+          <svg viewBox="0 0 20 20" width="18" height="18" fill="currentColor">
+            <path fill-rule="evenodd"
+              d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z"
+              clip-rule="evenodd" />
+          </svg>
+        </button>
+      </div>
+      <div class="modal-body" style="display: flex; gap: 15px; height: 350px; overflow: hidden; padding: 15px;">
+        <div style="flex: 1; display: flex; flex-direction: column; border-right: 1px solid var(--border-color, #e0e0e0); padding-right: 15px;">
+          <h4 style="font-size: 13px; font-weight: 600; margin-bottom: 8px;">Selected Fields</h4>
+          <div id="compactSelectedFields" style="flex: 1; overflow-y: auto;">
+            ${renderCompactSelectedFieldsHtml()}
+          </div>
+        </div>
+        <div style="flex: 1; display: flex; flex-direction: column;">
+          <h4 style="font-size: 13px; font-weight: 600; margin-bottom: 8px;">Available Fields</h4>
+          <input type="text" id="compactFieldSearch" placeholder="Search..." class="layout-search-input" style="margin-bottom: 8px; font-size: 12px; padding: 6px 10px;">
+          <div id="compactAvailableFields" style="flex: 1; overflow-y: auto;">
+            ${renderCompactAvailableFieldsHtml(objectName)}
+          </div>
+        </div>
+      </div>
+      <div class="modal-foot">
+        <button class="btn btn-ghost" style="margin-right: auto;" onclick="resetCompactLayoutToDefault()">Reset to Default</button>
+        <button class="btn btn-ghost" style="margin-right: 8px;" onclick="closeCompactLayoutModal()">Cancel</button>
+        <button class="btn btn-primary" onclick="saveCompactLayout()">Save</button>
+      </div>
+    </div>
+  `;
+
+  document.body.appendChild(overlay);
+  setupCompactFieldsSearch();
+}
+
+function renderCompactSelectedFieldsHtml() {
+  if (compactLayoutDraft.length === 0) {
+    return `<div style="text-align: center; color: var(--text-muted, #706e6b); font-size: 12px; padding: 20px;">No fields selected</div>`;
+  }
+  return compactLayoutDraft.map((field, idx) => `
+    <div style="display: flex; align-items: center; justify-content: space-between; padding: 8px 10px; background: var(--bg-hover, #f3f5f9); border: 1px solid var(--border-color, #d8dde6); border-radius: 4px; margin-bottom: 6px; font-size: 12.5px;">
+      <div style="display: flex; align-items: center; gap: 6px;">
+        <div style="display: flex; flex-direction: column; gap: 2px;">
+          <button style="border: none; background: none; font-size: 10px; cursor: pointer; line-height: 1; padding: 0;" onclick="moveCompactField(${idx}, -1)" ${idx === 0 ? 'disabled' : ''}>▲</button>
+          <button style="border: none; background: none; font-size: 10px; cursor: pointer; line-height: 1; padding: 0;" onclick="moveCompactField(${idx}, 1)" ${idx === compactLayoutDraft.length - 1 ? 'disabled' : ''}>▼</button>
+        </div>
+        <span style="font-weight: 600;">${escapeHtml(labelFor(field))}</span>
+      </div>
+      <button style="border: none; background: none; color: #c23934; cursor: pointer; font-size: 16px; padding: 0 4px;" onclick="removeCompactField(${idx})">&times;</button>
+    </div>
+  `).join("");
+}
+
+function renderCompactAvailableFieldsHtml(objectName) {
+  const allFields = detailRecordState.fields || [];
+  const selectedSet = new Set(compactLayoutDraft);
+  const available = allFields.filter(f => !selectedSet.has(f.name));
+  
+  if (available.length === 0) {
+    return `<div style="text-align: center; color: var(--text-muted, #706e6b); font-size: 12px; padding: 20px;">All fields added</div>`;
+  }
+  
+  return available.map(field => `
+    <div class="compact-available-item" 
+         style="display: flex; align-items: center; justify-content: space-between; padding: 6px 8px; background: #fff; border: 1px solid var(--border-color, #d8dde6); border-radius: 4px; margin-bottom: 6px; font-size: 12px;"
+         data-name="${field.name.toLowerCase()}"
+         data-label="${(field.label || labelFor(field.name)).toLowerCase()}">
+      <div style="display: flex; flex-direction: column;">
+        <span style="font-weight: 500;">${escapeHtml(field.label || labelFor(field.name))}</span>
+        <span style="font-size: 10px; color: var(--text-muted, #706e6b);">${escapeHtml(field.name)}</span>
+      </div>
+      <button class="btn btn-icon-only btn-ghost-link btn-sm" onclick="addCompactField('${field.name}')" title="Add Field">+</button>
+    </div>
+  `).join("");
+}
+
+function moveCompactField(idx, direction) {
+  const targetIdx = idx + direction;
+  if (targetIdx < 0 || targetIdx >= compactLayoutDraft.length) return;
+  const temp = compactLayoutDraft[idx];
+  compactLayoutDraft[idx] = compactLayoutDraft[targetIdx];
+  compactLayoutDraft[targetIdx] = temp;
+  
+  reRenderCompactModal();
+}
+
+function removeCompactField(idx) {
+  compactLayoutDraft.splice(idx, 1);
+  reRenderCompactModal();
+}
+
+function addCompactField(fieldName) {
+  compactLayoutDraft.push(fieldName);
+  reRenderCompactModal();
+}
+
+function reRenderCompactModal() {
+  const selectedContainer = $("compactSelectedFields");
+  const availableContainer = $("compactAvailableFields");
+  if (selectedContainer) selectedContainer.innerHTML = renderCompactSelectedFieldsHtml();
+  if (availableContainer) availableContainer.innerHTML = renderCompactAvailableFieldsHtml(detailRecordState.objectName);
+  setupCompactFieldsSearch();
+}
+
+function setupCompactFieldsSearch() {
+  const searchInput = $("compactFieldSearch");
+  if (!searchInput) return;
+  searchInput.addEventListener("input", (e) => {
+    const q = e.target.value.toLowerCase().trim();
+    document.querySelectorAll("#compactAvailableFields .compact-available-item").forEach(item => {
+      const name = item.dataset.name;
+      const label = item.dataset.label;
+      if (name.includes(q) || label.includes(q)) {
+        item.style.display = "flex";
+      } else {
+        item.style.display = "none";
+      }
+    });
+  });
+}
+
+function closeCompactLayoutModal() {
+  const overlay = $("compactLayoutModalOverlay");
+  if (overlay) overlay.remove();
+}
+
+async function saveCompactLayout() {
+  if (!detailRecordState) return;
+  const objectName = detailRecordState.objectName;
+  
+  try {
+    const res = await api(`/api/portal/compact-layouts/${objectName}`, {
+      method: 'POST',
+      body: JSON.stringify({ fields: compactLayoutDraft })
+    });
+    if (res && res.success) {
+      COMPACT_LAYOUT_CACHE[objectName] = compactLayoutDraft;
+      toast("Compact layout saved successfully!", "success");
+      closeCompactLayoutModal();
+      
+      // Refresh details page header by re-rendering
+      refreshRecordDetailPageHeader();
+    } else {
+      toast("Failed to save compact layout", "err");
+    }
+  } catch (err) {
+    console.error(err);
+    toast("Network error saving compact layout", "err");
+  }
+}
+
+async function resetCompactLayoutToDefault() {
+  if (!detailRecordState) return;
+  const objectName = detailRecordState.objectName;
+  
+  if (confirm("Reset compact layout to default?")) {
+    try {
+      const res = await api(`/api/portal/compact-layouts/${objectName}`, {
+        method: 'DELETE'
+      });
+      if (res && res.success) {
+        delete COMPACT_LAYOUT_CACHE[objectName];
+        toast("Compact layout reset to default", "success");
+        closeCompactLayoutModal();
+        refreshRecordDetailPageHeader();
+      } else {
+        toast("Failed to reset compact layout", "err");
+      }
+    } catch (err) {
+      console.error(err);
+      toast("Network error resetting compact layout", "err");
+    }
+  }
+}
+
+function refreshRecordDetailPageHeader() {
+  if (!detailRecordState) return;
+  const { objectName, record, fields } = detailRecordState;
+  
+  // Re-run getSummaryFields
+  const summaryFields = getCustomCompactFields(objectName)
+    .filter((field) => getValue(record, field) !== undefined);
+    
+  // Find record-summary container and replace its contents
+  const summaryContainer = document.querySelector(".record-summary");
+  if (summaryContainer) {
+    summaryContainer.innerHTML = `
+      ${summaryFields
+        .map(
+          (field) => `
+        <div>
+          <span>${escapeHtml(labelFor(field))}</span>
+          <strong>${formatValue(field, getValue(record, field), record)}</strong>
+        </div>
+      `,
+        )
+        .join("")}
+    `;
+  }
 }
