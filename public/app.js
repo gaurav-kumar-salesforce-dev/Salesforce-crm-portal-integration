@@ -3724,6 +3724,38 @@ async function loadCompactLayoutForObject(objectName) {
 const LAYOUT_CACHE = {};
 const DB_LAYOUT_CACHE = {};
 
+function normalizeLayoutData(layout) {
+  if (!Array.isArray(layout)) return [];
+  return layout.map(section => {
+    const normalized = {
+      title: section.title || "Information",
+      columns: typeof section.columns === "number" ? section.columns : 2,
+    };
+    if (section.leftFields) {
+      normalized.leftFields = [...section.leftFields];
+      normalized.rightFields = section.rightFields ? [...section.rightFields] : [];
+    } else if (section.fields) {
+      normalized.leftFields = [];
+      normalized.rightFields = [];
+      if (normalized.columns === 2) {
+        section.fields.forEach((f, idx) => {
+          if (idx % 2 === 0) {
+            normalized.leftFields.push(f);
+          } else {
+            normalized.rightFields.push(f);
+          }
+        });
+      } else {
+        normalized.leftFields = [...section.fields];
+      }
+    } else {
+      normalized.leftFields = [];
+      normalized.rightFields = [];
+    }
+    return normalized;
+  });
+}
+
 async function loadLayoutForObject(objectName) {
   // Check memory cache of Supabase custom layout first
   if (DB_LAYOUT_CACHE[objectName]) {
@@ -3734,8 +3766,8 @@ async function loadLayoutForObject(objectName) {
     // 1. Fetch user custom layout from Supabase
     const dbRes = await api(`/api/portal/layouts/${objectName}`);
     if (dbRes && dbRes.layout) {
-      DB_LAYOUT_CACHE[objectName] = dbRes.layout;
-      return dbRes.layout;
+      DB_LAYOUT_CACHE[objectName] = normalizeLayoutData(dbRes.layout);
+      return DB_LAYOUT_CACHE[objectName];
     }
   } catch (err) {
     console.warn(`Failed to fetch Supabase custom layout for ${objectName}:`, err);
@@ -3750,14 +3782,14 @@ async function loadLayoutForObject(objectName) {
     // 3. Fetch layout from Salesforce
     const res = await api(`/api/${objectName}/layouts`);
     if (res && res.layouts) {
-      LAYOUT_CACHE[objectName] = res.layouts;
-      return res.layouts;
+      LAYOUT_CACHE[objectName] = normalizeLayoutData(res.layouts);
+      return LAYOUT_CACHE[objectName];
     }
   } catch (err) {
     console.warn(`Failed to fetch Salesforce layout for ${objectName}, falling back to default.`, err);
   }
 
-  LAYOUT_CACHE[objectName] = OBJECT_FIELD_LAYOUTS[objectName] || [];
+  LAYOUT_CACHE[objectName] = normalizeLayoutData(OBJECT_FIELD_LAYOUTS[objectName] || []);
   return LAYOUT_CACHE[objectName];
 }
 
@@ -3774,17 +3806,29 @@ function getLayoutSections(objectName, fields = []) {
   }
   if (!layout) return [];
 
+  // Normalize layout to have columns, leftFields, rightFields
+  layout = normalizeLayoutData(layout);
+
   const fieldList = (fields || []).map((field) =>
     typeof field === "string" ? { name: field, label: labelFor(field) } : field,
   );
+  
   const resolved = layout
-    .map((section) => ({
-      title: section.title,
-      fields: section.fields
+    .map((section) => {
+      const leftResolved = (section.leftFields || [])
         .map((entry) => resolveLayoutField(entry, fieldList))
-        .filter(Boolean),
-    }))
-    .filter((section) => section.fields.length);
+        .filter(Boolean);
+      const rightResolved = (section.rightFields || [])
+        .map((entry) => resolveLayoutField(entry, fieldList))
+        .filter(Boolean);
+      return {
+        title: section.title,
+        columns: section.columns || 2,
+        leftFields: leftResolved,
+        rightFields: rightResolved,
+      };
+    })
+    .filter((section) => section.leftFields.length || section.rightFields.length);
   return resolved;
 }
 
@@ -4377,8 +4421,20 @@ function renderConfiguredDetailSections(
       <div class="detail-section-title" style="cursor: pointer; user-select: none;" onclick="toggleDetailSection(this)">
         ${utilityIconSvg("chevronDown")}<span>${escapeHtml(section.title)}</span>
       </div>
-      <div class="detail-grid">
-        ${section.fields.map((field) => renderDetailField(objectName, record, field)).join("")}
+      <div class="detail-grid-container">
+        ${section.columns === 1 
+          ? `<div class="detail-grid cols-1">
+               ${(section.leftFields || []).map((field) => renderDetailField(objectName, record, field)).join("")}
+             </div>`
+          : `<div class="detail-grid cols-2">
+               <div class="detail-column-side">
+                 ${(section.leftFields || []).map((field) => renderDetailField(objectName, record, field)).join("")}
+               </div>
+               <div class="detail-column-side">
+                 ${(section.rightFields || []).map((field) => renderDetailField(objectName, record, field)).join("")}
+               </div>
+             </div>`
+        }
       </div>
     </section>
   `,
@@ -4389,14 +4445,14 @@ function renderConfiguredDetailSections(
 function toggleDetailSection(titleEl) {
   const section = titleEl.closest(".detail-section");
   if (!section) return;
-  const grid = section.querySelector(".detail-grid");
+  const container = section.querySelector(".detail-grid-container");
   const svg = titleEl.querySelector("svg");
   const isCollapsed = section.classList.toggle("collapsed");
   if (isCollapsed) {
-    if (grid) grid.style.display = "none";
+    if (container) container.style.display = "none";
     if (svg) svg.style.transform = "rotate(-90deg)";
   } else {
-    if (grid) grid.style.display = "grid";
+    if (container) container.style.display = "";
     if (svg) svg.style.transform = "";
   }
 }
@@ -7900,7 +7956,6 @@ document.addEventListener("DOMContentLoaded", async () => {
     showLoginPage();
     return; // Don't load any data until logged in
   }
-
   // Token exists — load cached perms immediately (so UI guards work instantly)
   window.userPerms = getStoredPerms();
   currentObject = initialReadableObject();
@@ -7934,14 +7989,16 @@ document.addEventListener("DOMContentLoaded", async () => {
 /* ── Record Detail Layout Editor & Drag-and-Drop ─────────────────── */
 let isEditingLayout = false;
 let editingLayoutData = null;
+let layoutFieldSearchQuery = "";
 
 function startRearrangingFields() {
   if (!detailRecordState) return;
   const objectName = detailRecordState.objectName;
   
-  // Clone current active layout
-  editingLayoutData = JSON.parse(JSON.stringify(getActiveLayout(objectName)));
+  // Clone and normalize current active layout
+  editingLayoutData = JSON.parse(JSON.stringify(normalizeLayoutData(getActiveLayout(objectName))));
   isEditingLayout = true;
+  layoutFieldSearchQuery = "";
   
   // Render layout editor
   $("recordDetailsPanel").innerHTML = renderLayoutEditorHtml(objectName);
@@ -7960,11 +8017,24 @@ function getActiveLayout(objectName) {
   return OBJECT_FIELD_LAYOUTS[objectName] || [];
 }
 
+function normalizeLayoutData(layout) {
+  return layout.map(section => ({
+    title: section.title || "Information",
+    columns: section.columns || 2,
+    leftFields: section.leftFields || section.fields || [],
+    rightFields: section.rightFields || []
+  }));
+}
+
 function renderLayoutEditorHtml(objectName) {
   // Collect all field names currently in the layout
   const activeFieldNames = new Set();
   editingLayoutData.forEach(section => {
-    (section.fields || []).forEach(f => {
+    (section.leftFields || []).forEach(f => {
+      const name = typeof f === 'string' ? f : f.name;
+      activeFieldNames.add(name);
+    });
+    (section.rightFields || []).forEach(f => {
       const name = typeof f === 'string' ? f : f.name;
       activeFieldNames.add(name);
     });
@@ -8023,12 +8093,18 @@ function renderAvailableFieldsList(availableFields) {
 }
 
 function renderEditorSection(section, sIdx) {
-  const fields = section.fields || [];
+  const cols = section.columns || 2;
   return `
     <div class="layout-edit-section" data-section-index="${sIdx}">
-      <div class="layout-edit-section-header">
-        <input type="text" class="layout-edit-section-title-input" value="${escapeHtml(section.title)}" onchange="updateSectionTitle(${sIdx}, this.value)">
-        <div class="section-actions">
+      <div class="layout-edit-section-header" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+        <input type="text" class="layout-edit-section-title-input" value="${escapeHtml(section.title)}" onchange="updateSectionTitle(${sIdx}, this.value)" style="width: 40%;">
+        
+        <div class="section-actions" style="display: flex; align-items: center; gap: 8px;">
+          <select class="btn btn-ghost btn-sm" onchange="changeSectionLayout(${sIdx}, this.value)" style="font-size: 12px; height: 28px; padding: 0 8px; border-radius: 4px; border: 1px solid var(--border-color, #d8dde6); background: white; cursor: pointer; font-weight: 500;">
+            <option value="2" ${cols === 2 ? 'selected' : ''}>2 Columns</option>
+            <option value="1" ${cols === 1 ? 'selected' : ''}>1 Column</option>
+          </select>
+          
           <button class="btn btn-icon-only btn-ghost-link" onclick="moveSection(${sIdx}, -1)" ${sIdx === 0 ? 'disabled' : ''} title="Move Section Up">
             ▲
           </button>
@@ -8040,35 +8116,96 @@ function renderEditorSection(section, sIdx) {
           </button>
         </div>
       </div>
-      <div class="layout-edit-grid" 
-           ondragover="layoutAllowDrop(event)" 
-           ondrop="layoutDropOnSection(event, ${sIdx})">
-        ${fields.map((fieldEntry, fIdx) => {
-          const name = typeof fieldEntry === "string" ? fieldEntry : fieldEntry.name;
-          const readOnly = typeof fieldEntry === "object" ? fieldEntry.readOnly : false;
-          const label = labelFor(name);
-          return `
-            <div class="layout-edit-field" 
-                 draggable="true" 
-                 ondragstart="layoutDragStart(event, ${sIdx}, ${fIdx})"
-                 ondragover="layoutAllowDrop(event)"
-                 ondrop="layoutDropOnField(event, ${sIdx}, ${fIdx})"
-                 data-field-name="${name}">
-              <span class="layout-field-drag-handle">${utilityIconSvg("sort")}</span>
-              <div class="layout-field-info">
-                <span class="layout-field-label">${escapeHtml(label)}</span>
-                <span class="layout-field-name">${escapeHtml(name)}${readOnly ? ' (Read Only)' : ''}</span>
-              </div>
-              <button class="layout-field-remove" onclick="removeFieldFromLayout(${sIdx}, ${fIdx})" title="Remove Field">
-                &times;
-              </button>
-            </div>
-          `;
-        }).join("")}
-        ${fields.length === 0 ? '<div class="grid-empty-msg">Drag fields here or add from sidebar</div>' : ''}
-      </div>
+      
+      ${cols === 1 
+        ? `
+        <div class="layout-edit-columns cols-1">
+          <div class="layout-edit-column" 
+               data-column="left"
+               ondragover="layoutAllowDrop(event)"
+               ondragenter="layoutDragEnter(event)"
+               ondragleave="layoutDragLeave(event)"
+               ondrop="layoutDropOnColumn(event, ${sIdx}, 'left')"
+               style="display: flex; flex-direction: column; gap: 8px; min-height: 80px; padding: 8px; border: 1px dashed transparent; border-radius: 6px; transition: all 0.2s;">
+            ${(section.leftFields || []).map((fieldEntry, fIdx) => renderEditorField(fieldEntry, sIdx, 'left', fIdx)).join("")}
+            ${(section.leftFields || []).length === 0 ? '<div class="grid-empty-msg">Drag fields here or add from sidebar</div>' : ''}
+          </div>
+        </div>
+        ` 
+        : `
+        <div class="layout-edit-columns cols-2" style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
+          <div class="layout-edit-column" 
+               data-column="left"
+               ondragover="layoutAllowDrop(event)"
+               ondragenter="layoutDragEnter(event)"
+               ondragleave="layoutDragLeave(event)"
+               ondrop="layoutDropOnColumn(event, ${sIdx}, 'left')"
+               style="display: flex; flex-direction: column; gap: 8px; min-height: 80px; padding: 8px; border: 1px dashed transparent; border-radius: 6px; transition: all 0.2s;">
+            ${(section.leftFields || []).map((fieldEntry, fIdx) => renderEditorField(fieldEntry, sIdx, 'left', fIdx)).join("")}
+            ${(section.leftFields || []).length === 0 ? '<div class="grid-empty-msg">Drag fields here</div>' : ''}
+          </div>
+          <div class="layout-edit-column" 
+               data-column="right"
+               ondragover="layoutAllowDrop(event)"
+               ondragenter="layoutDragEnter(event)"
+               ondragleave="layoutDragLeave(event)"
+               ondrop="layoutDropOnColumn(event, ${sIdx}, 'right')"
+               style="display: flex; flex-direction: column; gap: 8px; min-height: 80px; padding: 8px; border: 1px dashed transparent; border-radius: 6px; transition: all 0.2s;">
+            ${(section.rightFields || []).map((fieldEntry, fIdx) => renderEditorField(fieldEntry, sIdx, 'right', fIdx)).join("")}
+            ${(section.rightFields || []).length === 0 ? '<div class="grid-empty-msg">Drag fields here</div>' : ''}
+          </div>
+        </div>
+        `
+      }
     </div>
   `;
+}
+
+function renderEditorField(fieldEntry, sIdx, columnKey, fIdx) {
+  const name = typeof fieldEntry === "string" ? fieldEntry : fieldEntry.name;
+  const readOnly = typeof fieldEntry === "object" ? fieldEntry.readOnly : false;
+  const label = labelFor(name);
+  return `
+    <div class="layout-edit-field" 
+         draggable="true" 
+         ondragstart="layoutDragStart(event, ${sIdx}, '${columnKey}', ${fIdx})"
+         ondragover="layoutAllowDrop(event)"
+         ondragenter="layoutFieldDragEnter(event)"
+         ondragleave="layoutFieldDragLeave(event)"
+         ondrop="layoutDropOnField(event, ${sIdx}, '${columnKey}', ${fIdx})"
+         data-field-name="${name}">
+      <span class="layout-field-drag-handle">${utilityIconSvg("sort")}</span>
+      <div class="layout-field-info">
+        <span class="layout-field-label">${escapeHtml(label)}</span>
+        <span class="layout-field-name">${escapeHtml(name)}${readOnly ? ' (Read Only)' : ''}</span>
+      </div>
+      <button class="layout-field-remove" onclick="removeFieldFromLayout(${sIdx}, '${columnKey}', ${fIdx})" title="Remove Field">
+        &times;
+      </button>
+    </div>
+  `;
+}
+
+function changeSectionLayout(sIdx, value) {
+  const cols = parseInt(value, 10);
+  const section = editingLayoutData[sIdx];
+  section.columns = cols;
+  
+  if (cols === 1) {
+    section.leftFields = [...(section.leftFields || []), ...(section.rightFields || [])];
+    section.rightFields = [];
+  } else {
+    // Split alternating
+    const left = [];
+    const right = [];
+    (section.leftFields || []).forEach((f, idx) => {
+      if (idx % 2 === 0) left.push(f);
+      else right.push(f);
+    });
+    section.leftFields = left;
+    section.rightFields = right;
+  }
+  reRenderLayoutEditor();
 }
 
 function updateSectionTitle(sIdx, newTitle) {
@@ -8092,31 +8229,37 @@ function moveSection(sIdx, direction) {
 function deleteLayoutSection(sIdx) {
   if (!editingLayoutData) return;
   
-  // Move all fields of this section to the first section (if any)
-  const fieldsToMove = editingLayoutData[sIdx].fields || [];
+  const section = editingLayoutData[sIdx];
+  const fieldsToMove = [...(section.leftFields || []), ...(section.rightFields || [])];
   editingLayoutData.splice(sIdx, 1);
   
   if (editingLayoutData.length === 0) {
-    editingLayoutData.push({ title: "Information", fields: [] });
+    editingLayoutData.push({ title: "Information", columns: 2, leftFields: [], rightFields: [] });
   }
   
   if (fieldsToMove.length > 0) {
-    editingLayoutData[0].fields.push(...fieldsToMove);
+    if (!editingLayoutData[0].leftFields) {
+      editingLayoutData[0].leftFields = [];
+    }
+    editingLayoutData[0].leftFields.push(...fieldsToMove);
   }
   
   reRenderLayoutEditor();
 }
 
-function removeFieldFromLayout(sIdx, fIdx) {
+function removeFieldFromLayout(sIdx, columnKey, fIdx) {
   if (!editingLayoutData) return;
-  editingLayoutData[sIdx].fields.splice(fIdx, 1);
+  const colArray = columnKey === "left" ? "leftFields" : "rightFields";
+  editingLayoutData[sIdx][colArray].splice(fIdx, 1);
   reRenderLayoutEditor();
 }
 
 function addFieldToSectionFromSidebar(fieldName) {
   if (!editingLayoutData) return;
-  // Add to the first section
-  editingLayoutData[0].fields.push(fieldName);
+  if (!editingLayoutData[0].leftFields) {
+    editingLayoutData[0].leftFields = [];
+  }
+  editingLayoutData[0].leftFields.push(fieldName);
   reRenderLayoutEditor();
 }
 
@@ -8204,7 +8347,7 @@ function confirmAddNewSection() {
   }
   
   if (editingLayoutData) {
-    editingLayoutData.push({ title: title, fields: [] });
+    editingLayoutData.push({ title: title, columns: 2, leftFields: [], rightFields: [] });
     reRenderLayoutEditor();
   }
   
@@ -8213,9 +8356,11 @@ function confirmAddNewSection() {
 
 function isFieldInLayout(fieldName) {
   if (!editingLayoutData) return false;
-  return editingLayoutData.some(section => 
-    (section.fields || []).some(f => (typeof f === 'string' ? f : f.name) === fieldName)
-  );
+  return editingLayoutData.some(section => {
+    const leftMatch = (section.leftFields || []).some(f => (typeof f === 'string' ? f : f.name) === fieldName);
+    const rightMatch = (section.rightFields || []).some(f => (typeof f === 'string' ? f : f.name) === fieldName);
+    return leftMatch || rightMatch;
+  });
 }
 
 // Drag and Drop handlers
@@ -8227,42 +8372,77 @@ function layoutDragStartFromSidebar(event, fieldName) {
   event.dataTransfer.effectAllowed = "move";
 }
 
-function layoutDragStart(event, sectionIdx, fieldIdx) {
+function layoutDragStart(event, sectionIdx, columnKey, fieldIdx) {
   event.dataTransfer.setData("text/plain", JSON.stringify({
     source: "canvas",
     sectionIdx: sectionIdx,
+    columnKey: columnKey,
     fieldIdx: fieldIdx
   }));
   event.dataTransfer.effectAllowed = "move";
 }
 
-// Section allowDrop
 function layoutAllowDrop(event) {
   event.preventDefault();
 }
 
-function layoutDropOnSection(event, targetSectionIdx) {
+function layoutDragEnter(event) {
+  event.preventDefault();
+  event.currentTarget.classList.add("drag-over");
+}
+
+function layoutDragLeave(event) {
+  event.currentTarget.classList.remove("drag-over");
+}
+
+function layoutFieldDragEnter(event) {
   event.preventDefault();
   event.stopPropagation();
+  event.currentTarget.classList.add("drag-over");
+}
+
+function layoutFieldDragLeave(event) {
+  event.stopPropagation();
+  event.currentTarget.classList.remove("drag-over");
+}
+
+function layoutDropOnColumn(event, targetSectionIdx, targetColumnKey) {
+  event.preventDefault();
+  event.stopPropagation();
+  
+  // Clear highlights
+  document.querySelectorAll(".layout-edit-field, .layout-edit-column").forEach(el => el.classList.remove("drag-over"));
   
   const dataStr = event.dataTransfer.getData("text/plain");
   if (!dataStr) return;
   
   try {
     const data = JSON.parse(dataStr);
+    const targetColArray = targetColumnKey === "left" ? "leftFields" : "rightFields";
+    
     if (data.source === "sidebar") {
       const fieldName = data.fieldName;
       if (!isFieldInLayout(fieldName)) {
-        editingLayoutData[targetSectionIdx].fields.push(fieldName);
+        if (!editingLayoutData[targetSectionIdx][targetColArray]) {
+          editingLayoutData[targetSectionIdx][targetColArray] = [];
+        }
+        editingLayoutData[targetSectionIdx][targetColArray].push(fieldName);
         reRenderLayoutEditor();
       }
     } else if (data.source === "canvas") {
       const sourceSecIdx = data.sectionIdx;
+      const sourceColKey = data.columnKey;
       const sourceFieldIdx = data.fieldIdx;
       
-      const fieldObj = editingLayoutData[sourceSecIdx].fields[sourceFieldIdx];
-      editingLayoutData[sourceSecIdx].fields.splice(sourceFieldIdx, 1);
-      editingLayoutData[targetSectionIdx].fields.push(fieldObj);
+      const sourceColArray = sourceColKey === "left" ? "leftFields" : "rightFields";
+      const fieldObj = editingLayoutData[sourceSecIdx][sourceColArray][sourceFieldIdx];
+      
+      editingLayoutData[sourceSecIdx][sourceColArray].splice(sourceFieldIdx, 1);
+      
+      if (!editingLayoutData[targetSectionIdx][targetColArray]) {
+        editingLayoutData[targetSectionIdx][targetColArray] = [];
+      }
+      editingLayoutData[targetSectionIdx][targetColArray].push(fieldObj);
       
       reRenderLayoutEditor();
     }
@@ -8271,30 +8451,48 @@ function layoutDropOnSection(event, targetSectionIdx) {
   }
 }
 
-function layoutDropOnField(event, targetSectionIdx, targetFieldIdx) {
+function layoutDropOnField(event, targetSectionIdx, targetColumnKey, targetFieldIdx) {
   event.preventDefault();
   event.stopPropagation();
+  
+  // Clear highlights
+  document.querySelectorAll(".layout-edit-field, .layout-edit-column").forEach(el => el.classList.remove("drag-over"));
   
   const dataStr = event.dataTransfer.getData("text/plain");
   if (!dataStr) return;
   
   try {
     const data = JSON.parse(dataStr);
+    const targetColArray = targetColumnKey === "left" ? "leftFields" : "rightFields";
+    
     if (data.source === "sidebar") {
       const fieldName = data.fieldName;
       if (!isFieldInLayout(fieldName)) {
-        editingLayoutData[targetSectionIdx].fields.splice(targetFieldIdx, 0, fieldName);
+        if (!editingLayoutData[targetSectionIdx][targetColArray]) {
+          editingLayoutData[targetSectionIdx][targetColArray] = [];
+        }
+        editingLayoutData[targetSectionIdx][targetColArray].splice(targetFieldIdx, 0, fieldName);
         reRenderLayoutEditor();
       }
     } else if (data.source === "canvas") {
       const sourceSecIdx = data.sectionIdx;
+      const sourceColKey = data.columnKey;
       const sourceFieldIdx = data.fieldIdx;
       
-      const fieldObj = editingLayoutData[sourceSecIdx].fields[sourceFieldIdx];
-      editingLayoutData[sourceSecIdx].fields.splice(sourceFieldIdx, 1);
+      const sourceColArray = sourceColKey === "left" ? "leftFields" : "rightFields";
+      const fieldObj = editingLayoutData[sourceSecIdx][sourceColArray][sourceFieldIdx];
+      
+      editingLayoutData[sourceSecIdx][sourceColArray].splice(sourceFieldIdx, 1);
       
       let insertIdx = targetFieldIdx;
-      editingLayoutData[targetSectionIdx].fields.splice(insertIdx, 0, fieldObj);
+      if (sourceSecIdx === targetSectionIdx && sourceColKey === targetColumnKey && sourceFieldIdx < targetFieldIdx) {
+        insertIdx = targetFieldIdx - 1;
+      }
+      
+      if (!editingLayoutData[targetSectionIdx][targetColArray]) {
+        editingLayoutData[targetSectionIdx][targetColArray] = [];
+      }
+      editingLayoutData[targetSectionIdx][targetColArray].splice(insertIdx, 0, fieldObj);
       
       reRenderLayoutEditor();
     }
@@ -8306,23 +8504,49 @@ function layoutDropOnField(event, targetSectionIdx, targetFieldIdx) {
 function setupAvailableFieldsFilter() {
   const searchInput = $("layoutFieldSearch");
   if (!searchInput) return;
-  searchInput.addEventListener("input", (e) => {
-    const query = e.target.value.toLowerCase().trim();
+  
+  // Restore current search query
+  searchInput.value = layoutFieldSearchQuery || "";
+  
+  const applyFilter = (query) => {
+    const q = query.toLowerCase().trim();
     document.querySelectorAll("#availableFieldsList .available-field-item").forEach(item => {
       const name = item.dataset.fieldName.toLowerCase();
       const label = item.dataset.fieldLabel.toLowerCase();
-      if (name.includes(query) || label.includes(query)) {
+      if (name.includes(q) || label.includes(q)) {
         item.style.display = "flex";
       } else {
         item.style.display = "none";
       }
     });
+  };
+
+  // Run the filter immediately on render
+  applyFilter(layoutFieldSearchQuery);
+
+  searchInput.addEventListener("input", (e) => {
+    layoutFieldSearchQuery = e.target.value;
+    applyFilter(layoutFieldSearchQuery);
   });
 }
 
 function reRenderLayoutEditor() {
   if (!detailRecordState) return;
+  
+  // 1. Save scroll positions
+  const canvasScroll = $("canvasSections") ? $("canvasSections").scrollTop : 0;
+  const sidebarScroll = $("availableFieldsList") ? $("availableFieldsList").scrollTop : 0;
+  const windowScroll = window.scrollY;
+  
+  // 2. Re-render Layout Editor HTML
   $("recordDetailsPanel").innerHTML = renderLayoutEditorHtml(detailRecordState.objectName);
+  
+  // 3. Restore scroll positions
+  if ($("canvasSections")) $("canvasSections").scrollTop = canvasScroll;
+  if ($("availableFieldsList")) $("availableFieldsList").scrollTop = sidebarScroll;
+  window.scrollTo(window.scrollX, windowScroll);
+  
+  // 4. Initialize available fields search
   setupAvailableFieldsFilter();
 }
 

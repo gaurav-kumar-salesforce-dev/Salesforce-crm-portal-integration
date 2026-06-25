@@ -6397,3 +6397,101 @@ html[data-theme="dark"] .grid-empty-msg {
   border-color: #4a5568;
   background: #1b1d28;
 }
+
+/* Layout Editor Button Fixes */
+.btn-ghost-link {
+  background: #ffffff;
+  border: 1px solid var(--border-color, #d8dde6) !important;
+  color: var(--text-muted, #706e6b) !important;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+.btn-ghost-link:hover {
+  background: #f3f4f6 !important;
+  color: var(--text-color, #1e293b) !important;
+  border-color: #94a3b8 !important;
+}
+
+.btn-danger-link {
+  background: #ffffff;
+  border: 1px solid #fca5a5 !important;
+  color: #ef4444 !important;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+.btn-danger-link:hover {
+  background: #fee2e2 !important;
+  color: #b91c1c !important;
+  border-color: #f87171 !important;
+}
+
+/* Dark theme overrides for layout editor button fixes */
+html[data-theme="dark"] .btn-ghost-link {
+  background: #1f2235;
+  border-color: #2a2d3e !important;
+  color: #a0aec0 !important;
+}
+html[data-theme="dark"] .btn-ghost-link:hover {
+  background: #252840 !important;
+  color: #e8e9f0 !important;
+  border-color: #4a5568 !important;
+}
+html[data-theme="dark"] .btn-danger-link {
+  background: #1f2235;
+  border-color: #7f1d1d !important;
+  color: #f87171 !important;
+}
+html[data-theme="dark"] .btn-danger-link:hover {
+  background: #450a0a !important;
+  color: #fca5a5 !important;
+  border-color: #b91c1c !important;
+}
+
+/* Drag and Drop visual feedback */
+.layout-edit-column.drag-over {
+  background: rgba(21, 137, 238, 0.04) !important;
+  border: 1px dashed var(--primary-color, #1589ee) !important;
+  box-shadow: inset 0 0 8px rgba(21, 137, 238, 0.08);
+}
+
+.layout-edit-field.drag-over {
+  border: 2px dashed var(--primary-color, #1589ee) !important;
+  background: rgba(21, 137, 238, 0.08) !important;
+  transform: scale(0.98);
+  box-shadow: 0 4px 12px rgba(21, 137, 238, 0.15);
+  transition: all 0.15s ease;
+}
+
+/* Detail Layout spacing improvements */
+.detail-section {
+  margin-bottom: 28px !important;
+}
+
+.detail-grid-container {
+  margin-top: 14px;
+}
+
+.detail-grid.cols-2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px 20px;
+}
+
+.detail-grid.cols-1 {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.detail-column-side {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+@media (max-width: 768px) {
+  .detail-grid.cols-2 {
+    grid-template-columns: 1fr;
+    gap: 14px;
+  }
+}
