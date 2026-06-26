@@ -1622,6 +1622,327 @@
     }
     .user-name-text { font-weight: 600; color: var(--text-primary); font-size: 13px; }
     .user-email-text { font-size: 11px; color: var(--text-muted); margin-top: 1px; }
+    /* ── OBJECT MANAGER ───────────────────────────────── */
+    .om-detail-container {
+      display: flex;
+      gap: 24px;
+      align-items: stretch;
+      margin-top: 16px;
+    }
+    .om-detail-sidebar {
+      width: 240px;
+      min-width: 240px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      display: flex;
+      flex-direction: column;
+      padding: 12px 8px;
+    }
+    .om-sidebar-btn {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 10px 14px;
+      margin: 2px 0;
+      border-radius: var(--radius);
+      color: var(--text-secondary);
+      font-size: 13px;
+      font-weight: 500;
+      border: none;
+      background: none;
+      cursor: pointer;
+      text-align: left;
+      transition: all 0.2s ease;
+    }
+    .om-sidebar-btn:hover {
+      background: var(--surface-2);
+      color: var(--text-primary);
+    }
+    .om-sidebar-btn.active {
+      background: var(--accent-soft);
+      color: var(--accent);
+      font-weight: 600;
+    }
+    .om-detail-content {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+    }
+    .om-meta-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 20px;
+      padding: 20px;
+    }
+    .om-meta-item {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .om-meta-label {
+      font-size: 11px;
+      font-weight: 700;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+    .om-meta-value {
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--text-primary);
+    }
+
+    /* ── LAYOUT EDITOR INLINE ────────────────────────── */
+    .layout-editor-container {
+      display: flex;
+      gap: 20px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      padding: 20px;
+      height: 650px;
+    }
+    .layout-editor-sidebar {
+      width: 280px;
+      border-right: 1px solid var(--border);
+      padding-right: 20px;
+      display: flex;
+      flex-direction: column;
+      height: 100%;
+    }
+    .sidebar-header {
+      margin-bottom: 15px;
+    }
+    .sidebar-header h3 {
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--text-primary);
+      margin-bottom: 8px;
+    }
+    .layout-search-input {
+      width: 100%;
+      padding: 8px 12px;
+      border: 1.5px solid var(--border);
+      border-radius: 8px;
+      font-size: 13px;
+      background-color: var(--surface-2);
+      color: var(--text-primary);
+      outline: none;
+      transition: border-color 0.2s;
+    }
+    .layout-search-input:focus {
+      border-color: var(--accent);
+    }
+    .available-fields-list {
+      flex: 1;
+      overflow-y: auto;
+      padding-right: 5px;
+    }
+    .available-field-item {
+      padding: 10px 12px;
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      margin-bottom: 8px;
+      cursor: grab;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      transition: all 0.2s;
+    }
+    .available-field-item:hover {
+      background: var(--accent-soft);
+      border-color: var(--accent);
+      transform: translateY(-1px);
+    }
+    .available-field-item:active {
+      cursor: grabbing;
+    }
+    .field-item-label {
+      display: block;
+      font-weight: 600;
+      font-size: 12.5px;
+      color: var(--text-primary);
+    }
+    .field-item-name {
+      display: block;
+      font-size: 11px;
+      color: var(--text-muted);
+    }
+    .sidebar-empty {
+      text-align: center;
+      color: var(--text-muted);
+      padding: 20px 10px;
+      font-size: 12.5px;
+    }
+    .layout-editor-canvas {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      height: 100%;
+    }
+    .canvas-header {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 20px;
+      padding-bottom: 12px;
+      border-bottom: 1px solid var(--border);
+      justify-content: flex-end;
+    }
+    .canvas-sections {
+      flex: 1;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+      padding-right: 8px;
+    }
+    .layout-edit-section {
+      background: var(--surface-2);
+      border: 1.5px dashed var(--border-2);
+      border-radius: var(--radius);
+      padding: 16px;
+      transition: border-color 0.2s;
+    }
+    .layout-edit-section:hover {
+      border-color: var(--accent);
+    }
+    .layout-edit-section-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 12px;
+    }
+    .layout-edit-section-title-input {
+      font-weight: 600;
+      font-size: 14px;
+      color: var(--text-primary);
+      border: 1px solid transparent;
+      background: transparent;
+      padding: 4px 8px;
+      border-radius: 4px;
+      width: 60%;
+      transition: all 0.2s;
+    }
+    .layout-edit-section-title-input:hover {
+      background: rgba(0, 0, 0, 0.02);
+      border-color: var(--border);
+    }
+    .layout-edit-section-title-input:focus {
+      border-color: var(--accent);
+      background: var(--surface);
+    }
+    .section-actions {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+    .section-actions .btn-icon-only {
+      width: 28px;
+      height: 28px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 4px;
+      font-size: 11px;
+      padding: 0 !important;
+      border: none;
+      background: none;
+      cursor: pointer;
+      color: var(--text-secondary);
+    }
+    .section-actions .btn-icon-only:hover {
+      background: var(--surface-3);
+      color: var(--text-primary);
+    }
+    .layout-edit-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 12px;
+      min-height: 70px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 12px;
+      transition: background-color 0.2s;
+    }
+    .layout-edit-field {
+      padding: 10px 14px;
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      cursor: grab;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      position: relative;
+      transition: all 0.2s;
+    }
+    .layout-edit-field:hover {
+      border-color: var(--accent);
+      box-shadow: var(--shadow);
+    }
+    .layout-edit-field:active {
+      cursor: grabbing;
+    }
+    .layout-field-drag-handle {
+      color: var(--text-muted);
+      display: flex;
+      align-items: center;
+      width: 16px;
+      height: 16px;
+      flex-shrink: 0;
+      cursor: move;
+    }
+    .layout-field-drag-handle svg {
+      width: 100%;
+      height: 100%;
+      fill: currentColor;
+    }
+    .layout-field-info {
+      display: flex;
+      flex-direction: column;
+    }
+    .layout-field-label {
+      font-weight: 600;
+      font-size: 12.5px;
+      color: var(--text-primary);
+    }
+    .layout-field-name {
+      font-size: 11px;
+      color: var(--text-muted);
+    }
+    .layout-field-remove {
+      margin-left: auto;
+      background: none;
+      border: none;
+      color: var(--danger);
+      font-size: 18px;
+      cursor: pointer;
+      line-height: 1;
+      padding: 0 4px;
+      transition: color 0.2s;
+    }
+    .layout-field-remove:hover {
+      color: #a61a14;
+    }
+    .grid-empty-msg {
+      grid-column: span 2;
+      text-align: center;
+      color: var(--text-muted);
+      font-size: 12.5px;
+      padding: 20px;
+      border: 1px dashed var(--border-2);
+      border-radius: 4px;
+      background: var(--surface-2);
+    }
+    .layout-edit-field.drag-over, .layout-edit-column.drag-over {
+      border: 2px dashed var(--accent) !important;
+      background: var(--accent-soft) !important;
+    }
   </style>
 </head>
 
@@ -1717,6 +2038,14 @@
   </svg>
   Public Groups
 </button>
+
+    <div class="sidebar-section">Setup</div>
+    <button class="nav-item" onclick="showPanel('object-manager')">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" />
+      </svg>
+      Object Manager
+    </button>
 
     <div class="sidebar-section">System</div>
     <button class="nav-item" onclick="showPanel('audit')">
@@ -2440,6 +2769,19 @@
   </div>
 </div>
 
+      <!-- ══ OBJECT MANAGER PANEL ══════════════════════════ -->
+      <div class="panel" id="panel-object-manager">
+        <div class="page-header">
+          <div>
+            <h1 id="omHeaderTitle">Object Manager</h1>
+            <p id="omHeaderSubtitle">Manage layouts, fields, and configurations for Salesforce objects</p>
+          </div>
+        </div>
+        <div id="omContent">
+          <!-- Dynamically loaded list view or object details -->
+        </div>
+      </div>
+
       <!-- ══ AUDIT LOG PANEL ═══════════════════════════════ -->
       <div class="panel" id="panel-audit">
         <div class="page-header">
@@ -2765,7 +3107,7 @@
   <!-- Toast Stack -->
   <div class="toast-stack" id="toastStack"></div>
 
-  <script src="client-performance.js?v=1"></script>
+  <script src="/client-performance.js?v=1"></script>
   <script>
     // ═══════════════════════════════════════════════════════
     // STATE
@@ -2946,6 +3288,7 @@
       await loadUsers();
       loadProfiles();
       loadPermSets();
+      handleRouting(true);
     });
 
     function renderAdminInfoCard(user) {
@@ -3051,14 +3394,55 @@
       fieldsecurity: 'Field Security', owd: 'Org-Wide Defaults',
       sharing: 'Sharing Rules', psggroups: 'Permission Set Groups',
       orgroles: 'Role Hierarchy',
-      publicgroups: 'Public Groups'
+      publicgroups: 'Public Groups',
+      'object-manager': 'Object Manager'
     };
 
     function showPanel(name) {
+      activatePanelDirect(name, false);
+    }
+
+    function activatePanelDirect(name, isPopState = false) {
+      if (name === 'object-manager') {
+        document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+        document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+        
+        const panelEl = $('panel-object-manager');
+        if (panelEl) panelEl.classList.add('active');
+        
+        const navBtn = document.querySelector(`button[onclick*="object-manager"]`);
+        if (navBtn) navBtn.classList.add('active');
+        
+        $('topbarTitle').textContent = 'Object Manager';
+        
+        const parts = window.location.pathname.split('/');
+        const objName = parts[3];
+        if (objName) {
+          showObjectDetail(objName, isPopState);
+        } else {
+          showObjectManagerList(isPopState);
+        }
+        
+        // Close sidebar on mobile
+        document.querySelector('.sidebar').classList.remove('open');
+        var ov = document.getElementById('sidebarOverlay');
+        if (ov) ov.classList.remove('open');
+        
+        if (!isPopState) {
+          window.history.pushState({ panel: 'object-manager' }, '', '/admin/object-manager');
+        }
+        return;
+      }
+
       document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
       document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
-      $(`panel-${name}`).classList.add('active');
-      event.currentTarget.classList.add('active');
+      
+      const panelEl = $(`panel-${name}`);
+      if (panelEl) panelEl.classList.add('active');
+      
+      const navBtn = document.querySelector(`button[onclick="showPanel('${name}')"]`);
+      if (navBtn) navBtn.classList.add('active');
+      
       $('topbarTitle').textContent = PANEL_TITLES[name] || name;
       loadPanelOnce(name);
 
@@ -3066,6 +3450,11 @@
       document.querySelector('.sidebar').classList.remove('open');
       var ov = document.getElementById('sidebarOverlay');
       if (ov) ov.classList.remove('open');
+
+      if (!isPopState) {
+        const newPath = name === 'users' ? '/admin' : `/admin/${name}`;
+        window.history.pushState({ panel: name }, '', newPath);
+      }
     }
 
     async function loadPanelOnce(name) {
@@ -5839,6 +6228,1084 @@ function deletePublicGroup(id, name) {
       $('toastStack').appendChild(el);
       requestAnimationFrame(() => el.classList.add('in'));
       setTimeout(() => { el.classList.add('out'); setTimeout(() => el.remove(), 350); }, 3500);
+    }
+
+    // ═══════════════════════════════════════════════════════
+    // OBJECT MANAGER & RELOCATED EDITORS JS
+    // ═══════════════════════════════════════════════════════
+    const ADMIN_FIELDS_CACHE = {};
+    const ADMIN_DB_LAYOUT_CACHE = {};
+    const ADMIN_COMPACT_LAYOUT_CACHE = {};
+
+    const OBJECT_DESCRIPTIONS = {
+      Account: 'Account details, billing, and customer profiles.',
+      Contact: 'Contacts associated with accounts.',
+      Opportunity: 'Sales deals, pipeline tracking, and revenue forecasting.',
+      Lead: 'Prospects, marketing contacts, and targets.',
+      Case: 'Customer support cases, issues, and tickets.',
+      Campaign: 'Marketing campaigns, events, and initiatives.',
+      Task: 'To-do items and action items.',
+      Event: 'Calendar events, meetings, and schedules.'
+    };
+
+    function adminUtilityIconSvg(key) {
+      const icons = {
+        trash: '<svg viewBox="0 0 20 20" width="14" height="14" fill="currentColor"><path d="M8 2a1 1 0 00-.9.6L6.4 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 000-2h-2.4l-.7-1.4A1 1 0 0012 2H8zm-1 6h2v7H7V8zm4 0h2v7h-2V8z"/></svg>',
+        sort: '<svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M7 4l4 4H8v12H6V8H3l4-4zm10 16l-4-4h3V4h2v12h3l-4 4z"/></svg>',
+        like: '<svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M8 21H4V9h4v12zm2 0V9l5-6 1.4 1.4L14.6 9H20a2 2 0 012 2l-1.2 7a3 3 0 01-3 3H10z"/></svg>',
+        refresh: '<svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M17.7 6.3A8 8 0 104 12h2a6 6 0 111.8 4.2L10 14H4v6l2.4-2.4A8 8 0 0019.9 12h-2a6 6 0 00-1.8-4.2L14 10h6V4l-2.3 2.3z"/></svg>',
+        comment: '<svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M4 5h16a2 2 0 012 2v8a2 2 0 01-2 2H9l-5 4v-4a2 2 0 01-2-2V7a2 2 0 012-2z"/></svg>'
+      };
+      return icons[key] || '';
+    }
+
+    async function fetchMetadata(path) {
+      const token = getToken();
+      if (window.SaaSRAYPerformance?.fetchJson) {
+        return window.SaaSRAYPerformance.fetchJson(path, {
+          headers: {
+            'Content-Type': 'application/json',
+            ...(token ? { Authorization: `Bearer ${token}` } : {})
+          }
+        });
+      }
+      return api(path);
+    }
+
+    function handleRouting(isPopState = false) {
+      const path = window.location.pathname;
+      if (path.startsWith('/admin/object-manager')) {
+        activatePanelDirect('object-manager', isPopState);
+      } else {
+        const panelName = path.split('/')[2] || 'users';
+        const validPanels = ['users', 'profiles', 'permsets', 'fieldsecurity', 'owd', 'sharing', 'psggroups', 'orgroles', 'publicgroups', 'audit'];
+        const activePanel = validPanels.includes(panelName) ? panelName : 'users';
+        activatePanelDirect(activePanel, isPopState);
+      }
+    }
+
+    window.addEventListener('popstate', () => {
+      handleRouting(true);
+    });
+
+    function navigateToObject(objectName, event) {
+      if (event) event.preventDefault();
+      showObjectDetail(objectName, false);
+    }
+
+    function showObjectManagerList(isPopState = false) {
+      if (!isPopState) {
+        window.history.pushState({ panel: 'object-manager' }, '', '/admin/object-manager');
+      }
+      $('omHeaderTitle').textContent = 'Object Manager';
+      $('omHeaderSubtitle').textContent = 'Manage layouts, fields, and configurations for Salesforce objects';
+
+      let html = `
+        <div class="card">
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Label</th>
+                  <th>API Name</th>
+                  <th>Type</th>
+                  <th>Description</th>
+                  <th>Status</th>
+                </tr>
+              </thead>
+              <tbody>
+      `;
+
+      SF_OBJECTS.forEach(obj => {
+        const desc = OBJECT_DESCRIPTIONS[obj] || 'Salesforce standard CRM object.';
+        html += `
+          <tr>
+            <td>
+              <a href="/admin/object-manager/${obj}" onclick="navigateToObject('${obj}', event)" style="font-weight:600;color:var(--accent);text-decoration:none">
+                ${obj}
+              </a>
+            </td>
+            <td style="font-family:'JetBrains Mono',monospace;font-size:12px">${obj}</td>
+            <td>Standard Object</td>
+            <td>${desc}</td>
+            <td><span class="badge" style="background:rgba(26,127,55,0.08);color:#1A7F37">Active</span></td>
+          </tr>
+        `;
+      });
+
+      html += `
+              </tbody>
+            </table>
+          </div>
+        </div>
+      `;
+
+      $('omContent').innerHTML = html;
+    }
+
+    let activeObjectTab = 'overview';
+
+    async function showObjectDetail(objectName, isPopState = false) {
+      if (!isPopState) {
+        window.history.pushState({ panel: 'object-manager', object: objectName }, '', `/admin/object-manager/${objectName}`);
+      }
+
+      $('omHeaderTitle').innerHTML = `
+        <div style="font-size:12px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.08em;margin-bottom:4px">
+          <a href="/admin/object-manager" onclick="showObjectManagerList(false); event.preventDefault();" style="color:var(--text-muted);text-decoration:none">Object Manager</a> › ${objectName}
+        </div>
+        ${objectName}
+      `;
+      $('omHeaderSubtitle').textContent = 'Configure fields, compact layouts, page layouts, and security rules';
+
+      $('omContent').innerHTML = `
+        <div class="om-detail-container">
+          <aside class="om-detail-sidebar">
+            <button class="om-sidebar-btn ${activeObjectTab === 'overview' ? 'active' : ''}" onclick="showObjectDetailTab('${objectName}', 'overview')">Overview</button>
+            <button class="om-sidebar-btn ${activeObjectTab === 'fields' ? 'active' : ''}" onclick="showObjectDetailTab('${objectName}', 'fields')">Fields & Relationships</button>
+            <button class="om-sidebar-btn ${activeObjectTab === 'page-layouts' ? 'active' : ''}" onclick="showObjectDetailTab('${objectName}', 'page-layouts')">Page Layouts</button>
+            <button class="om-sidebar-btn ${activeObjectTab === 'compact-layouts' ? 'active' : ''}" onclick="showObjectDetailTab('${objectName}', 'compact-layouts')">Compact Layouts</button>
+            <button class="om-sidebar-btn ${activeObjectTab === 'record-page' ? 'active' : ''}" onclick="showObjectDetailTab('${objectName}', 'record-page')">Lightning Record Pages</button>
+            <button class="om-sidebar-btn ${activeObjectTab === 'list-views' ? 'active' : ''}" onclick="showObjectDetailTab('${objectName}', 'list-views')">List Views</button>
+            <button class="om-sidebar-btn" onclick="showObjectDetailTab('${objectName}', 'placeholder', 'Buttons, Links, and Actions')">Buttons, Links & Actions</button>
+            <button class="om-sidebar-btn" onclick="showObjectDetailTab('${objectName}', 'placeholder', 'Field Sets')">Field Sets</button>
+            <button class="om-sidebar-btn" onclick="showObjectDetailTab('${objectName}', 'placeholder', 'Object Limits')">Object Limits</button>
+            <button class="om-sidebar-btn" onclick="showObjectDetailTab('${objectName}', 'placeholder', 'Record Types')">Record Types</button>
+            <button class="om-sidebar-btn" onclick="showObjectDetailTab('${objectName}', 'placeholder', 'Search Layouts')">Search Layouts</button>
+          </aside>
+          <div class="om-detail-content" id="omDetailContentPane">
+            <div class="spinner" style="margin:40px auto"></div>
+          </div>
+        </div>
+      `;
+
+      showObjectDetailTab(objectName, activeObjectTab);
+    }
+
+    async function showObjectDetailTab(objectName, tabName, labelOverride = '') {
+      activeObjectTab = tabName;
+      document.querySelectorAll('.om-sidebar-btn').forEach(btn => {
+        btn.classList.remove('active');
+        if (btn.textContent.trim() === labelOverride || (tabName === 'overview' && btn.textContent.trim() === 'Overview') || (tabName === 'fields' && btn.textContent.trim() === 'Fields & Relationships') || (tabName === 'page-layouts' && btn.textContent.trim() === 'Page Layouts') || (tabName === 'compact-layouts' && btn.textContent.trim() === 'Compact Layouts') || (tabName === 'record-page' && btn.textContent.trim() === 'Lightning Record Pages') || (tabName === 'list-views' && btn.textContent.trim() === 'List Views')) {
+          btn.classList.add('active');
+        }
+      });
+
+      const pane = $('omDetailContentPane');
+      if (tabName === 'placeholder') {
+        pane.innerHTML = `
+          <div class="card" style="padding:40px;text-align:center">
+            <h3 style="font-size:16px;margin-bottom:8px">${labelOverride}</h3>
+            <p style="color:var(--text-secondary);font-size:13px">This feature belongs to future phases of the Object Manager deployment. Placeholders only.</p>
+          </div>
+        `;
+        return;
+      }
+
+      pane.innerHTML = '<div class="spinner" style="margin:40px auto"></div>';
+
+      try {
+        // Fetch core data needed
+        let fields = ADMIN_FIELDS_CACHE[objectName];
+        if (!fields) {
+          const fieldsRes = await fetchMetadata(`/api/${objectName}/fields`);
+          fields = fieldsRes.fields || [];
+          ADMIN_FIELDS_CACHE[objectName] = fields;
+        }
+
+        if (tabName === 'overview') {
+          // Record Count
+          let recordCount = '—';
+          try {
+            const countRes = await api(`/api/${objectName}/count`);
+            recordCount = countRes.totalSize !== null ? countRes.totalSize.toLocaleString() : 'Hidden';
+          } catch (e) {
+            console.warn(e);
+          }
+
+          // Supabase custom structures status
+          let hasPageLayout = false;
+          try {
+            const pageRes = await api(`/api/portal/layouts/${objectName}`);
+            hasPageLayout = !!(pageRes.layout && pageRes.layout.length);
+          } catch (e) {
+            console.warn(e);
+          }
+
+          let hasCompactLayout = false;
+          try {
+            const compactRes = await api(`/api/portal/compact-layouts/${objectName}`);
+            hasCompactLayout = !!(compactRes.fields && compactRes.fields.length);
+          } catch (e) {
+            console.warn(e);
+          }
+
+          const relationships = fields.filter(f => f.referenceTo && f.referenceTo.length);
+
+          pane.innerHTML = `
+            <div class="card">
+              <div class="card-head">
+                <h3 class="card-title">Metadata Overview</h3>
+              </div>
+              <div class="om-meta-grid">
+                <div class="om-meta-item">
+                  <span class="om-meta-label">Object Label</span>
+                  <span class="om-meta-value">${objectName}</span>
+                </div>
+                <div class="om-meta-item">
+                  <span class="om-meta-label">API Name</span>
+                  <span class="om-meta-value" style="font-family:'JetBrains Mono',monospace;font-size:13px">${objectName}</span>
+                </div>
+                <div class="om-meta-item">
+                  <span class="om-meta-label">Record Count</span>
+                  <span class="om-meta-value">${recordCount}</span>
+                </div>
+                <div class="om-meta-item">
+                  <span class="om-meta-label">Number of Fields</span>
+                  <span class="om-meta-value">${fields.length}</span>
+                </div>
+                <div class="om-meta-item">
+                  <span class="om-meta-label">Relationships</span>
+                  <span class="om-meta-value">${relationships.length} fields</span>
+                </div>
+                <div class="om-meta-item">
+                  <span class="om-meta-label">Compact Layout Status</span>
+                  <span class="om-meta-value">${hasCompactLayout ? 'Active (Custom)' : 'Standard (Default)'}</span>
+                </div>
+                <div class="om-meta-item">
+                  <span class="om-meta-label">Page Layout Status</span>
+                  <span class="om-meta-value">${hasPageLayout ? 'Active (Custom)' : 'Standard (Default)'}</span>
+                </div>
+                <div class="om-meta-item">
+                  <span class="om-meta-label">Record Page Status</span>
+                  <span class="om-meta-value">Standard (Default)</span>
+                </div>
+                <div class="om-meta-item">
+                  <span class="om-meta-label">Configuration Health</span>
+                  <span class="om-meta-value">
+                    <span class="badge" style="background:rgba(26,127,55,0.08);color:#1A7F37">Healthy</span>
+                  </span>
+                </div>
+              </div>
+            </div>
+          `;
+        } else if (tabName === 'fields') {
+          pane.innerHTML = `
+            <div class="card">
+              <div class="toolbar">
+                <div class="search-box">
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                    <circle cx="11" cy="11" r="8" />
+                    <line x1="21" y1="21" x2="16.65" y2="16.65" />
+                  </svg>
+                  <input type="text" id="fieldsQuickFind" placeholder="Quick Find..." oninput="filterFieldsList()">
+                </div>
+                <div style="font-size:12px;color:var(--text-muted);margin-left:auto" id="fieldsListMeta">
+                  ${fields.length} fields
+                </div>
+              </div>
+              <div class="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Field Label</th>
+                      <th>Field Name</th>
+                      <th>Data Type</th>
+                    </tr>
+                  </thead>
+                  <tbody id="fieldsListBody">
+                    ${fields.map(f => `
+                      <tr class="field-row" data-label="${esc(f.label).toLowerCase()}" data-name="${esc(f.name).toLowerCase()}">
+                        <td style="font-weight:600">${esc(f.label)}</td>
+                        <td style="font-family:'JetBrains Mono',monospace;font-size:12px">${esc(f.name)}</td>
+                        <td style="text-transform:capitalize;font-size:12px;color:var(--text-secondary)">
+                          ${esc(f.type)}${f.referenceTo && f.referenceTo.length ? ` (${f.referenceTo.join(', ')})` : ''}
+                        </td>
+                      </tr>
+                    `).join('')}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          `;
+        } else if (tabName === 'page-layouts') {
+          let hasPageLayout = false;
+          try {
+            const pageRes = await api(`/api/portal/layouts/${objectName}`);
+            hasPageLayout = !!(pageRes.layout && pageRes.layout.length);
+          } catch (e) {
+            console.warn(e);
+          }
+
+          const statusText = hasPageLayout ? 'Active (Custom)' : 'Standard (Default)';
+
+          pane.innerHTML = `
+            <div class="card">
+              <div class="card-head">
+                <h3 class="card-title">Page Layouts</h3>
+                <button class="btn btn-ghost btn-sm" onclick="startEditingPageLayout('${objectName}')">Edit Layout</button>
+              </div>
+              <div class="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Page Layout Name</th>
+                      <th>Status</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr>
+                      <td>
+                        <a href="#" onclick="startEditingPageLayout('${objectName}'); event.preventDefault();" style="font-weight:600;color:var(--accent);text-decoration:none">
+                          ${objectName} Layout
+                        </a>
+                      </td>
+                      <td>
+                        <span class="badge" style="${hasPageLayout ? 'background:rgba(1,118,211,0.08);color:var(--accent)' : 'background:var(--surface-3);color:var(--text-secondary)'}">
+                          ${statusText}
+                        </span>
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          `;
+        } else if (tabName === 'compact-layouts') {
+          let hasCompactLayout = false;
+          try {
+            const compactRes = await api(`/api/portal/compact-layouts/${objectName}`);
+            hasCompactLayout = !!(compactRes.fields && compactRes.fields.length);
+          } catch (e) {
+            console.warn(e);
+          }
+
+          const statusText = hasCompactLayout ? 'Active (Custom)' : 'Standard (Default)';
+
+          pane.innerHTML = `
+            <div class="card">
+              <div class="card-head">
+                <h3 class="card-title">Compact Layouts</h3>
+                <button class="btn btn-ghost btn-sm" onclick="startEditingCompactLayout('${objectName}')">Edit Compact Layout</button>
+              </div>
+              <div class="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Compact Layout Name</th>
+                      <th>Status</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr>
+                      <td>
+                        <a href="#" onclick="startEditingCompactLayout('${objectName}'); event.preventDefault();" style="font-weight:600;color:var(--accent);text-decoration:none">
+                          System Default / Custom Compact Layout
+                        </a>
+                      </td>
+                      <td>
+                        <span class="badge" style="${hasCompactLayout ? 'background:rgba(1,118,211,0.08);color:var(--accent)' : 'background:var(--surface-3);color:var(--text-secondary)'}">
+                          ${statusText}
+                        </span>
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          `;
+        } else if (tabName === 'record-page') {
+          pane.innerHTML = `
+            <div class="card" style="padding:40px;text-align:center">
+              <h3 style="font-size:16px;margin-bottom:8px">Lightning Record Pages</h3>
+              <p style="color:var(--text-secondary);font-size:13px">This feature belongs to future phases of the Object Manager deployment. Placeholders only.</p>
+            </div>
+          `;
+        } else if (tabName === 'list-views') {
+          pane.innerHTML = `
+            <div class="card" style="padding:40px;text-align:center">
+              <h3 style="font-size:16px;margin-bottom:8px">List Views</h3>
+              <p style="color:var(--text-secondary);font-size:13px">This feature belongs to future phases of the Object Manager deployment. Placeholders only.</p>
+            </div>
+          `;
+        }
+      } catch (e) {
+        pane.innerHTML = `<div style="color:var(--danger);padding:20px;text-align:center">${esc(e.message)}</div>`;
+      }
+    }
+
+    function filterFieldsList() {
+      const q = $('fieldsQuickFind').value.toLowerCase().trim();
+      let matched = 0;
+      document.querySelectorAll('#fieldsListBody .field-row').forEach(row => {
+        const label = row.dataset.label;
+        const name = row.dataset.name;
+        if (label.includes(q) || name.includes(q)) {
+          row.style.display = '';
+          matched++;
+        } else {
+          row.style.display = 'none';
+        }
+      });
+      $('fieldsListMeta').textContent = `${matched} fields`;
+    }
+
+    // ── RELOCATED PAGE LAYOUT EDITOR ─────────────────────
+    let adminEditingLayoutData = null;
+    let adminLayoutFieldSearchQuery = '';
+    let adminLayoutObjectName = '';
+
+    function getAdminActiveLayout(objectName) {
+      if (ADMIN_DB_LAYOUT_CACHE[objectName]) {
+        return ADMIN_DB_LAYOUT_CACHE[objectName];
+      }
+      return [];
+    }
+
+    function normalizeAdminLayoutData(layout) {
+      return layout.map(section => ({
+        title: section.title || "Information",
+        columns: section.columns || 2,
+        leftFields: section.leftFields || section.fields || [],
+        rightFields: section.rightFields || []
+      }));
+    }
+
+    async function startEditingPageLayout(objectName) {
+      adminLayoutObjectName = objectName;
+      const pane = $('omDetailContentPane');
+      pane.innerHTML = '<div class="spinner" style="margin:40px auto"></div>';
+
+      try {
+        let fields = ADMIN_FIELDS_CACHE[objectName];
+        if (!fields) {
+          const fieldsRes = await fetchMetadata(`/api/${objectName}/fields`);
+          fields = fieldsRes.fields || [];
+          ADMIN_FIELDS_CACHE[objectName] = fields;
+        }
+
+        let rawLayout = [];
+        try {
+          const dbRes = await api(`/api/portal/layouts/${objectName}`);
+          rawLayout = dbRes.layout || [];
+          ADMIN_DB_LAYOUT_CACHE[objectName] = rawLayout;
+        } catch (e) {
+          console.warn(e);
+        }
+
+        if (rawLayout.length === 0) {
+          // Build basic fallback layout containing the first 10 fields
+          rawLayout = [{
+            title: 'Information',
+            columns: 2,
+            leftFields: fields.slice(0, 5).map(f => f.name),
+            rightFields: fields.slice(5, 10).map(f => f.name)
+          }];
+        }
+
+        adminEditingLayoutData = normalizeAdminLayoutData(rawLayout);
+        adminLayoutFieldSearchQuery = '';
+
+        pane.innerHTML = renderAdminLayoutEditorBodyHtml(objectName, fields);
+        setupAdminAvailableFieldsFilter();
+      } catch (e) {
+        pane.innerHTML = `<div style="color:var(--danger);padding:20px;text-align:center">${esc(e.message)}</div>`;
+      }
+    }
+
+    function renderAdminLayoutEditorBodyHtml(objectName, fields) {
+      const activeFieldNames = new Set();
+      adminEditingLayoutData.forEach(section => {
+        (section.leftFields || []).forEach(f => {
+          activeFieldNames.add(typeof f === 'string' ? f : f.name);
+        });
+        (section.rightFields || []).forEach(f => {
+          activeFieldNames.add(typeof f === 'string' ? f : f.name);
+        });
+      });
+
+      const availableFields = fields.filter(f => !activeFieldNames.has(f.name));
+
+      return `
+        <div class="layout-editor-container" style="box-shadow:none;border:1px solid var(--border);border-radius:var(--radius-lg);margin-top:0">
+          <div class="layout-editor-sidebar">
+            <div class="sidebar-header">
+              <h3>Available Fields</h3>
+              <input type="text" id="layoutFieldSearch" placeholder="Search fields..." class="layout-search-input">
+            </div>
+            <div class="available-fields-list" id="availableFieldsList">
+              ${renderAdminAvailableFieldsList(availableFields)}
+            </div>
+          </div>
+          <div class="layout-editor-canvas">
+            <div class="canvas-header">
+              <button class="btn btn-primary btn-sm" onclick="adminSaveCustomLayout()">${adminUtilityIconSvg("like")} Save Layout</button>
+              <button class="btn btn-ghost btn-sm" onclick="showObjectDetailTab('${objectName}', 'page-layouts')">Cancel</button>
+              <button class="btn btn-ghost btn-danger-link btn-sm" onclick="adminResetCustomLayoutToDefault()">${adminUtilityIconSvg("refresh")} Reset to Default</button>
+              <button class="btn btn-ghost btn-sm" onclick="adminAddNewLayoutSection()">${adminUtilityIconSvg("comment")} + Add Section</button>
+            </div>
+            <div class="canvas-sections" id="canvasSections">
+              ${adminEditingLayoutData.map((section, sIdx) => renderAdminEditorSection(section, sIdx)).join("")}
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
+    function renderAdminAvailableFieldsList(availableFields) {
+      if (availableFields.length === 0) {
+        return `<div class="sidebar-empty">All fields are on the layout</div>`;
+      }
+      return availableFields.map(field => `
+        <div class="available-field-item" 
+             draggable="true" 
+             ondragstart="adminLayoutDragStartFromSidebar(event, '${field.name}')"
+             data-field-name="${field.name}"
+             data-field-label="${field.label}">
+          <div>
+            <span class="field-item-label">${esc(field.label)}</span>
+            <span class="field-item-name">${esc(field.name)}</span>
+          </div>
+          <button class="btn btn-icon-only btn-ghost-link" onclick="adminAddFieldToSectionFromSidebar('${field.name}')" title="Add to Section">+</button>
+        </div>
+      `).join("");
+    }
+
+    function renderAdminEditorSection(section, sIdx) {
+      const cols = section.columns || 2;
+      return `
+        <div class="layout-edit-section" data-section-index="${sIdx}">
+          <div class="layout-edit-section-header">
+            <input type="text" class="layout-edit-section-title-input" value="${esc(section.title)}" onchange="adminUpdateSectionTitle(${sIdx}, this.value)">
+            <div class="section-actions">
+              <select class="filter-select" onchange="adminChangeSectionLayout(${sIdx}, this.value)" style="padding:4px 8px;font-size:12px;height:auto">
+                <option value="2" ${cols === 2 ? 'selected' : ''}>2 Columns</option>
+                <option value="1" ${cols === 1 ? 'selected' : ''}>1 Column</option>
+              </select>
+              <button class="btn btn-icon-only" onclick="adminMoveSection(${sIdx}, -1)" ${sIdx === 0 ? 'disabled' : ''} title="Move Section Up">▲</button>
+              <button class="btn btn-icon-only" onclick="adminMoveSection(${sIdx}, 1)" ${sIdx === adminEditingLayoutData.length - 1 ? 'disabled' : ''} title="Move Section Down">▼</button>
+              <button class="btn btn-icon-only" style="color:var(--danger)" onclick="adminDeleteLayoutSection(${sIdx})" title="Delete Section">${adminUtilityIconSvg("trash")}</button>
+            </div>
+          </div>
+          ${cols === 1 
+            ? `
+            <div class="layout-edit-columns cols-1">
+              <div class="layout-edit-column" 
+                   data-column="left"
+                   ondragover="adminLayoutAllowDrop(event)"
+                   ondragenter="adminLayoutDragEnter(event)"
+                   ondragleave="adminLayoutDragLeave(event)"
+                   ondrop="adminLayoutDropOnColumn(event, ${sIdx}, 'left')"
+                   style="display: flex; flex-direction: column; gap: 8px; min-height: 80px; padding: 8px; border: 1px dashed transparent; border-radius: 6px; transition: all 0.2s;">
+                ${(section.leftFields || []).map((fieldEntry, fIdx) => renderAdminEditorField(fieldEntry, sIdx, 'left', fIdx)).join("")}
+                ${(section.leftFields || []).length === 0 ? '<div class="grid-empty-msg">Drag fields here or add from sidebar</div>' : ''}
+              </div>
+            </div>
+            ` 
+            : `
+            <div class="layout-edit-columns cols-2" style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
+              <div class="layout-edit-column" 
+                   data-column="left"
+                   ondragover="adminLayoutAllowDrop(event)"
+                   ondragenter="adminLayoutDragEnter(event)"
+                   ondragleave="adminLayoutDragLeave(event)"
+                   ondrop="adminLayoutDropOnColumn(event, ${sIdx}, 'left')"
+                   style="display: flex; flex-direction: column; gap: 8px; min-height: 80px; padding: 8px; border: 1px dashed transparent; border-radius: 6px; transition: all 0.2s;">
+                ${(section.leftFields || []).map((fieldEntry, fIdx) => renderAdminEditorField(fieldEntry, sIdx, 'left', fIdx)).join("")}
+                ${(section.leftFields || []).length === 0 ? '<div class="grid-empty-msg">Drag fields here</div>' : ''}
+              </div>
+              <div class="layout-edit-column" 
+                   data-column="right"
+                   ondragover="adminLayoutAllowDrop(event)"
+                   ondragenter="adminLayoutDragEnter(event)"
+                   ondragleave="adminLayoutDragLeave(event)"
+                   ondrop="adminLayoutDropOnColumn(event, ${sIdx}, 'right')"
+                   style="display: flex; flex-direction: column; gap: 8px; min-height: 80px; padding: 8px; border: 1px dashed transparent; border-radius: 6px; transition: all 0.2s;">
+                ${(section.rightFields || []).map((fieldEntry, fIdx) => renderAdminEditorField(fieldEntry, sIdx, 'right', fIdx)).join("")}
+                ${(section.rightFields || []).length === 0 ? '<div class="grid-empty-msg">Drag fields here</div>' : ''}
+              </div>
+            </div>
+            `
+          }
+        </div>
+      `;
+    }
+
+    function renderAdminEditorField(fieldEntry, sIdx, columnKey, fIdx) {
+      const name = typeof fieldEntry === "string" ? fieldEntry : fieldEntry.name;
+      const label = getFieldLabel(name);
+      return `
+        <div class="layout-edit-field" 
+             draggable="true" 
+             ondragstart="adminLayoutDragStart(event, ${sIdx}, '${columnKey}', ${fIdx})"
+             ondragover="adminLayoutAllowDrop(event)"
+             ondragenter="adminLayoutFieldDragEnter(event)"
+             ondragleave="adminLayoutFieldDragLeave(event)"
+             ondrop="adminLayoutDropOnField(event, ${sIdx}, '${columnKey}', ${fIdx})"
+             data-field-name="${name}">
+          <span class="layout-field-drag-handle">${adminUtilityIconSvg("sort")}</span>
+          <div class="layout-field-info">
+            <span class="layout-field-label">${esc(label)}</span>
+            <span class="layout-field-name">${esc(name)}</span>
+          </div>
+          <button class="layout-field-remove" onclick="adminRemoveFieldFromLayout(${sIdx}, '${columnKey}', ${fIdx})" title="Remove Field">&times;</button>
+        </div>
+      `;
+    }
+
+    function getFieldLabel(fieldName) {
+      const fields = ADMIN_FIELDS_CACHE[adminLayoutObjectName] || [];
+      const f = fields.find(field => field.name === fieldName);
+      return f ? f.label : fieldName.replace(/([A-Z])/g, ' $1').trim();
+    }
+
+    function adminLayoutDragStartFromSidebar(event, fieldName) {
+      event.dataTransfer.setData("text/plain", JSON.stringify({
+        source: "sidebar",
+        fieldName: fieldName
+      }));
+      event.dataTransfer.effectAllowed = "move";
+    }
+
+    function adminLayoutDragStart(event, sectionIdx, columnKey, fieldIdx) {
+      event.dataTransfer.setData("text/plain", JSON.stringify({
+        source: "canvas",
+        sectionIdx: sectionIdx,
+        columnKey: columnKey,
+        fieldIdx: fieldIdx
+      }));
+      event.dataTransfer.effectAllowed = "move";
+    }
+
+    function adminLayoutAllowDrop(event) {
+      event.preventDefault();
+    }
+
+    function adminLayoutDragEnter(event) {
+      event.preventDefault();
+      event.currentTarget.classList.add("drag-over");
+    }
+
+    function adminLayoutDragLeave(event) {
+      event.currentTarget.classList.remove("drag-over");
+    }
+
+    function adminLayoutFieldDragEnter(event) {
+      event.preventDefault();
+      event.stopPropagation();
+      event.currentTarget.classList.add("drag-over");
+    }
+
+    function adminLayoutFieldDragLeave(event) {
+      event.stopPropagation();
+      event.currentTarget.classList.remove("drag-over");
+    }
+
+    function adminLayoutDropOnColumn(event, targetSectionIdx, targetColumnKey) {
+      event.preventDefault();
+      event.stopPropagation();
+      document.querySelectorAll(".layout-edit-field, .layout-edit-column").forEach(el => el.classList.remove("drag-over"));
+      
+      const dataStr = event.dataTransfer.getData("text/plain");
+      if (!dataStr) return;
+
+      try {
+        const data = JSON.parse(dataStr);
+        const targetColArray = targetColumnKey === "left" ? "leftFields" : "rightFields";
+
+        if (data.source === "sidebar") {
+          const fieldName = data.fieldName;
+          if (!adminEditingLayoutData[targetSectionIdx][targetColArray]) {
+            adminEditingLayoutData[targetSectionIdx][targetColArray] = [];
+          }
+          adminEditingLayoutData[targetSectionIdx][targetColArray].push(fieldName);
+          adminReRenderLayoutEditor();
+        } else if (data.source === "canvas") {
+          const sourceSecIdx = data.sectionIdx;
+          const sourceColKey = data.columnKey;
+          const sourceFieldIdx = data.fieldIdx;
+          const sourceColArray = sourceColKey === "left" ? "leftFields" : "rightFields";
+
+          const fieldObj = adminEditingLayoutData[sourceSecIdx][sourceColArray][sourceFieldIdx];
+          adminEditingLayoutData[sourceSecIdx][sourceColArray].splice(sourceFieldIdx, 1);
+
+          if (!adminEditingLayoutData[targetSectionIdx][targetColArray]) {
+            adminEditingLayoutData[targetSectionIdx][targetColArray] = [];
+          }
+          adminEditingLayoutData[targetSectionIdx][targetColArray].push(fieldObj);
+          adminReRenderLayoutEditor();
+        }
+      } catch (e) {
+        console.error(e);
+      }
+    }
+
+    function adminLayoutDropOnField(event, targetSectionIdx, targetColumnKey, targetFieldIdx) {
+      event.preventDefault();
+      event.stopPropagation();
+      document.querySelectorAll(".layout-edit-field, .layout-edit-column").forEach(el => el.classList.remove("drag-over"));
+      
+      const dataStr = event.dataTransfer.getData("text/plain");
+      if (!dataStr) return;
+
+      try {
+        const data = JSON.parse(dataStr);
+        const targetColArray = targetColumnKey === "left" ? "leftFields" : "rightFields";
+
+        if (data.source === "sidebar") {
+          const fieldName = data.fieldName;
+          if (!adminEditingLayoutData[targetSectionIdx][targetColArray]) {
+            adminEditingLayoutData[targetSectionIdx][targetColArray] = [];
+          }
+          adminEditingLayoutData[targetSectionIdx][targetColArray].splice(targetFieldIdx, 0, fieldName);
+          adminReRenderLayoutEditor();
+        } else if (data.source === "canvas") {
+          const sourceSecIdx = data.sectionIdx;
+          const sourceColKey = data.columnKey;
+          const sourceFieldIdx = data.fieldIdx;
+          const sourceColArray = sourceColKey === "left" ? "leftFields" : "rightFields";
+
+          const fieldObj = adminEditingLayoutData[sourceSecIdx][sourceColArray][sourceFieldIdx];
+          adminEditingLayoutData[sourceSecIdx][sourceColArray].splice(sourceFieldIdx, 1);
+
+          let insertIdx = targetFieldIdx;
+          if (sourceSecIdx === targetSectionIdx && sourceColKey === targetColumnKey && sourceFieldIdx < targetFieldIdx) {
+            insertIdx = targetFieldIdx - 1;
+          }
+
+          if (!adminEditingLayoutData[targetSectionIdx][targetColArray]) {
+            adminEditingLayoutData[targetSectionIdx][targetColArray] = [];
+          }
+          adminEditingLayoutData[targetSectionIdx][targetColArray].splice(insertIdx, 0, fieldObj);
+          adminReRenderLayoutEditor();
+        }
+      } catch (e) {
+        console.error(e);
+      }
+    }
+
+    function adminRemoveFieldFromLayout(sIdx, colKey, fIdx) {
+      const colArray = colKey === 'left' ? 'leftFields' : 'rightFields';
+      adminEditingLayoutData[sIdx][colArray].splice(fIdx, 1);
+      adminReRenderLayoutEditor();
+    }
+
+    function adminAddFieldToSectionFromSidebar(fieldName) {
+      if (!adminEditingLayoutData.length) return;
+      const targetSec = adminEditingLayoutData[0];
+      targetSec.leftFields = targetSec.leftFields || [];
+      targetSec.leftFields.push(fieldName);
+      adminReRenderLayoutEditor();
+    }
+
+    function adminUpdateSectionTitle(sIdx, value) {
+      adminEditingLayoutData[sIdx].title = value;
+    }
+
+    function adminChangeSectionLayout(sIdx, value) {
+      adminEditingLayoutData[sIdx].columns = parseInt(value, 10);
+      adminReRenderLayoutEditor();
+    }
+
+    function adminMoveSection(sIdx, direction) {
+      const targetIdx = sIdx + direction;
+      if (targetIdx < 0 || targetIdx >= adminEditingLayoutData.length) return;
+      const temp = adminEditingLayoutData[sIdx];
+      adminEditingLayoutData[sIdx] = adminEditingLayoutData[targetIdx];
+      adminEditingLayoutData[targetIdx] = temp;
+      adminReRenderLayoutEditor();
+    }
+
+    function adminDeleteLayoutSection(sIdx) {
+      if (confirm('Delete this layout section? All fields inside will be returned to the available fields list.')) {
+        adminEditingLayoutData.splice(sIdx, 1);
+        adminReRenderLayoutEditor();
+      }
+    }
+
+    function adminAddNewLayoutSection() {
+      adminEditingLayoutData.push({
+        title: 'New Section',
+        columns: 2,
+        leftFields: [],
+        rightFields: []
+      });
+      adminReRenderLayoutEditor();
+    }
+
+    function adminReRenderLayoutEditor() {
+      const canvasScroll = $("canvasSections") ? $("canvasSections").scrollTop : 0;
+      const sidebarScroll = $("availableFieldsList") ? $("availableFieldsList").scrollTop : 0;
+      const pane = $('omDetailContentPane');
+      
+      const fields = ADMIN_FIELDS_CACHE[adminLayoutObjectName] || [];
+      pane.innerHTML = renderAdminLayoutEditorBodyHtml(adminLayoutObjectName, fields);
+
+      const canvasEl = $("canvasSections");
+      const sidebarEl = $("availableFieldsList");
+      if (canvasEl) canvasEl.scrollTop = canvasScroll;
+      if (sidebarEl) sidebarEl.scrollTop = sidebarScroll;
+
+      setTimeout(() => {
+        const cEl = $("canvasSections");
+        const sEl = $("availableFieldsList");
+        if (cEl) cEl.scrollTop = canvasScroll;
+        if (sEl) sEl.scrollTop = sidebarScroll;
+      }, 0);
+
+      setupAdminAvailableFieldsFilter();
+    }
+
+    function setupAdminAvailableFieldsFilter() {
+      const searchInput = $("layoutFieldSearch");
+      if (!searchInput) return;
+
+      searchInput.value = adminLayoutFieldSearchQuery || "";
+      const applyFilter = (query) => {
+        const q = query.toLowerCase().trim();
+        document.querySelectorAll("#availableFieldsList .available-field-item").forEach(item => {
+          const name = item.dataset.fieldName.toLowerCase();
+          const label = item.dataset.fieldLabel.toLowerCase();
+          if (name.includes(q) || label.includes(q)) {
+            item.style.display = "flex";
+          } else {
+            item.style.display = "none";
+          }
+        });
+      };
+
+      applyFilter(adminLayoutFieldSearchQuery);
+      searchInput.addEventListener("input", (e) => {
+        adminLayoutFieldSearchQuery = e.target.value;
+        applyFilter(adminLayoutFieldSearchQuery);
+      });
+    }
+
+    async function adminSaveCustomLayout() {
+      try {
+        const res = await api(`/api/portal/layouts/${adminLayoutObjectName}`, {
+          method: 'POST',
+          body: JSON.stringify({ layout: adminEditingLayoutData })
+        });
+        if (res && res.success) {
+          ADMIN_DB_LAYOUT_CACHE[adminLayoutObjectName] = adminEditingLayoutData;
+          toast('Layout saved successfully!', 'ok');
+          showObjectDetailTab(adminLayoutObjectName, 'page-layouts');
+        } else {
+          toast('Failed to save layout', 'err');
+        }
+      } catch (err) {
+        console.error(err);
+        toast('Error saving layout', 'err');
+      }
+    }
+
+    async function adminResetCustomLayoutToDefault() {
+      if (confirm('Are you sure you want to reset layout to standard Salesforce default?')) {
+        try {
+          const res = await api(`/api/portal/layouts/${adminLayoutObjectName}`, {
+            method: 'DELETE'
+          });
+          if (res && res.success) {
+            delete ADMIN_DB_LAYOUT_CACHE[adminLayoutObjectName];
+            toast('Layout reset to default', 'ok');
+            showObjectDetailTab(adminLayoutObjectName, 'page-layouts');
+          } else {
+            toast('Failed to reset layout', 'err');
+          }
+        } catch (err) {
+          console.error(err);
+          toast('Error resetting layout', 'err');
+        }
+      }
+    }
+
+    // ── RELOCATED COMPACT LAYOUT EDITOR ──────────────────
+    let adminCompactLayoutDraft = [];
+    let adminCompactObjectName = '';
+
+    async function startEditingCompactLayout(objectName) {
+      adminCompactObjectName = objectName;
+      const pane = $('omDetailContentPane');
+      pane.innerHTML = '<div class="spinner" style="margin:40px auto"></div>';
+
+      try {
+        let fields = ADMIN_FIELDS_CACHE[objectName];
+        if (!fields) {
+          const fieldsRes = await fetchMetadata(`/api/${objectName}/fields`);
+          fields = fieldsRes.fields || [];
+          ADMIN_FIELDS_CACHE[objectName] = fields;
+        }
+
+        let customFields = [];
+        try {
+          const dbRes = await api(`/api/portal/compact-layouts/${objectName}`);
+          customFields = dbRes.fields || [];
+          ADMIN_COMPACT_LAYOUT_CACHE[objectName] = customFields;
+        } catch (e) {
+          console.warn(e);
+        }
+
+        if (customFields.length === 0) {
+          // Standard defaults fallback: first 4 fields
+          customFields = fields.slice(0, 4).map(f => f.name);
+        }
+
+        adminCompactLayoutDraft = [...customFields];
+        pane.innerHTML = renderAdminCompactEditorHtml(objectName, fields);
+        adminSetupCompactFieldsSearch();
+      } catch (e) {
+        pane.innerHTML = `<div style="color:var(--danger);padding:20px;text-align:center">${esc(e.message)}</div>`;
+      }
+    }
+
+    function renderAdminCompactEditorHtml(objectName, fields) {
+      return `
+        <div class="layout-editor-container" style="display:flex;gap:20px;height:450px;box-shadow:none;border:1px solid var(--border);border-radius:var(--radius-lg)">
+          <div style="flex:1;display:flex;flex-direction:column;border-right:1px solid var(--border);padding-right:20px;height:100%">
+            <h4 style="font-size:13px;font-weight:600;margin-bottom:12px;color:var(--text-primary)">Selected Fields</h4>
+            <div id="compactSelectedFields" style="flex:1;overflow-y:auto">
+              ${renderAdminCompactSelectedFieldsHtml()}
+            </div>
+          </div>
+          <div style="flex:1;display:flex;flex-direction:column;height:100%">
+            <h4 style="font-size:13px;font-weight:600;margin-bottom:8px;color:var(--text-primary)">Available Fields</h4>
+            <input type="text" id="compactFieldSearch" placeholder="Search fields..." class="layout-search-input" style="margin-bottom:12px;font-size:12px;padding:6px 10px">
+            <div id="compactAvailableFields" style="flex:1;overflow-y:auto">
+              ${renderAdminCompactAvailableFieldsHtml(objectName, fields)}
+            </div>
+          </div>
+        </div>
+        <div style="display:flex;justify-content:flex-end;gap:10px;margin-top:16px">
+          <button class="btn btn-primary" onclick="adminSaveCompactLayout()">Save Compact Layout</button>
+          <button class="btn btn-ghost" onclick="showObjectDetailTab('${objectName}', 'compact-layouts')">Cancel</button>
+          <button class="btn btn-ghost" style="color:var(--danger)" onclick="adminResetCompactLayoutToDefault()">Reset to Default</button>
+        </div>
+      `;
+    }
+
+    function renderAdminCompactSelectedFieldsHtml() {
+      if (adminCompactLayoutDraft.length === 0) {
+        return `<div style="text-align:center;color:var(--text-muted);font-size:12px;padding:20px">No fields selected</div>`;
+      }
+      return adminCompactLayoutDraft.map((field, idx) => `
+        <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 10px;background:var(--surface-2);border:1px solid var(--border);border-radius:var(--radius);margin-bottom:6px;font-size:12.5px">
+          <div style="display:flex;align-items:center;gap:6px">
+            <div style="display:flex;flex-direction:column;gap:2px">
+              <button style="border:none;background:none;font-size:10px;cursor:pointer;line-height:1;padding:0;color:var(--text-secondary)" onclick="adminMoveCompactField(${idx}, -1)" ${idx === 0 ? 'disabled' : ''}>▲</button>
+              <button style="border:none;background:none;font-size:10px;cursor:pointer;line-height:1;padding:0;color:var(--text-secondary)" onclick="adminMoveCompactField(${idx}, 1)" ${idx === adminCompactLayoutDraft.length - 1 ? 'disabled' : ''}>▼</button>
+            </div>
+            <span style="font-weight:600;color:var(--text-primary)">${esc(getFieldLabel(field))}</span>
+          </div>
+          <button style="border:none;background:none;color:var(--danger);cursor:pointer;font-size:16px;padding:0 4px" onclick="adminRemoveCompactField(${idx})">&times;</button>
+        </div>
+      `).join("");
+    }
+
+    function renderAdminCompactAvailableFieldsHtml(objectName, fields) {
+      const selectedSet = new Set(adminCompactLayoutDraft);
+      const available = fields.filter(f => !selectedSet.has(f.name));
+
+      if (available.length === 0) {
+        return `<div style="text-align:center;color:var(--text-muted);font-size:12px;padding:20px">All fields added</div>`;
+      }
+
+      return available.map(field => `
+        <div class="compact-available-item" 
+             style="display:flex;align-items:center;justify-content:space-between;padding:6px 8px;background:var(--surface-2);border:1px solid var(--border);border-radius:var(--radius);margin-bottom:6px;font-size:12px"
+             data-name="${field.name.toLowerCase()}"
+             data-label="${field.label.toLowerCase()}">
+          <div style="display:flex;flex-direction:column">
+            <span style="font-weight:500;color:var(--text-primary)">${esc(field.label)}</span>
+            <span style="font-size:10px;color:var(--text-muted)">${esc(field.name)}</span>
+          </div>
+          <button class="btn btn-icon-only btn-ghost-link btn-sm" onclick="adminAddCompactField('${field.name}')" title="Add Field">+</button>
+        </div>
+      `).join("");
+    }
+
+    function adminMoveCompactField(idx, direction) {
+      const targetIdx = idx + direction;
+      if (targetIdx < 0 || targetIdx >= adminCompactLayoutDraft.length) return;
+      const temp = adminCompactLayoutDraft[idx];
+      adminCompactLayoutDraft[idx] = adminCompactLayoutDraft[targetIdx];
+      adminCompactLayoutDraft[targetIdx] = temp;
+      adminReRenderCompactModal();
+    }
+
+    function adminRemoveCompactField(idx) {
+      adminCompactLayoutDraft.splice(idx, 1);
+      adminReRenderCompactModal();
+    }
+
+    function adminAddCompactField(fieldName) {
+      adminCompactLayoutDraft.push(fieldName);
+      adminReRenderCompactModal();
+    }
+
+    function adminReRenderCompactModal() {
+      const selectedContainer = $("compactSelectedFields");
+      const availableContainer = $("compactAvailableFields");
+      const fields = ADMIN_FIELDS_CACHE[adminCompactObjectName] || [];
+      if (selectedContainer) selectedContainer.innerHTML = renderAdminCompactSelectedFieldsHtml();
+      if (availableContainer) availableContainer.innerHTML = renderAdminCompactAvailableFieldsHtml(adminCompactObjectName, fields);
+      adminSetupCompactFieldsSearch();
+    }
+
+    function adminSetupCompactFieldsSearch() {
+      const searchInput = $("compactFieldSearch");
+      if (!searchInput) return;
+      searchInput.addEventListener("input", (e) => {
+        const q = e.target.value.toLowerCase().trim();
+        document.querySelectorAll("#compactAvailableFields .compact-available-item").forEach(item => {
+          const name = item.dataset.name;
+          const label = item.dataset.label;
+          if (name.includes(q) || label.includes(q)) {
+            item.style.display = "flex";
+          } else {
+            item.style.display = "none";
+          }
+        });
+      });
+    }
+
+    async function adminSaveCompactLayout() {
+      try {
+        const res = await api(`/api/portal/compact-layouts/${adminCompactObjectName}`, {
+          method: 'POST',
+          body: JSON.stringify({ fields: adminCompactLayoutDraft })
+        });
+        if (res && res.success) {
+          ADMIN_COMPACT_LAYOUT_CACHE[adminCompactObjectName] = adminCompactLayoutDraft;
+          toast('Compact layout saved successfully!', 'ok');
+          showObjectDetailTab(adminCompactObjectName, 'compact-layouts');
+        } else {
+          toast('Failed to save compact layout', 'err');
+        }
+      } catch (err) {
+        console.error(err);
+        toast('Error saving compact layout', 'err');
+      }
+    }
+
+    async function adminResetCompactLayoutToDefault() {
+      if (confirm('Reset compact layout to default?')) {
+        try {
+          const res = await api(`/api/portal/compact-layouts/${adminCompactObjectName}`, {
+            method: 'DELETE'
+          });
+          if (res && res.success) {
+            delete ADMIN_COMPACT_LAYOUT_CACHE[adminCompactObjectName];
+            toast('Compact layout reset to default', 'ok');
+            showObjectDetailTab(adminCompactObjectName, 'compact-layouts');
+          } else {
+            toast('Failed to reset compact layout', 'err');
+          }
+        } catch (err) {
+          console.error(err);
+          toast('Error resetting compact layout', 'err');
+        }
+      }
     }
   </script>
 

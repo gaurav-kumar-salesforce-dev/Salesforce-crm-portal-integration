@@ -4550,7 +4550,7 @@ function renderRecordDetailPage(
               ? '<button class="btn btn-primary" onclick="editCurrentDetailRecord()">Edit</button>'
               : ""}
             <button class="btn btn-ghost" 
-                    style="display: inline-flex; align-items: center; justify-content: center; width: 34px; height: 34px; padding: 0; cursor: pointer;" 
+                    style="display: none; align-items: center; justify-content: center; width: 34px; height: 34px; padding: 0; cursor: pointer;" 
                     onclick="openCustomizeCompactLayoutModal()" 
                     title="Customize Compact Layout">
               <span style="display: flex; width: 16px; height: 16px; align-items: center; justify-content: center; fill: currentColor;">
@@ -5407,7 +5407,7 @@ function showRecordTab(name) {
   
   const actions = $("recordTabActions");
   if (actions) {
-    actions.style.display = name === "details" ? "block" : "none";
+    actions.style.display = "none";
   }
   captureCrmPageState(currentObject);
 }

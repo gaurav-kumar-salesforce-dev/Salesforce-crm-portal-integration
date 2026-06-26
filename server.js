@@ -7548,9 +7548,15 @@ app.get('/api/meta/:object/picklist/:field', checkAuth, async (req, res) => {
 
 
 app.get('/admin', (req, res) => {
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, private');
   res.sendFile(path.join(__dirname, 'public', 'admin.html'));
 });
 app.get('/admin.html', (req, res) => {
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, private');
+  res.sendFile(path.join(__dirname, 'public', 'admin.html'));
+});
+app.get('/admin/*', (req, res) => {
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, private');
   res.sendFile(path.join(__dirname, 'public', 'admin.html'));
 });
 // Serve frontend for all unmatched routes
