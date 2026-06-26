@@ -49,10 +49,12 @@ const state = {
 const CLIENT_CACHE_TTL_MS = 30 * 1000;
 const browserMemoryCache = new Map();
 const browserInFlightRequests = new Map();
+const sharedPerformanceCache = window.SaaSRAYPerformance || null;
 
 const $ = (id) => document.getElementById(id);
 
 document.addEventListener('DOMContentLoaded', async () => {
+  sharedPerformanceCache?.markModuleInitialized?.('reports');
   initTheme();
   bindEvents();
   try {
@@ -292,6 +294,25 @@ async function api(path, options = {}) {
     const cached = browserCacheGet(cacheKey);
     if (cached) return cached;
     if (browserInFlightRequests.has(cacheKey)) return browserInFlightRequests.get(cacheKey);
+    if (sharedPerformanceCache?.fetchJson) {
+      const sharedRequest = sharedPerformanceCache.fetchJson(path, {
+        ...options,
+        cacheKey,
+        cacheType: 'resource',
+        ttlMs: CLIENT_CACHE_TTL_MS,
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+          ...(options.headers || {})
+        }
+      });
+      browserInFlightRequests.set(cacheKey, sharedRequest);
+      sharedRequest
+        .then((data) => browserCacheSet(cacheKey, data))
+        .finally(() => browserInFlightRequests.delete(cacheKey))
+        .catch(() => {});
+      return sharedRequest;
+    }
   }
   const request = fetch(path, {
     ...options,
@@ -329,6 +350,8 @@ function browserCacheKey(path) {
 }
 
 function browserCacheGet(key) {
+  const shared = sharedPerformanceCache?.getCacheValue?.(key, 'resource');
+  if (shared) return shared;
   const item = browserMemoryCache.get(key);
   if (!item || Date.now() > item.expiresAt) {
     if (item) browserMemoryCache.delete(key);
@@ -339,6 +362,10 @@ function browserCacheGet(key) {
 
 function browserCacheSet(key, value, ttlMs = 60 * 1000) {
   browserMemoryCache.set(key, { value, expiresAt: Date.now() + Math.min(ttlMs, CLIENT_CACHE_TTL_MS) });
+  sharedPerformanceCache?.setCacheValue?.(key, value, {
+    type: 'resource',
+    ttlMs: Math.min(ttlMs, CLIENT_CACHE_TTL_MS)
+  });
 }
 
 function browserCacheInvalidate(path) {
@@ -351,6 +378,7 @@ function browserCacheInvalidate(path) {
   for (const key of browserInFlightRequests.keys()) {
     if (scopes.some((scope) => key.startsWith(scope))) browserInFlightRequests.delete(key);
   }
+  scopes.forEach((scope) => sharedPerformanceCache?.invalidate?.(scope));
 }
 
 async function loadFolders() {

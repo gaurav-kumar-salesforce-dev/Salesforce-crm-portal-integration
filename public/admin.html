@@ -2765,6 +2765,7 @@
   <!-- Toast Stack -->
   <div class="toast-stack" id="toastStack"></div>
 
+  <script src="client-performance.js?v=1"></script>
   <script>
     // ═══════════════════════════════════════════════════════
     // STATE
@@ -2908,6 +2909,7 @@
     // INIT
     // ═══════════════════════════════════════════════════════
     document.addEventListener('DOMContentLoaded', async () => {
+      window.SaaSRAYPerformance?.markModuleInitialized?.('admin');
       const token = getToken();
       if (!token) { window.location.href = '/'; return; }
 

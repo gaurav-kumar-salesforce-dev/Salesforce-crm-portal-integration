@@ -563,6 +563,7 @@ const apiInFlightRequests = new Map();
 const crmBackgroundRefreshes = new Map();
 const crmPageStates = new Map();
 const objectFieldMetadataCache = new Map();
+const sharedPerformanceCache = window.SaaSRAYPerformance || null;
 let restoringCrmHistory = false;
 let editingRecord = null;
 let deletingRecord = null;
@@ -735,10 +736,37 @@ async function loadObjectFields(objectName = currentObject) {
   if (objectFieldMetadataCache.has(objectName)) {
     return objectFieldMetadataCache.get(objectName);
   }
+  const metadataPath = `/api/${objectName}/fields`;
+  const sharedCacheKey = `saasray:v1:${metadataPath}`;
+  const sharedFields = sharedPerformanceCache?.getCacheValue?.(sharedCacheKey, "metadata");
+  if (sharedFields?.fields?.length) {
+    const fields = sharedFields.fields
+      .filter((field) => field?.name && field.name !== "Id" && !String(field.name).includes("attributes"))
+      .map((field) => ({
+        ...field,
+        label: cleanListViewLabel(field.label || humanizeFieldLabel(field.name)),
+      }))
+      .sort((a, b) => a.label.localeCompare(b.label));
+    if (fields.length) {
+      objectFieldMetadataCache.set(objectName, fields);
+      scheduleObjectMetadataPrefetch(objectName);
+      return fields;
+    }
+  }
   const fallback = [...new Set([...(OBJECT_META[objectName]?.columns || []), ...(OBJECT_META[objectName]?.editable || [])])]
     .map((name) => ({ name, label: humanizeFieldLabel(name), type: "string" }));
   try {
-    const data = await api(`/api/${objectName}/fields`);
+    const token = getAuthToken();
+    const data = sharedPerformanceCache?.fetchJson
+      ? await sharedPerformanceCache.fetchJson(metadataPath, {
+          cacheKey: sharedCacheKey,
+          cacheType: "metadata",
+          headers: {
+            "Content-Type": "application/json",
+            ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          },
+        })
+      : await api(metadataPath);
     const fields = (data.fields || fallback)
       .filter((field) => field?.name && field.name !== "Id" && !String(field.name).includes("attributes"))
       .map((field) => ({
@@ -747,10 +775,37 @@ async function loadObjectFields(objectName = currentObject) {
       }))
       .sort((a, b) => a.label.localeCompare(b.label));
     objectFieldMetadataCache.set(objectName, fields.length ? fields : fallback);
+    scheduleObjectMetadataPrefetch(objectName);
   } catch {
     objectFieldMetadataCache.set(objectName, fallback);
   }
   return objectFieldMetadataCache.get(objectName);
+}
+
+function scheduleObjectMetadataPrefetch(objectName = currentObject) {
+  if (!sharedPerformanceCache?.prefetch) return;
+  const token = getAuthToken();
+  if (!token) return;
+  const relatedObjectsByObject = {
+    Account: ["Contact", "Opportunity", "Case"],
+    Contact: ["Account", "Opportunity", "Task", "Event"],
+    Opportunity: ["Account", "Contact"],
+    Case: ["Account", "Contact"],
+    Lead: ["Campaign"],
+    Campaign: ["Lead"],
+  };
+  const targets = relatedObjectsByObject[objectName] || [];
+  targets.forEach((target) => {
+    const path = `/api/${target}/fields`;
+    sharedPerformanceCache.prefetch(path, {
+      cacheKey: `saasray:v1:${path}`,
+      cacheType: "metadata",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+      },
+    });
+  });
 }
 
 function getCachedObjectFields(objectName = currentObject) {
@@ -8273,6 +8328,7 @@ window.addEventListener("focus", () => {
 });
 
 document.addEventListener("DOMContentLoaded", async () => {
+  sharedPerformanceCache?.markModuleInitialized?.("crm");
   listContentHtml = $("content").innerHTML;
 
   // Sidebar collapsed state
@@ -8286,6 +8342,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   }
 
   refreshSidebarIcons();
+  sharedPerformanceCache?.idle?.(() => sharedPerformanceCache.lazyImages?.(document), { timeout: 1000 });
 
   // ── AUTH GATE ────────────────────────────────────
   const handledGoogleRedirect = await finishGoogleLoginFromRedirect();
