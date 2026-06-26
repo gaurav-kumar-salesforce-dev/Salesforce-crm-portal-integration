@@ -575,6 +575,18 @@ let visibleRecordCount = RENDER_CHUNK_SIZE;
 let loadingMoreRecords = false;
 let lazyObserver = null;
 let lazyLoadQueued = false;
+const VIRTUAL_ROW_ESTIMATE_PX = 57;
+const VIRTUAL_MIN_BUFFER_ROWS = 8;
+const VIRTUAL_MAX_BUFFER_ROWS = 40;
+let virtualTableState = {
+  signature: "",
+  rowHeight: VIRTUAL_ROW_ESTIMATE_PX,
+  rowHeightMeasured: false,
+  start: -1,
+  end: -1,
+  pool: [],
+  raf: 0,
+};
 let currentViewMode = "table";
 let draggedKanbanId = null;
 const kanbanPicklistCache = {};
@@ -1272,10 +1284,16 @@ function restoreCrmPageState(objectName) {
   updateViewToggle();
   showActiveView();
   applyPermissionGuards(objectName);
+  if (!viewingDetail && currentViewMode === "table") {
+    renderTable();
+  }
   updatePagination();
   updateRecordCounts();
   observeLazySentinel();
-  requestAnimationFrame(() => window.scrollTo(0, state.scrollPosition || 0));
+  requestAnimationFrame(() => {
+    window.scrollTo(0, state.scrollPosition || 0);
+    scheduleVirtualTableRender(true);
+  });
   queueLazyLoadIfNeeded();
   return true;
 }
@@ -2752,7 +2770,6 @@ function applyLocalView() {
 function renderTable() {
   if (viewingDetail) return;
   renderFilterPills();
-  const recordsToRender = getRecordsToRender();
   const table = $("dataTable");
   const tableCard = $("tableCard");
   if (!table || !tableCard) return;
@@ -2778,7 +2795,8 @@ function renderTable() {
     </tr>
   `;
 
-  if (!recordsToRender.length) {
+  if (!currentRecords.length) {
+    resetVirtualTableState();
     $("tbody").innerHTML = `
       <tr>
         <td class="table-empty" colspan="${columnCount}">
@@ -2791,20 +2809,8 @@ function renderTable() {
     return;
   }
 
-  const rowHtml = recordsToRender
-    .map((record) => renderTableRowHtml(record, showActions))
-    .join("");
-  const canLoadMore =
-    nextRecordsUrl || visibleRecordCount < currentRecords.length;
-  $("tbody").innerHTML = `
-    ${rowHtml}
-    <tr id="lazyLoadSentinel" class="lazy-load-row">
-      <td colspan="${columnCount}">
-        ${loadingMoreRecords ? "Loading more records..." : canLoadMore ? "Scroll to load more records" : "All loaded"}
-      </td>
-    </tr>
-  `;
-  observeLazySentinel();
+  setupVirtualTableBody($("tbody"), columnCount, showActions);
+  renderVirtualTableWindow(true);
 }
 
 function renderFilterPills() {
@@ -2844,9 +2850,8 @@ async function removeLocalViewFilter(index) {
   await loadData({ forceRefresh: true });
 }
 
-function renderTableRowHtml(record, showActions) {
+function renderTableCellsHtml(record, showActions) {
   return `
-    <tr class="${selectedListRecordId === record.Id ? "selected-row" : ""}" data-record-id="${escapeHtml(record.Id)}" onclick="openRecordDetail('${currentObject}', '${escapeJs(record.Id)}')">
       ${currentColumns.map((field) => `<td class="${fieldColumnClass(field)}">${formatValue(field, getValue(record, field), record)}</td>`).join("")}
       ${showActions ? `<td class="actions-col">
         <div class="row-acts">
@@ -2863,6 +2868,13 @@ function renderTableRowHtml(record, showActions) {
           </button>` : ''}
         </div>
       </td>` : ''}
+  `;
+}
+
+function renderTableRowHtml(record, showActions) {
+  return `
+    <tr class="${selectedListRecordId === record.Id ? "selected-row" : ""}" data-record-id="${escapeHtml(record.Id)}" onclick="openRecordDetail('${currentObject}', '${escapeJs(record.Id)}')">
+      ${renderTableCellsHtml(record, showActions)}
     </tr>
   `;
 }
@@ -2881,55 +2893,189 @@ function patchRenderedTableRows(previousColumns = currentColumns) {
     return;
   }
 
-  const recordsToRender = getRecordsToRender();
   const showActions = canDo(currentObject, "can_edit") || canDo(currentObject, "can_delete");
   const columnCount = currentColumns.length + (showActions ? 1 : 0);
-  const sentinel = $("lazyLoadSentinel");
 
-  if (!recordsToRender.length) {
+  if (!currentRecords.length) {
     renderTable();
     return;
   }
 
-  const existingRows = new Map(
-    [...tbody.querySelectorAll("tr[data-record-id]")].map((row) => [
-      row.dataset.recordId,
-      row,
-    ]),
-  );
-  const nextIds = new Set(recordsToRender.map((record) => record.Id));
-  const anchor = sentinel || null;
+  setupVirtualTableBody(tbody, columnCount, showActions);
+  renderVirtualTableWindow(true);
+}
 
-  recordsToRender.forEach((record) => {
-    const nextHtml = renderTableRowHtml(record, showActions).trim();
-    const existing = existingRows.get(record.Id);
-    if (existing) {
-      if (existing.outerHTML.trim() !== nextHtml) {
-        existing.outerHTML = nextHtml;
-      }
-      const row = tbody.querySelector(`tr[data-record-id="${CSS.escape(record.Id)}"]`);
-      if (row) tbody.insertBefore(row, anchor);
-      return;
-    }
-    const template = document.createElement("template");
-    template.innerHTML = nextHtml;
-    tbody.insertBefore(template.content.firstElementChild, anchor);
+function resetVirtualTableState() {
+  if (virtualTableState.raf) cancelAnimationFrame(virtualTableState.raf);
+  virtualTableState = {
+    signature: "",
+    rowHeight: VIRTUAL_ROW_ESTIMATE_PX,
+    rowHeightMeasured: false,
+    start: -1,
+    end: -1,
+    pool: [],
+    raf: 0,
+  };
+}
+
+function virtualTableSignature(columnCount, showActions) {
+  return JSON.stringify({
+    object: currentObject,
+    columns: currentColumns,
+    columnCount,
+    showActions,
   });
+}
 
-  existingRows.forEach((row, id) => {
-    if (!nextIds.has(id)) row.remove();
-  });
-
-  if (sentinel) {
-    const canLoadMore = nextRecordsUrl || visibleRecordCount < currentRecords.length;
-    sentinel.className = "lazy-load-row";
-    sentinel.innerHTML = `
-      <td colspan="${columnCount}">
-        ${loadingMoreRecords ? "Loading more records..." : canLoadMore ? "Scroll to load more records" : "All loaded"}
-      </td>
-    `;
+function setupVirtualTableBody(tbody, columnCount, showActions) {
+  if (!tbody) return;
+  const signature = virtualTableSignature(columnCount, showActions);
+  if (virtualTableState.signature === signature && $("virtualTopSpacer") && $("virtualBottomSpacer")) {
+    updateVirtualSentinel(columnCount);
+    return;
   }
-  observeLazySentinel();
+
+  if (lazyObserver) lazyObserver.disconnect();
+  resetVirtualTableState();
+  virtualTableState.signature = signature;
+
+  tbody.innerHTML = `
+    <tr id="virtualTopSpacer" class="virtual-spacer-row" aria-hidden="true">
+      <td colspan="${columnCount}"><div class="virtual-spacer-block"></div></td>
+    </tr>
+    <tr id="virtualBottomSpacer" class="virtual-spacer-row" aria-hidden="true">
+      <td colspan="${columnCount}"><div class="virtual-spacer-block"></div></td>
+    </tr>
+    <tr id="lazyLoadSentinel" class="lazy-load-row">
+      <td colspan="${columnCount}">All loaded</td>
+    </tr>
+  `;
+  updateVirtualSentinel(columnCount);
+}
+
+function updateVirtualSentinel(columnCount) {
+  const sentinel = $("lazyLoadSentinel");
+  if (!sentinel) return;
+  sentinel.innerHTML = `
+    <td colspan="${columnCount}">
+      ${loadingMoreRecords ? "Loading more records..." : nextRecordsUrl ? "Scroll to load more records" : "All loaded"}
+    </td>
+  `;
+}
+
+function virtualBufferRows() {
+  const rowHeight = Math.max(virtualTableState.rowHeight || VIRTUAL_ROW_ESTIMATE_PX, 32);
+  const viewportRows = Math.ceil(window.innerHeight / rowHeight);
+  return Math.max(VIRTUAL_MIN_BUFFER_ROWS, Math.min(VIRTUAL_MAX_BUFFER_ROWS, viewportRows));
+}
+
+function measureVirtualRowHeight(row) {
+  if (!row || virtualTableState.rowHeightMeasured) return;
+  const measured = row.getBoundingClientRect().height;
+  if (measured > 20) {
+    virtualTableState.rowHeight = measured;
+    virtualTableState.rowHeightMeasured = true;
+  }
+}
+
+function computeVirtualRange() {
+  const table = $("dataTable");
+  if (!table || !currentRecords.length) return { start: 0, end: 0 };
+
+  const tableTop = table.getBoundingClientRect().top + window.scrollY;
+  const headerHeight = table.tHead?.getBoundingClientRect().height || 44;
+  const bodyTop = tableTop + headerHeight;
+  const rowHeight = Math.max(virtualTableState.rowHeight || VIRTUAL_ROW_ESTIMATE_PX, 32);
+  const buffer = virtualBufferRows();
+  const viewportTop = window.scrollY;
+  const viewportBottom = viewportTop + window.innerHeight;
+
+  const rawStart = Math.floor((viewportTop - bodyTop) / rowHeight) - buffer;
+  const rawEnd = Math.ceil((viewportBottom - bodyTop) / rowHeight) + buffer;
+  const maxStart = Math.max(0, currentRecords.length - 1);
+  const start = Math.min(maxStart, Math.max(0, rawStart));
+  const end = Math.min(currentRecords.length, Math.max(start + 1, rawEnd));
+  return { start, end };
+}
+
+function setVirtualSpacerHeight(id, height) {
+  const spacer = $(id)?.querySelector(".virtual-spacer-block");
+  if (!spacer) return;
+  const nextHeight = `${Math.max(0, Math.round(height))}px`;
+  if (spacer.style.height !== nextHeight) spacer.style.height = nextHeight;
+}
+
+function ensureVirtualRowPool(size) {
+  const tbody = $("tbody");
+  const bottomSpacer = $("virtualBottomSpacer");
+  if (!tbody || !bottomSpacer) return [];
+
+  while (virtualTableState.pool.length < size) {
+    const row = document.createElement("tr");
+    row.className = "virtual-record-row";
+    row.style.display = "none";
+    tbody.insertBefore(row, bottomSpacer);
+    virtualTableState.pool.push(row);
+  }
+  return virtualTableState.pool;
+}
+
+function updateVirtualRow(row, record, showActions) {
+  if (!row || !record) return;
+  row.style.display = "";
+  const nextClass = `${selectedListRecordId === record.Id ? "selected-row " : ""}virtual-record-row`;
+  if (row.className !== nextClass) row.className = nextClass;
+  if (row.dataset.recordId !== record.Id) {
+    row.dataset.recordId = record.Id;
+    row.onclick = () => openRecordDetail(currentObject, record.Id);
+    row.innerHTML = renderTableCellsHtml(record, showActions);
+  }
+}
+
+function renderVirtualTableWindow(force = false) {
+  if (viewingDetail || currentViewMode !== "table") return;
+  const tbody = $("tbody");
+  if (!tbody || !$("virtualTopSpacer") || !$("virtualBottomSpacer")) return;
+
+  const showActions = canDo(currentObject, "can_edit") || canDo(currentObject, "can_delete");
+  const columnCount = currentColumns.length + (showActions ? 1 : 0);
+  const { start, end } = computeVirtualRange();
+  const visibleCount = Math.max(0, end - start);
+
+  if (!force && start === virtualTableState.start && end === virtualTableState.end) {
+    updateVirtualSentinel(columnCount);
+    return;
+  }
+
+  const rows = ensureVirtualRowPool(visibleCount);
+  for (let index = 0; index < rows.length; index += 1) {
+    const row = rows[index];
+    const record = index < visibleCount ? currentRecords[start + index] : null;
+    if (record) {
+      updateVirtualRow(row, record, showActions);
+      if (index === 0) measureVirtualRowHeight(row);
+    } else {
+      row.style.display = "none";
+      row.removeAttribute("data-record-id");
+      row.onclick = null;
+    }
+  }
+
+  const rowHeight = Math.max(virtualTableState.rowHeight || VIRTUAL_ROW_ESTIMATE_PX, 32);
+  setVirtualSpacerHeight("virtualTopSpacer", start * rowHeight);
+  setVirtualSpacerHeight("virtualBottomSpacer", Math.max(0, currentRecords.length - end) * rowHeight);
+  virtualTableState.start = start;
+  virtualTableState.end = end;
+  updateVirtualSentinel(columnCount);
+}
+
+function scheduleVirtualTableRender(force = false) {
+  if (currentViewMode !== "table" || viewingDetail) return;
+  if (virtualTableState.raf) cancelAnimationFrame(virtualTableState.raf);
+  virtualTableState.raf = requestAnimationFrame(() => {
+    virtualTableState.raf = 0;
+    renderVirtualTableWindow(force);
+  });
 }
 
 function updateViewToggle() {
@@ -3271,7 +3417,6 @@ async function loadMoreRecords() {
   } finally {
     loadingMoreRecords = false;
     updatePagination();
-    queueLazyLoadIfNeeded();
   }
 }
 
@@ -3298,6 +3443,11 @@ function shouldLazyLoadMore() {
     $("tableCard")?.style.display === "none"
   )
     return false;
+  if ($("virtualTopSpacer") && $("virtualBottomSpacer")) {
+    const prefetchRows = Math.max(virtualBufferRows() * 2, RENDER_CHUNK_SIZE);
+    const { end } = computeVirtualRange();
+    return currentRecords.length - end <= prefetchRows;
+  }
   const tableCard = $("tableCard");
   if (!tableCard) return false;
   const rect = tableCard.getBoundingClientRect();
@@ -3305,11 +3455,8 @@ function shouldLazyLoadMore() {
 }
 
 async function handleLazyScroll() {
+  scheduleVirtualTableRender();
   if (loadingMoreRecords || !shouldLazyLoadMore()) return;
-  if (visibleRecordCount < currentRecords.length) {
-    await showMoreVisibleRecords();
-    return;
-  }
   if (nextRecordsUrl) await loadMoreRecords();
 }
 
@@ -3323,29 +3470,24 @@ function queueLazyLoadIfNeeded() {
 }
 
 function observeLazySentinel() {
-  const sentinel = $("lazyLoadSentinel");
-  if (!sentinel) return;
-  if (!lazyObserver) {
-    lazyObserver = new IntersectionObserver(
-      (entries) => {
-        if (entries.some((entry) => entry.isIntersecting)) handleLazyScroll();
-      },
-      { root: null, rootMargin: "700px 0px", threshold: 0 },
-    );
-  }
-  lazyObserver.disconnect();
-  lazyObserver.observe(sentinel);
+  if (lazyObserver) lazyObserver.disconnect();
 }
 
 function loadedRangeText() {
-  const shown = Math.min(visibleRecordCount, currentRecords.length);
+  const shown =
+    currentViewMode === "table"
+      ? currentRecords.length
+      : Math.min(visibleRecordCount, currentRecords.length);
   if (!totalRecords) return `${shown} shown`;
   return `${shown} of ${totalRecords}`;
 }
 
 function updateRecordCounts() {
   if (viewingDetail) return;
-  const shown = Math.min(visibleRecordCount, currentRecords.length);
+  const shown =
+    currentViewMode === "table"
+      ? currentRecords.length
+      : Math.min(visibleRecordCount, currentRecords.length);
   const totalLabel = totalRecords || currentRecords.length;
   const pageSub = $("pageSub");
   const recCount = $("recCount");
@@ -3473,7 +3615,9 @@ function pageRangeStart() {
 }
 
 function pageRangeEnd() {
-  return Math.min(visibleRecordCount, currentRecords.length);
+  return currentViewMode === "table"
+    ? currentRecords.length
+    : Math.min(visibleRecordCount, currentRecords.length);
 }
 
 function updatePagination() {
@@ -3490,10 +3634,10 @@ function updatePagination() {
     : `Showing ${loadedRangeText()}`;
   const lazyHint = $("lazyHint");
   if (lazyHint) {
+    const hasMoreLocalRows =
+      currentViewMode === "kanban" && visibleRecordCount < currentRecords.length;
     lazyHint.textContent =
-      nextRecordsUrl || visibleRecordCount < currentRecords.length
-        ? "Scroll to load more"
-        : "All loaded";
+      nextRecordsUrl || hasMoreLocalRows ? "Scroll to load more" : "All loaded";
   }
 }
 
@@ -8110,6 +8254,8 @@ document.addEventListener(
 );
 window.addEventListener("resize", () => {
   closeKanbanMenus();
+  virtualTableState.rowHeightMeasured = false;
+  scheduleVirtualTableRender(true);
   queueLazyLoadIfNeeded();
 });
 window.addEventListener("scroll", handleLazyScroll, { passive: true });

@@ -1225,10 +1225,14 @@ body {
   border: 1px solid var(--border);
   border-radius: var(--r-lg);
   overflow: hidden;
+  overflow-anchor: none;
   box-shadow: var(--shadow-sm);
 }
 
-.table-scroll { overflow-x: auto; }
+.table-scroll {
+  overflow-x: auto;
+  overflow-anchor: none;
+}
 
 .pagination-bar {
   display: flex;
@@ -1270,6 +1274,7 @@ body {
   width: 100%;
   border-collapse: collapse;
   min-width: 600px;
+  overflow-anchor: none;
 }
 
 /* Head */
@@ -1311,6 +1316,7 @@ body {
 
 .data-table tbody tr {
   transition: background var(--dur-fast);
+  overflow-anchor: none;
 }
 
 .data-table tbody tr:hover { background: #F5F8FF; }
@@ -1334,6 +1340,33 @@ body {
 
 .data-table .lazy-load-row:hover {
   background: transparent;
+}
+
+.data-table .virtual-spacer-row td {
+  padding: 0;
+  border: 0;
+  line-height: 0;
+  font-size: 0;
+  background: transparent;
+  overflow-anchor: none;
+}
+
+.data-table .virtual-spacer-row:hover {
+  background: transparent;
+}
+
+html[data-theme="dark"] .data-table .virtual-spacer-row:hover {
+  background: transparent;
+}
+
+.data-table .virtual-spacer-block {
+  height: 0;
+  pointer-events: none;
+  overflow-anchor: none;
+}
+
+.data-table .virtual-record-row {
+  overflow-anchor: none;
 }
 
 /* Actions Column */
