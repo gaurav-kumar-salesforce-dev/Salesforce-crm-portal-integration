@@ -593,6 +593,53 @@ body.reports-builder-mode .main-wrap {
   to { transform: rotate(360deg); }
 }
 
+.report-page-loading[hidden] {
+  display: none !important;
+}
+
+.report-page-loading {
+  position: fixed;
+  inset: 0;
+  z-index: 6000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(240, 246, 252, 0.78);
+  backdrop-filter: blur(3px);
+}
+
+.report-page-loading-card {
+  min-width: 280px;
+  padding: 28px 32px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--surface);
+  box-shadow: 0 22px 60px rgba(15, 23, 42, 0.20);
+  text-align: center;
+}
+
+.report-page-loading-spinner {
+  width: 34px;
+  height: 34px;
+  border: 3px solid var(--border);
+  border-top-color: var(--primary);
+  border-radius: 999px;
+  display: inline-block;
+  animation: spin .8s linear infinite;
+}
+
+.report-page-loading-card strong {
+  display: block;
+  margin-top: 14px;
+  font-size: 18px;
+  color: var(--text-1);
+}
+
+.report-page-loading-card p {
+  margin: 8px 0 0;
+  color: var(--text-2);
+}
+
 .reports-empty-row {
   color: var(--text-3);
   text-align: center !important;
@@ -4007,6 +4054,110 @@ html[data-theme="dark"] .dashboard-component-card.loading .dashboard-component-b
     width: 100% !important;
     min-height: 400px !important;
   }
+}
+
+/* Dedicated report run/view mode. The same report shell is reused, but viewer
+   mode hides builder-only controls so execution reads like a finished report. */
+.report-view-only {
+  display: none !important;
+}
+
+body.reports-view-mode .report-view-only {
+  display: inline-flex !important;
+}
+
+body.reports-view-mode .report-builder-only,
+body.reports-view-mode .builder-meta-strip,
+body.reports-view-mode .chart-config-strip,
+body.reports-view-mode #builderLeftPanel,
+body.reports-view-mode #builderLeftResizer,
+body.reports-view-mode #runReportBtn {
+  display: none !important;
+}
+
+body.reports-view-mode .report-builder-workspace {
+  display: block;
+}
+
+body.reports-view-mode .report-canvas {
+  width: 100%;
+  max-width: none;
+}
+
+body.reports-view-mode #reportName,
+body.reports-view-mode #reportDescription {
+  pointer-events: none;
+}
+
+body.reports-view-mode #reportDescription {
+  display: none;
+}
+
+body.reports-view-mode #reportBuilderView {
+  min-height: calc(100vh - 80px);
+}
+
+body.reports-view-mode .report-builder-workspace {
+  height: calc(100vh - 142px);
+  min-height: 0;
+  overflow: hidden;
+}
+
+body.reports-view-mode .report-canvas {
+  height: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+body.reports-view-mode .preview-status,
+body.reports-view-mode .report-chart-section,
+body.reports-view-mode .report-chart-wrap,
+body.reports-view-mode .chart-preview-shell {
+  flex: 0 0 auto;
+}
+
+body.reports-view-mode .report-results-wrap {
+  flex: 1 1 auto;
+  min-height: 260px;
+  max-height: none;
+  overflow: auto;
+}
+
+body.reports-view-mode .report-results {
+  min-width: max(100%, 960px);
+}
+
+.report-run-loading-cell,
+.report-run-error-cell {
+  padding: 0 !important;
+}
+
+.report-run-loading,
+.report-run-error {
+  min-height: 260px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  color: var(--text-2);
+  background: var(--surface);
+}
+
+.report-run-loading .spinner {
+  width: 30px;
+  height: 30px;
+  border: 3px solid var(--border);
+  border-top-color: var(--primary);
+  border-radius: 999px;
+  animation: spin .8s linear infinite;
+}
+
+.report-run-error strong {
+  color: var(--danger);
+  font-size: 18px;
 }
 
 @media (max-width: 640px) {

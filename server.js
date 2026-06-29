@@ -2029,6 +2029,7 @@ function switchActiveOrg(key) {
   _cachedToken = null;
   _tokenExpires = 0;
   describeFieldCache.clear();
+  describeChildRelsCache.clear();
   saveOrgStore();
   return activeOrg();
 }
@@ -2134,6 +2135,7 @@ let _cachedToken = null;
 let _tokenExpires = 0;
 const oauthStates = new Map();
 const describeFieldCache = new Map();
+const describeChildRelsCache = new Map();
 
 function base64Url(buffer) {
   return buffer
@@ -2646,8 +2648,9 @@ function isSelectableField(field, availableFields) {
 
 async function fieldsCsvForObject(objectName, overrideFields = '') {
   const cfg = OBJECTS[objectName];
+  const defaultFieldsStr = cfg ? cfg.fields : 'Id, Name';
   const availableFields = await getObjectFieldSet(objectName);
-  const fields = splitConfiguredFields(overrideFields || cfg.fields)
+  const fields = splitConfiguredFields(overrideFields || defaultFieldsStr)
     .filter(field => field === 'Id' || isSelectableField(field, availableFields));
   PORTAL_AUDIT_FIELDS.forEach((field) => {
     if (availableFields.has(field)) fields.push(field);
@@ -2733,9 +2736,10 @@ async function buildSOQL(objectName, search, extraWhere, limit = null, offset = 
   return soql;
 }
 
-async function relatedQuery(objectName, fields, where, limit = 5) {
+async function relatedQuery(objectName, fields, where, limit = 5, sortBy = null, sortDir = 'ASC') {
   const selectFields = await fieldsCsvForObject(objectName, fields);
-  const soql = `SELECT ${selectFields} FROM ${objectName} WHERE ${where} ORDER BY ${OBJECTS[objectName].orderBy} LIMIT ${limit}`;
+  const orderClause = sortBy ? `${sortBy} ${sortDir}` : (OBJECTS[objectName]?.orderBy || 'Id');
+  const soql = `SELECT ${selectFields} FROM ${objectName} WHERE ${where} ORDER BY ${orderClause} LIMIT ${limit}`;
   const data = await sfGet('/query', { q: soql });
   return {
     records: data.records || [],
@@ -2747,8 +2751,8 @@ async function emptyRelatedList(key, objectName, title, message = '') {
   return { key, objectName, title, records: [], totalSize: 0, message };
 }
 
-async function buildRelatedList(key, objectName, title, fields, where, limit = 5) {
-  const data = await relatedQuery(objectName, fields, where, limit);
+async function buildRelatedList(key, objectName, title, fields, where, limit = 5, sortBy = null, sortDir = 'ASC') {
+  const data = await relatedQuery(objectName, fields, where, limit, sortBy, sortDir);
   return { key, objectName, title, ...data };
 }
 
@@ -2849,6 +2853,52 @@ async function getRelatedListsForRecord(objectName, id) {
     ];
   }
   return [];
+}
+
+async function getObjectChildRelationships(objectName) {
+  const cacheKey = `${orgStore.activeOrgKey}:${objectName}`;
+  if (describeChildRelsCache.has(cacheKey)) return describeChildRelsCache.get(cacheKey);
+  
+  const meta = await sfGet(`/sobjects/${objectName}/describe`);
+  const rels = (meta.childRelationships || [])
+    .filter(rel => rel.relationshipName)
+    .map(rel => ({
+      relationshipName: rel.relationshipName,
+      childSObject: rel.childSObject,
+      field: rel.field
+    }));
+    
+  describeChildRelsCache.set(cacheKey, rels);
+  return rels;
+}
+
+async function getCustomRelatedListForRecord(objectName, id, listConfigs) {
+  const safeId = escapeSOQL(id);
+  const promises = listConfigs.map(config => {
+    return safeRelatedList(
+      async () => {
+        let selectFields = config.fields || [];
+        if (!selectFields.includes('Id')) {
+          selectFields = ['Id', ...selectFields];
+        }
+        
+        const whereClause = `${config.field} = '${safeId}'`;
+        
+        return buildRelatedList(
+          config.key,
+          config.objectName,
+          config.title,
+          selectFields.join(', '),
+          whereClause,
+          config.limit || 5,
+          config.sortBy,
+          config.sortDir || 'ASC'
+        );
+      },
+      { key: config.key, objectName: config.objectName, title: config.title }
+    );
+  });
+  return Promise.all(promises);
 }
 
 function queryMoreEndpoint(nextRecordsUrl = '') {
@@ -6064,6 +6114,86 @@ app.delete('/api/portal/compact-layouts/:object', checkAuth, async (req, res) =>
   }
 });
 
+// GET custom record page layout from Supabase
+app.get('/api/portal/record-pages/:object', checkAuth, async (req, res) => {
+  const { object } = req.params;
+  try {
+    const { data, error } = await supabase
+      .from('portal_record_pages')
+      .select('layout, regions, updated_at')
+      .eq('object_name', object)
+      .maybeSingle();
+
+    if (error) {
+      if (error.code === 'PGRST205' || (error.message && error.message.includes('relation "portal_record_pages" does not exist'))) {
+        console.warn(`[GET /api/portal/record-pages/:object] Table not yet created. Falling back to default.`);
+        return res.json({ layout: null });
+      }
+      console.error('[GET /api/portal/record-pages/:object] Supabase lookup error:', error);
+      return res.status(500).json({ error: 'Failed to retrieve record page layout from database' });
+    }
+
+    res.json({ layout: data ? { layout: data.layout, regions: data.regions, updated_at: data.updated_at } : null });
+  } catch (err) {
+    console.error('[GET /api/portal/record-pages/:object] Exception:', err);
+    res.status(500).json({ error: 'Server error retrieving record page layout' });
+  }
+});
+
+// POST custom record page layout to Supabase (save/upsert)
+app.post('/api/portal/record-pages/:object', checkAuth, requireAdmin, async (req, res) => {
+  const { object } = req.params;
+  const { layout, regions } = req.body;
+
+  if (!layout || !regions) {
+    return res.status(400).json({ error: 'Invalid record page layout data' });
+  }
+
+  try {
+    const { error } = await supabase
+      .from('portal_record_pages')
+      .upsert({
+        object_name: object,
+        layout,
+        regions,
+        updated_at: new Date()
+      }, {
+        onConflict: 'object_name'
+      });
+
+    if (error) {
+      console.error('[POST /api/portal/record-pages/:object] Supabase upsert error:', error);
+      return res.status(500).json({ error: 'Failed to save record page layout to database' });
+    }
+
+    res.json({ success: true });
+  } catch (err) {
+    console.error('[POST /api/portal/record-pages/:object] Exception:', err);
+    res.status(500).json({ error: 'Server error saving record page layout' });
+  }
+});
+
+// DELETE custom record page layout from Supabase (reset to default)
+app.delete('/api/portal/record-pages/:object', checkAuth, requireAdmin, async (req, res) => {
+  const { object } = req.params;
+  try {
+    const { error } = await supabase
+      .from('portal_record_pages')
+      .delete()
+      .eq('object_name', object);
+
+    if (error) {
+      console.error('[DELETE /api/portal/record-pages/:object] Supabase delete error:', error);
+      return res.status(500).json({ error: 'Failed to delete record page layout from database' });
+    }
+
+    res.json({ success: true });
+  } catch (err) {
+    console.error('[DELETE /api/portal/record-pages/:object] Exception:', err);
+    res.status(500).json({ error: 'Server error deleting record page layout' });
+  }
+});
+
 // Global SOSL search
 app.get('/api/search/global', checkAuth, async (req, res) => {
   const q = (req.query.q || '').trim();
@@ -6243,20 +6373,56 @@ app.get('/api/:object/:id/related', checkAuth, async (req, res, next) => {
       });
     }
 
-    const lists = await filterRelatedListsByVisibility(
-      await getRelatedListsForRecord(object, id),
-      req,
-      requestId
-    );
-    res.json({ object, id, lists });
+    let customRelatedLists = null;
+    try {
+      const { data, error } = await supabase
+        .from('portal_record_pages')
+        .select('regions')
+        .eq('object_name', object)
+        .maybeSingle();
+      
+      if (!error && data && data.regions) {
+        for (const r of Object.keys(data.regions)) {
+          const list = data.regions[r] || [];
+          const found = list.find(c => c && typeof c === 'object' && c.name === 'related-lists');
+          if (found && found.relatedLists && found.relatedLists.length > 0) {
+            customRelatedLists = found.relatedLists.filter(c => c && c.enabled);
+            break;
+          }
+        }
+      }
+    } catch (dbErr) {
+      console.warn('DB error checking record page custom related lists:', dbErr);
+    }
+
+    let lists;
+    if (customRelatedLists) {
+      lists = await getCustomRelatedListForRecord(object, id, customRelatedLists);
+    } else {
+      lists = await getRelatedListsForRecord(object, id);
+    }
+
+    const visibleLists = await filterRelatedListsByVisibility(lists, req, requestId);
+    res.json({ object, id, lists: visibleLists });
     securityPerfLog(requestId, 'GET related', {
       object,
-      lists: lists.length,
+      lists: visibleLists.length,
       parentSfMs,
       totalMs: msSince(requestStartedAt)
     });
   } catch (err) {
     handleSFError(err, res, `Related lists ${object}/${id}`);
+  }
+});
+
+app.get('/api/:object/child-relationships', checkAuth, async (req, res) => {
+  const { object } = req.params;
+  if (!OBJECTS[object]) return res.status(400).json({ error: `Unknown object: ${object}` });
+  try {
+    const rels = await getObjectChildRelationships(object);
+    res.json({ relationships: rels });
+  } catch (err) {
+    handleSFError(err, res, `Child relationships for ${object}`);
   }
 });
 

@@ -3941,6 +3941,35 @@ async function loadCompactLayoutForObject(objectName) {
 const LAYOUT_CACHE = {};
 const DB_LAYOUT_CACHE = {};
 
+const RECORD_PAGE_CACHE = {};
+
+async function loadRecordPageForObject(objectName) {
+  if (RECORD_PAGE_CACHE[objectName]) {
+    return RECORD_PAGE_CACHE[objectName];
+  }
+  try {
+    const res = await api(`/api/portal/record-pages/${objectName}`);
+    if (res && res.layout) {
+      RECORD_PAGE_CACHE[objectName] = res.layout;
+      return res.layout;
+    }
+  } catch (err) {
+    console.warn(`Failed to fetch record page layout for ${objectName}:`, err);
+  }
+
+  const defaultPage = {
+    layout: 'header-two-column-bottom',
+    regions: {
+      header: ['compact-layout'],
+      left: ['details'],
+      right: ['activity', 'chatter'],
+      bottom: ['related-lists']
+    }
+  };
+  RECORD_PAGE_CACHE[objectName] = defaultPage;
+  return defaultPage;
+}
+
 function normalizeLayoutData(layout) {
   if (!Array.isArray(layout)) return [];
   return layout.map(section => {
@@ -4057,6 +4086,7 @@ function resolveLayoutField(entry, fields) {
   return {
     ...field,
     readOnly: Boolean(config.readOnly),
+    required: Boolean(config.required),
     layoutLabel: config.label || getAddressFieldLabel(config.name, field),
   };
 }
@@ -4156,8 +4186,8 @@ function renderFieldControl(
     labelFor(field);
   const type = fieldMeta.type || "string";
   const value = record[field] ?? getDefaultFieldValue(field, fieldMeta, type);
-  const required =
-    fieldMeta.nillable === false ? '<span class="form-req">*</span>' : "";
+  const isRequired = fieldMeta.required || fieldMeta.nillable === false;
+  const required = isRequired ? '<span class="form-req">*</span>' : "";
   const spanClass = shouldSpanField(field, type) ? "span-2" : "";
   const readOnly =
     Boolean(fieldMeta.readOnly) ||
@@ -4465,7 +4495,8 @@ async function openRecordDetail(objectName, id) {
     const [data] = await Promise.all([
       api(`/api/${objectName}/${id}`),
       loadLayoutForObject(objectName),
-      loadCompactLayoutForObject(objectName)
+      loadCompactLayoutForObject(objectName),
+      loadRecordPageForObject(objectName)
     ]);
     const record = data.record || {};
     const fields = data.fields || [];
@@ -4498,19 +4529,29 @@ async function openRecordDetail(objectName, id) {
       title,
       id,
     );
-    if (objectName === "Campaign") {
-      activeCampaign = record;
-      await Promise.all([
-        loadRelatedRecords(objectName, id),
-        loadCampaignMembers(id),
-        loadRecordActivity(objectName, id),
-      ]);
-    } else {
-      await Promise.all([
-        loadRelatedRecords(objectName, id),
-        loadRecordActivity(objectName, id),
-      ]);
+
+    const promises = [];
+    const hasActivity = document.getElementById('activityTimeline');
+    const hasChatter = document.getElementById('chatterFeed');
+    
+    // Check if related list configs exist and we have the related card rendered
+    const hasRelated = document.querySelector('.record-related-card') || document.getElementById('relatedList-contacts');
+    
+    if (hasRelated) {
+      promises.push(loadRelatedRecords(objectName, id));
+      if (objectName === "Campaign") {
+        activeCampaign = record;
+        promises.push(loadCampaignMembers(id));
+      }
     }
+    if (hasActivity) {
+      promises.push(loadRecordActivity(objectName, id));
+    }
+    if (hasChatter) {
+      promises.push(loadChatterFeed());
+    }
+    await Promise.all(promises);
+
     captureCrmPageState(objectName);
   } catch (err) {
     $("content").innerHTML = `
@@ -4533,6 +4574,193 @@ function renderRecordDetailPage(
 ) {
   const summaryFields = getResolvedCompactFields(objectName, fields);
   const canEditThisRecord = currentDetailCanEdit();
+
+  const pageConfig = RECORD_PAGE_CACHE[objectName] || {
+    layout: 'header-two-column-bottom',
+    regions: {
+      header: ['compact-layout'],
+      left: ['details'],
+      right: ['activity', 'chatter'],
+      bottom: ['related-lists']
+    }
+  };
+
+  const resolveComponent = (c) => {
+    if (typeof c === 'string') {
+      return { name: c, title: '', collapsed: false, visible: true };
+    }
+    return {
+      name: c.name,
+      title: c.title || '',
+      collapsed: !!c.collapsed,
+      visible: c.visible !== false
+    };
+  };
+
+  const renderRegionComponents = (regionName) => {
+    const components = pageConfig.regions[regionName] || [];
+    return components.map(c => {
+      const comp = resolveComponent(c);
+      if (!comp.visible) return '';
+
+      const compLabel = {
+        'compact-layout': 'Compact Layout',
+        'details': 'Details',
+        'related-lists': 'Related Lists',
+        'activity': 'Activity',
+        'chatter': 'Chatter'
+      }[comp.name] || comp.name;
+
+      const compTitle = comp.title || compLabel;
+
+      if (comp.name === 'compact-layout') {
+        return `
+          <div class="record-hero card" style="margin-bottom: 16px; border: 1px solid var(--border); border-radius: var(--r-md); background: var(--surface); box-shadow: var(--shadow-sm); overflow: hidden;">
+            ${comp.title ? `
+              <div style="padding: 12px 20px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; background: var(--surface-2);">
+                <h3 style="margin: 0; font-size: 14px; font-weight: 600; color: var(--text-1);">${escapeHtml(compTitle)}</h3>
+              </div>
+            ` : ''}
+            <div class="record-summary" style="display: ${comp.collapsed ? 'none' : 'grid'};">
+              ${summaryFields
+                .map(
+                  (field) => `
+                <div>
+                  <span>${escapeHtml(labelFor(field))}</span>
+                  <strong>${formatValue(field, getValue(record, field), record)}</strong>
+                </div>
+              `,
+                )
+                .join("")}
+            </div>
+          </div>
+        `;
+      } else if (comp.name === 'details') {
+        return `
+          <div class="card record-details-card" style="background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-md); box-shadow: var(--shadow-sm); overflow: hidden; margin-bottom: 16px;">
+            <div style="padding: 12px 20px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; background: var(--surface-2);">
+              <h3 style="margin: 0; font-size: 14px; font-weight: 600; color: var(--text-1);">${escapeHtml(compTitle)}</h3>
+              <div style="display: flex; align-items: center; gap: 12px;">
+                <button class="btn btn-ghost btn-sm" onclick="toggleCardCollapse(this)" style="padding: 4px; display: flex; align-items: center; justify-content: center; border: none; background: transparent; cursor: pointer; transform: ${comp.collapsed ? 'rotate(-90deg)' : 'none'}; transition: transform 0.2s;">
+                  ${utilityIconSvg("chevronDown")}
+                </button>
+              </div>
+            </div>
+            <div class="card-body" style="padding: 20px; display: ${comp.collapsed ? 'none' : 'block'};" id="detailsContent">
+              ${renderConfiguredDetailSections(objectName, record, fields, displayFields)}
+            </div>
+          </div>
+        `;
+      } else if (comp.name === 'related-lists') {
+        return `
+          <div class="card record-related-card" style="background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-md); box-shadow: var(--shadow-sm); overflow: hidden; margin-bottom: 16px;">
+            <div style="padding: 12px 20px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; background: var(--surface-2);">
+              <h3 style="margin: 0; font-size: 14px; font-weight: 600; color: var(--text-1);">${escapeHtml(compTitle)}</h3>
+              <button class="btn btn-ghost btn-sm" onclick="toggleCardCollapse(this)" style="padding: 4px; display: flex; align-items: center; justify-content: center; border: none; background: transparent; cursor: pointer; transform: ${comp.collapsed ? 'rotate(-90deg)' : 'none'}; transition: transform 0.2s;">
+                ${utilityIconSvg("chevronDown")}
+              </button>
+            </div>
+            <div class="card-body" style="display: ${comp.collapsed ? 'none' : 'block'};">
+              <div class="record-related-card-container">
+                ${renderRelatedPanel(objectName, comp)}
+              </div>
+            </div>
+          </div>
+        `;
+      } else if (comp.name === 'activity') {
+        return `
+          <div class="card record-activity-card" style="background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-md); box-shadow: var(--shadow-sm); overflow: hidden; margin-bottom: 16px;">
+            <div style="padding: 12px 20px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; background: var(--surface-2);">
+              <h3 style="margin: 0; font-size: 14px; font-weight: 600; color: var(--text-1);">${escapeHtml(compTitle)}</h3>
+              <div style="display: flex; align-items: center; gap: 12px;">
+                <button class="cell-button-link" onclick="loadRecordActivity('${objectName}', '${id}')" style="font-size: 12px; color: var(--accent); background: none; border: none; cursor: pointer; padding: 0;">Refresh</button>
+                <button class="btn btn-ghost btn-sm" onclick="toggleCardCollapse(this)" style="padding: 4px; display: flex; align-items: center; justify-content: center; border: none; background: transparent; cursor: pointer; transform: ${comp.collapsed ? 'rotate(-90deg)' : 'none'}; transition: transform 0.2s;">
+                  ${utilityIconSvg("chevronDown")}
+                </button>
+              </div>
+            </div>
+            <div class="card-body" style="padding: 20px; display: ${comp.collapsed ? 'none' : 'block'};">
+              <div id="activityTimeline">
+                <div class="activity-empty"><p>Loading activities...</p></div>
+              </div>
+            </div>
+          </div>
+        `;
+      } else if (comp.name === 'chatter') {
+        return `
+          <div class="card record-chatter-card" style="background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-md); box-shadow: var(--shadow-sm); overflow: hidden; margin-bottom: 16px;">
+            <div style="padding: 12px 20px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; background: var(--surface-2);">
+              <h3 style="margin: 0; font-size: 14px; font-weight: 600; color: var(--text-1);">${escapeHtml(compTitle)}</h3>
+              <button class="btn btn-ghost btn-sm" onclick="toggleCardCollapse(this)" style="padding: 4px; display: flex; align-items: center; justify-content: center; border: none; background: transparent; cursor: pointer; transform: ${comp.collapsed ? 'rotate(-90deg)' : 'none'}; transition: transform 0.2s;">
+                ${utilityIconSvg("chevronDown")}
+              </button>
+            </div>
+            <div class="card-body" style="padding: 20px; display: ${comp.collapsed ? 'none' : 'block'};">
+              ${renderChatterPanel(objectName)}
+            </div>
+          </div>
+        `;
+      }
+      return '';
+    }).join('');
+  };
+
+  let layoutHtml = '';
+  if (pageConfig.layout === 'one-column') {
+    layoutHtml = `
+      <div class="record-layout-one-column" style="display: flex; flex-direction: column; gap: 16px;">
+        ${renderRegionComponents('main')}
+      </div>
+    `;
+  } else if (pageConfig.layout === 'two-column') {
+    layoutHtml = `
+      <div class="record-layout-two-column" style="display: grid; grid-template-columns: minmax(0, 2fr) minmax(280px, 1fr); gap: 16px;">
+        <div class="record-layout-left" style="display: flex; flex-direction: column; gap: 16px;">
+          ${renderRegionComponents('left')}
+        </div>
+        <div class="record-layout-right" style="display: flex; flex-direction: column; gap: 16px;">
+          ${renderRegionComponents('right')}
+        </div>
+      </div>
+    `;
+  } else if (pageConfig.layout === 'header-two-column') {
+    layoutHtml = `
+      <div class="record-layout-header-two-column" style="display: flex; flex-direction: column; gap: 16px;">
+        <div class="record-layout-header" style="display: flex; flex-direction: column; gap: 16px;">
+          ${renderRegionComponents('header')}
+        </div>
+        <div class="record-layout-two-column-grid" style="display: grid; grid-template-columns: minmax(0, 2fr) minmax(280px, 1fr); gap: 16px;">
+          <div class="record-layout-left" style="display: flex; flex-direction: column; gap: 16px;">
+            ${renderRegionComponents('left')}
+          </div>
+          <div class="record-layout-right" style="display: flex; flex-direction: column; gap: 16px;">
+            ${renderRegionComponents('right')}
+          </div>
+        </div>
+      </div>
+    `;
+  } else {
+    // header-two-column-bottom
+    layoutHtml = `
+      <div class="record-layout-header-two-column-bottom" style="display: flex; flex-direction: column; gap: 16px;">
+        <div class="record-layout-header" style="display: flex; flex-direction: column; gap: 16px;">
+          ${renderRegionComponents('header')}
+        </div>
+        <div class="record-layout-two-column-grid" style="display: grid; grid-template-columns: minmax(0, 2fr) minmax(280px, 1fr); gap: 16px;">
+          <div class="record-layout-left" style="display: flex; flex-direction: column; gap: 16px;">
+            ${renderRegionComponents('left')}
+          </div>
+          <div class="record-layout-right" style="display: flex; flex-direction: column; gap: 16px;">
+            ${renderRegionComponents('right')}
+          </div>
+        </div>
+        <div class="record-layout-bottom" style="display: flex; flex-direction: column; gap: 16px;">
+          ${renderRegionComponents('bottom')}
+        </div>
+      </div>
+    `;
+  }
+
   $("content").innerHTML = `
     <div class="record-page">
       <div class="record-hero">
@@ -4549,83 +4777,33 @@ function renderRecordDetailPage(
             ${canDo(objectName, "can_edit") && canEditThisRecord
               ? '<button class="btn btn-primary" onclick="editCurrentDetailRecord()">Edit</button>'
               : ""}
-            <button class="btn btn-ghost" 
-                    style="display: none; align-items: center; justify-content: center; width: 34px; height: 34px; padding: 0; cursor: pointer;" 
-                    onclick="openCustomizeCompactLayoutModal()" 
-                    title="Customize Compact Layout">
-              <span style="display: flex; width: 16px; height: 16px; align-items: center; justify-content: center; fill: currentColor;">
-                ${utilityIconSvg("settings")}
-              </span>
-            </button>
           </div>
-        </div>
-        <div class="record-summary">
-          ${summaryFields
-            .map(
-              (field) => `
-            <div>
-              <span>${escapeHtml(labelFor(field))}</span>
-              <strong>${formatValue(field, getValue(record, field), record)}</strong>
-            </div>
-          `,
-            )
-            .join("")}
         </div>
       </div>
 
-      <div class="record-layout">
-        <section class="record-main">
-          <div class="record-tabs" style="display: flex; justify-content: space-between; align-items: center;">
-            <div style="display: flex; gap: 16px;">
-              <button class="record-tab active" id="tabRelatedBtn" onclick="showRecordTab('related')">Related</button>
-              <button class="record-tab" id="tabDetailsBtn" onclick="showRecordTab('details')">Details</button>
-            </div>
-            <div id="recordTabActions" style="display: none; padding: 6px 0;">
-              <button class="btn btn-ghost btn-sm" onclick="startRearrangingFields()" style="display: inline-flex; align-items: center; gap: 6px;">
-                ${utilityIconSvg("settings")} Rearrange Fields
-              </button>
-            </div>
-          </div>
-          <div id="recordRelatedPanel" class="record-tab-panel">
-            ${renderRelatedPanel(objectName)}
-          </div>
-          <div id="recordDetailsPanel" class="record-tab-panel" style="display:none">
-            <div id="detailsContent">
-              ${renderConfiguredDetailSections(objectName, record, fields, displayFields)}
-            </div>
-          </div>
-        </section>
-        <aside class="record-side">
-          <div class="activity-card">
-            <div class="side-tabs">
-              <button class="side-tab active" id="sideActivityBtn" onclick="showSideTab('activity')">Activity</button>
-              <button class="side-tab" id="sideChatterBtn" onclick="showSideTab('chatter')">Chatter</button>
-            </div>
-            <div id="sideActivityPanel">
-              <div class="activity-head">
-                <h3>Activity</h3>
-                <button class="cell-button-link" onclick="loadRecordActivity('${objectName}', '${id}')">Refresh</button>
-              </div>
-              <div id="activityTimeline">
-                <div class="activity-empty"><p>Loading activities...</p></div>
-              </div>
-            </div>
-            <div id="sideChatterPanel" style="display:none">
-              ${renderChatterPanel(objectName)}
-            </div>
-          </div>
-        </aside>
+      <div class="record-layout-container">
+        ${layoutHtml}
       </div>
     </div>
   `;
   applyPermissionGuards(objectName);
 }
 
+function toggleCardCollapse(btnEl) {
+  const card = btnEl.closest('.card');
+  if (!card) return;
+  const body = card.querySelector('.card-body') || card.querySelector('.record-summary');
+  if (!body) return;
+  const isHidden = body.style.display === 'none';
+  body.style.display = isHidden ? '' : 'none';
+  btnEl.style.transform = isHidden ? 'none' : 'rotate(-90deg)';
+}
+
 function showSideTab(name) {
-  $("sideActivityPanel").style.display = name === "activity" ? "block" : "none";
-  $("sideChatterPanel").style.display = name === "chatter" ? "block" : "none";
-  $("sideActivityBtn").classList.toggle("active", name === "activity");
-  $("sideChatterBtn").classList.toggle("active", name === "chatter");
+  if ($("sideActivityPanel")) $("sideActivityPanel").style.display = name === "activity" ? "block" : "none";
+  if ($("sideChatterPanel")) $("sideChatterPanel").style.display = name === "chatter" ? "block" : "none";
+  if ($("sideActivityBtn")) $("sideActivityBtn").classList.toggle("active", name === "activity");
+  if ($("sideChatterBtn")) $("sideChatterBtn").classList.toggle("active", name === "chatter");
   if (
     name === "chatter" &&
     detailRecordState?.id &&
@@ -4706,8 +4884,14 @@ function getSummaryFields(objectName) {
   );
 }
 
-function renderRelatedPanel(objectName) {
-  const configs = getRelatedListConfigs(objectName);
+function renderRelatedPanel(objectName, comp = null) {
+  let configs = [];
+  if (comp && comp.relatedLists && comp.relatedLists.length > 0) {
+    configs = comp.relatedLists.filter(c => c && c.enabled);
+  } else {
+    configs = getRelatedListConfigs(objectName);
+  }
+
   const canShowCampaignMembers = objectName === "Campaign" && canReadObject("Campaign");
   if (!configs.length && !canShowCampaignMembers) {
     return `
@@ -4719,8 +4903,7 @@ function renderRelatedPanel(objectName) {
           </div>
         </div>
         <div class="table-empty">
-          <h3>No portal related list configured</h3>
-          <p>Use the Details tab or Salesforce Activity Timeline for this record.</p>
+          <h3>No related records.</h3>
         </div>
       </div>
     `;
@@ -4801,7 +4984,8 @@ function getRelatedListConfigs(objectName) {
 }
 
 function renderRelatedListShell(config, noMargin = false) {
-  const canCreateRelated = canDo(config.objectName, "can_create") && currentDetailCanEdit();
+  const showNew = config.showNew !== false;
+  const canCreateRelated = showNew && canDo(config.objectName, "can_create") && currentDetailCanEdit();
   return `
     <div class="related-panel ${noMargin ? "no-margin" : ""}" id="relatedPanel-${escapeHtml(config.key)}">
       <div class="related-head">
@@ -4834,7 +5018,24 @@ function relatedListSubtitle(objectName) {
 }
 
 async function loadRelatedRecords(objectName, id) {
-  const configs = getRelatedListConfigs(objectName);
+  const pageConfig = RECORD_PAGE_CACHE[objectName];
+  let configs = [];
+  
+  if (pageConfig && pageConfig.regions) {
+    for (const r of Object.keys(pageConfig.regions)) {
+      const list = pageConfig.regions[r] || [];
+      const found = list.find(c => c && typeof c === 'object' && c.name === 'related-lists');
+      if (found && found.relatedLists && found.relatedLists.length > 0) {
+        configs = found.relatedLists.filter(c => c && c.enabled);
+        break;
+      }
+    }
+  }
+
+  if (configs.length === 0) {
+    configs = getRelatedListConfigs(objectName);
+  }
+
   if (!configs.length) return;
 
   try {
@@ -4870,22 +5071,27 @@ function renderRelatedList(config, list) {
     return;
   }
   if (!records.length) {
-    body.innerHTML = `<div class="table-empty related-empty"><h3>No ${escapeHtml(config.title.toLowerCase())} found</h3></div>`;
+    body.innerHTML = `<div class="table-empty related-empty"><h3>No related records.</h3></div>`;
     return;
   }
+
+  const showViewAll = config.showViewAll !== false;
+  const hasMore = Number(list.totalSize || records.length) > records.length;
 
   body.innerHTML = `
     <div class="mini-table-wrap related-table-wrap">
       <table class="mini-table related-table">
         <thead>
-          <tr>${config.fields.map((field) => `<th>${escapeHtml(labelFor(field))}</th>`).join("")}</tr>
+          <tr>
+            ${(config.fields || ['Name']).map((field) => `<th>${escapeHtml(labelFor(field))}</th>`).join("")}
+          </tr>
         </thead>
         <tbody>
           ${records
             .map(
               (record) => `
             <tr onclick="openRecordDetail('${config.objectName}', '${escapeJs(record.Id)}')">
-              ${config.fields.map((field) => `<td>${renderRelatedCell(config.objectName, record, field)}</td>`).join("")}
+              ${(config.fields || ['Name']).map((field) => `<td>${renderRelatedCell(config.objectName, record, field)}</td>`).join("")}
             </tr>
           `,
             )
@@ -4893,7 +5099,7 @@ function renderRelatedList(config, list) {
         </tbody>
       </table>
     </div>
-    ${Number(list.totalSize || records.length) > records.length ? '<div class="related-view-all">Showing first 5 records</div>' : ""}
+    ${(showViewAll && hasMore) ? `<div class="related-view-all"><button class="cell-button-link" onclick="viewAllRelatedRecords('${escapeJs(config.key)}')">View All</button></div>` : ""}
   `;
 }
 
@@ -5400,10 +5606,10 @@ function closeChatterMentionMenu() {
 }
 
 function showRecordTab(name) {
-  $("recordRelatedPanel").style.display = name === "related" ? "block" : "none";
-  $("recordDetailsPanel").style.display = name === "details" ? "block" : "none";
-  $("tabRelatedBtn").classList.toggle("active", name === "related");
-  $("tabDetailsBtn").classList.toggle("active", name === "details");
+  if ($("recordRelatedPanel")) $("recordRelatedPanel").style.display = name === "related" ? "block" : "none";
+  if ($("recordDetailsPanel")) $("recordDetailsPanel").style.display = name === "details" ? "block" : "none";
+  if ($("tabRelatedBtn")) $("tabRelatedBtn").classList.toggle("active", name === "related");
+  if ($("tabDetailsBtn")) $("tabDetailsBtn").classList.toggle("active", name === "details");
   
   const actions = $("recordTabActions");
   if (actions) {
@@ -5847,9 +6053,25 @@ function openRelatedCreate(configKey) {
     toast("You do not have the level of access necessary to perform the operation you requested.", "err");
     return;
   }
-  const config = getRelatedListConfigs(detailRecordState.objectName).find(
-    (item) => item.key === configKey,
-  );
+  
+  const pageConfig = RECORD_PAGE_CACHE[detailRecordState.objectName];
+  let config = null;
+  if (pageConfig && pageConfig.regions) {
+    for (const r of Object.keys(pageConfig.regions)) {
+      const list = pageConfig.regions[r] || [];
+      const found = list.find(c => c && typeof c === 'object' && c.name === 'related-lists');
+      if (found && found.relatedLists) {
+        config = found.relatedLists.find(item => item.key === configKey);
+        if (config) break;
+      }
+    }
+  }
+  
+  if (!config) {
+    config = getRelatedListConfigs(detailRecordState.objectName).find(
+      (item) => item.key === configKey,
+    );
+  }
   if (!config) return;
 
   editingRecord = null;
@@ -5875,6 +6097,112 @@ function buildRelatedCreateRecord(config) {
     : parent.Name || parent.Subject || parent.CaseNumber || "";
   if (sourceName) record[relationshipName] = { Name: sourceName };
   return record;
+}
+
+async function editRelatedRecord(childObjectName, childId) {
+  try {
+    const fieldsRes = await fetchMetadata(`/api/${childObjectName}/fields`);
+    const fields = fieldsRes.fields || [];
+    const record = await api(`/api/${childObjectName}/${childId}`);
+    
+    editingRecord = record;
+    openRecordModal(`Edit ${childObjectName}`, record, fields, childObjectName);
+  } catch (err) {
+    console.error('Error opening related edit modal:', err);
+    toast('Error opening related edit modal', 'err');
+  }
+}
+
+let relatedDeletingRecord = null;
+function deleteRelatedRecord(childObjectName, childId, configKey) {
+  relatedDeletingRecord = { childObjectName, childId, configKey };
+  if (confirm(`Are you sure you want to delete this related record?`)) {
+    confirmDeleteRelated();
+  } else {
+    relatedDeletingRecord = null;
+  }
+}
+
+async function confirmDeleteRelated() {
+  if (!relatedDeletingRecord) return;
+  const { childObjectName, childId } = relatedDeletingRecord;
+  try {
+    await api(`/api/${childObjectName}/${childId}`, {
+      method: "DELETE",
+    });
+    invalidateCrmObjectCache(childObjectName);
+    toast("Record deleted", "ok");
+    if (detailRecordState) {
+      loadRelatedRecords(detailRecordState.objectName, detailRecordState.id);
+    }
+  } catch (err) {
+    toast(err.message || 'Could not delete record. Please try again.', 'err');
+  } finally {
+    relatedDeletingRecord = null;
+  }
+}
+
+async function viewAllRelatedRecords(configKey) {
+  if (!detailRecordState) return;
+  const pageConfig = RECORD_PAGE_CACHE[detailRecordState.objectName];
+  let config = null;
+  if (pageConfig && pageConfig.regions) {
+    for (const r of Object.keys(pageConfig.regions)) {
+      const list = pageConfig.regions[r] || [];
+      const found = list.find(c => c && typeof c === 'object' && c.name === 'related-lists');
+      if (found && found.relatedLists) {
+        config = found.relatedLists.find(item => item.key === configKey);
+        if (config) break;
+      }
+    }
+  }
+  if (!config) {
+    config = getRelatedListConfigs(detailRecordState.objectName).find(c => c.key === configKey);
+  }
+  if (!config) return;
+
+  try {
+    const data = await api(`/api/${detailRecordState.objectName}/${detailRecordState.id}/related`);
+    const list = (data.lists || []).find(l => l.key === configKey) || { records: [], totalSize: 0 };
+    
+    const modalHtml = `
+      <div class="modal-overlay open" id="viewAllRelatedModal" onclick="closeViewAllRelatedModal()">
+        <div class="modal-card" style="width: 800px; max-width: 90%; max-height: 80vh; overflow-y: auto;" onclick="event.stopPropagation()">
+          <div class="modal-header">
+            <h3>${escapeHtml(config.title)} (${list.totalSize || list.records.length})</h3>
+            <button class="modal-close" onclick="closeViewAllRelatedModal()">×</button>
+          </div>
+          <div class="modal-body" style="padding: 20px;">
+            <div class="mini-table-wrap">
+              <table class="mini-table">
+                <thead>
+                  <tr>
+                    ${(config.fields || ['Name']).map(f => `<th>${escapeHtml(labelFor(f))}</th>`).join('')}
+                  </tr>
+                </thead>
+                <tbody>
+                  ${(list.records || []).map(record => `
+                    <tr onclick="closeViewAllRelatedModal(); openRecordDetail('${config.objectName}', '${escapeJs(record.Id)}')">
+                      ${(config.fields || ['Name']).map(f => `<td>${renderRelatedCell(config.objectName, record, f)}</td>`).join('')}
+                    </tr>
+                  `).join('')}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>
+    `;
+    
+    document.body.insertAdjacentHTML('beforeend', modalHtml);
+  } catch (err) {
+    toast('Error loading related records', 'err');
+  }
+}
+
+function closeViewAllRelatedModal() {
+  const el = document.getElementById('viewAllRelatedModal');
+  if (el) el.remove();
 }
 
 function initializeEmailComposer() {
@@ -9086,12 +9414,17 @@ function restoreStandardDetailView() {
     )
     .slice(0, 80);
     
-  // Re-render Details Tab
-  $("recordDetailsPanel").innerHTML = `
-    <div id="detailsContent">
-      ${renderConfiguredDetailSections(objectName, record, fields, displayFields)}
-    </div>
-  `;
+  // Re-render Details Content
+  const detailsContent = $("detailsContent");
+  if (detailsContent) {
+    detailsContent.innerHTML = renderConfiguredDetailSections(objectName, record, fields, displayFields);
+  } else if ($("recordDetailsPanel")) {
+    $("recordDetailsPanel").innerHTML = `
+      <div id="detailsContent">
+        ${renderConfiguredDetailSections(objectName, record, fields, displayFields)}
+      </div>
+    `;
+  }
 }
 
 /* ── Customize Compact Layout Modal & Supabase Persistence ───────── */
