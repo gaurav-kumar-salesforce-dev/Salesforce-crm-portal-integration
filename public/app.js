@@ -3958,12 +3958,12 @@ async function loadRecordPageForObject(objectName) {
   }
 
   const defaultPage = {
-    layout: 'header-two-column-bottom',
+    layout: 'header-two-column',
     regions: {
       header: ['compact-layout'],
-      left: ['details'],
+      left: ['related-lists', 'details'],
       right: ['activity', 'chatter'],
-      bottom: ['related-lists']
+      bottom: []
     }
   };
   RECORD_PAGE_CACHE[objectName] = defaultPage;
@@ -4535,7 +4535,9 @@ async function openRecordDetail(objectName, id) {
     const hasChatter = document.getElementById('chatterFeed');
     
     // Check if related list configs exist and we have the related card rendered
-    const hasRelated = document.querySelector('.record-related-card') || document.getElementById('relatedList-contacts');
+    const hasRelated = document.querySelector('.record-related-card') || 
+                       document.querySelector('.record-related-card-container') || 
+                       document.querySelector('[id^="relatedList-"]');
     
     if (hasRelated) {
       promises.push(loadRelatedRecords(objectName, id));
@@ -4576,12 +4578,12 @@ function renderRecordDetailPage(
   const canEditThisRecord = currentDetailCanEdit();
 
   const pageConfig = RECORD_PAGE_CACHE[objectName] || {
-    layout: 'header-two-column-bottom',
+    layout: 'header-two-column',
     regions: {
       header: ['compact-layout'],
-      left: ['details'],
+      left: ['related-lists', 'details'],
       right: ['activity', 'chatter'],
-      bottom: ['related-lists']
+      bottom: []
     }
   };
 
@@ -4597,112 +4599,208 @@ function renderRecordDetailPage(
     };
   };
 
-  const renderRegionComponents = (regionName) => {
-    const components = pageConfig.regions[regionName] || [];
-    return components.map(c => {
-      const comp = resolveComponent(c);
-      if (!comp.visible) return '';
+  const renderSingleComponent = (comp, isTabbedChild = false) => {
+    const compLabel = {
+      'compact-layout': 'Compact Layout',
+      'details': 'Details',
+      'related-lists': 'Related',
+      'activity': 'Activity',
+      'chatter': 'Chatter'
+    }[comp.name] || comp.name;
 
-      const compLabel = {
-        'compact-layout': 'Compact Layout',
-        'details': 'Details',
-        'related-lists': 'Related Lists',
-        'activity': 'Activity',
-        'chatter': 'Chatter'
-      }[comp.name] || comp.name;
+    const compTitle = comp.title || compLabel;
 
-      const compTitle = comp.title || compLabel;
-
+    if (isTabbedChild) {
       if (comp.name === 'compact-layout') {
         return `
-          <div class="record-hero card" style="margin-bottom: 16px; border: 1px solid var(--border); border-radius: var(--r-md); background: var(--surface); box-shadow: var(--shadow-sm); overflow: hidden;">
-            ${comp.title ? `
-              <div style="padding: 12px 20px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; background: var(--surface-2);">
-                <h3 style="margin: 0; font-size: 14px; font-weight: 600; color: var(--text-1);">${escapeHtml(compTitle)}</h3>
+          <div class="record-summary" style="display: grid;">
+            ${summaryFields
+              .map(
+                (field) => `
+              <div>
+                <span>${escapeHtml(labelFor(field))}</span>
+                <strong>${formatValue(field, getValue(record, field), record)}</strong>
               </div>
-            ` : ''}
-            <div class="record-summary" style="display: ${comp.collapsed ? 'none' : 'grid'};">
-              ${summaryFields
-                .map(
-                  (field) => `
-                <div>
-                  <span>${escapeHtml(labelFor(field))}</span>
-                  <strong>${formatValue(field, getValue(record, field), record)}</strong>
-                </div>
-              `,
-                )
-                .join("")}
-            </div>
+            `,
+              )
+              .join("")}
           </div>
         `;
       } else if (comp.name === 'details') {
         return `
-          <div class="card record-details-card" style="background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-md); box-shadow: var(--shadow-sm); overflow: hidden; margin-bottom: 16px;">
-            <div style="padding: 12px 20px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; background: var(--surface-2);">
-              <h3 style="margin: 0; font-size: 14px; font-weight: 600; color: var(--text-1);">${escapeHtml(compTitle)}</h3>
-              <div style="display: flex; align-items: center; gap: 12px;">
-                <button class="btn btn-ghost btn-sm" onclick="toggleCardCollapse(this)" style="padding: 4px; display: flex; align-items: center; justify-content: center; border: none; background: transparent; cursor: pointer; transform: ${comp.collapsed ? 'rotate(-90deg)' : 'none'}; transition: transform 0.2s;">
-                  ${utilityIconSvg("chevronDown")}
-                </button>
-              </div>
-            </div>
-            <div class="card-body" style="padding: 20px; display: ${comp.collapsed ? 'none' : 'block'};" id="detailsContent">
-              ${renderConfiguredDetailSections(objectName, record, fields, displayFields)}
-            </div>
+          <div id="detailsContent">
+            ${renderConfiguredDetailSections(objectName, record, fields, displayFields)}
           </div>
         `;
       } else if (comp.name === 'related-lists') {
         return `
-          <div class="card record-related-card" style="background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-md); box-shadow: var(--shadow-sm); overflow: hidden; margin-bottom: 16px;">
-            <div style="padding: 12px 20px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; background: var(--surface-2);">
-              <h3 style="margin: 0; font-size: 14px; font-weight: 600; color: var(--text-1);">${escapeHtml(compTitle)}</h3>
-              <button class="btn btn-ghost btn-sm" onclick="toggleCardCollapse(this)" style="padding: 4px; display: flex; align-items: center; justify-content: center; border: none; background: transparent; cursor: pointer; transform: ${comp.collapsed ? 'rotate(-90deg)' : 'none'}; transition: transform 0.2s;">
-                ${utilityIconSvg("chevronDown")}
-              </button>
-            </div>
-            <div class="card-body" style="display: ${comp.collapsed ? 'none' : 'block'};">
-              <div class="record-related-card-container">
-                ${renderRelatedPanel(objectName, comp)}
-              </div>
-            </div>
+          <div class="record-related-card-container">
+            ${renderRelatedPanel(objectName, comp)}
           </div>
         `;
       } else if (comp.name === 'activity') {
         return `
-          <div class="card record-activity-card" style="background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-md); box-shadow: var(--shadow-sm); overflow: hidden; margin-bottom: 16px;">
-            <div style="padding: 12px 20px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; background: var(--surface-2);">
-              <h3 style="margin: 0; font-size: 14px; font-weight: 600; color: var(--text-1);">${escapeHtml(compTitle)}</h3>
-              <div style="display: flex; align-items: center; gap: 12px;">
-                <button class="cell-button-link" onclick="loadRecordActivity('${objectName}', '${id}')" style="font-size: 12px; color: var(--accent); background: none; border: none; cursor: pointer; padding: 0;">Refresh</button>
-                <button class="btn btn-ghost btn-sm" onclick="toggleCardCollapse(this)" style="padding: 4px; display: flex; align-items: center; justify-content: center; border: none; background: transparent; cursor: pointer; transform: ${comp.collapsed ? 'rotate(-90deg)' : 'none'}; transition: transform 0.2s;">
-                  ${utilityIconSvg("chevronDown")}
-                </button>
-              </div>
-            </div>
-            <div class="card-body" style="padding: 20px; display: ${comp.collapsed ? 'none' : 'block'};">
-              <div id="activityTimeline">
-                <div class="activity-empty"><p>Loading activities...</p></div>
-              </div>
-            </div>
+          <div id="activityTimeline">
+            <div class="activity-empty"><p>Loading activities...</p></div>
           </div>
         `;
       } else if (comp.name === 'chatter') {
         return `
-          <div class="card record-chatter-card" style="background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-md); box-shadow: var(--shadow-sm); overflow: hidden; margin-bottom: 16px;">
+          ${renderChatterPanel(objectName)}
+        `;
+      }
+      return '';
+    }
+
+    if (comp.name === 'compact-layout') {
+      return `
+        <div class="record-hero card" style="margin-bottom: 16px; border: 1px solid var(--border); border-radius: var(--r-md); background: var(--surface); box-shadow: var(--shadow-sm); overflow: hidden;">
+          ${comp.title ? `
             <div style="padding: 12px 20px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; background: var(--surface-2);">
               <h3 style="margin: 0; font-size: 14px; font-weight: 600; color: var(--text-1);">${escapeHtml(compTitle)}</h3>
+            </div>
+          ` : ''}
+          <div class="record-summary" style="display: ${comp.collapsed ? 'none' : 'grid'};">
+            ${summaryFields
+              .map(
+                (field) => `
+              <div>
+                <span>${escapeHtml(labelFor(field))}</span>
+                <strong>${formatValue(field, getValue(record, field), record)}</strong>
+              </div>
+            `,
+              )
+              .join("")}
+          </div>
+        </div>
+      `;
+    } else if (comp.name === 'details') {
+      return `
+        <div class="card record-details-card" style="background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-md); box-shadow: var(--shadow-sm); overflow: hidden; margin-bottom: 16px;">
+          <div style="padding: 12px 20px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; background: var(--surface-2);">
+            <h3 style="margin: 0; font-size: 14px; font-weight: 600; color: var(--text-1);">${escapeHtml(compTitle)}</h3>
+            <div style="display: flex; align-items: center; gap: 12px;">
               <button class="btn btn-ghost btn-sm" onclick="toggleCardCollapse(this)" style="padding: 4px; display: flex; align-items: center; justify-content: center; border: none; background: transparent; cursor: pointer; transform: ${comp.collapsed ? 'rotate(-90deg)' : 'none'}; transition: transform 0.2s;">
                 ${utilityIconSvg("chevronDown")}
               </button>
             </div>
-            <div class="card-body" style="padding: 20px; display: ${comp.collapsed ? 'none' : 'block'};">
-              ${renderChatterPanel(objectName)}
+          </div>
+          <div class="card-body" style="padding: 20px; display: ${comp.collapsed ? 'none' : 'block'};" id="detailsContent">
+            ${renderConfiguredDetailSections(objectName, record, fields, displayFields)}
+          </div>
+        </div>
+      `;
+    } else if (comp.name === 'related-lists') {
+      return `
+        <div class="card record-related-card" style="background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-md); box-shadow: var(--shadow-sm); overflow: hidden; margin-bottom: 16px;">
+          <div style="padding: 12px 20px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; background: var(--surface-2);">
+            <h3 style="margin: 0; font-size: 14px; font-weight: 600; color: var(--text-1);">${escapeHtml(compTitle)}</h3>
+            <button class="btn btn-ghost btn-sm" onclick="toggleCardCollapse(this)" style="padding: 4px; display: flex; align-items: center; justify-content: center; border: none; background: transparent; cursor: pointer; transform: ${comp.collapsed ? 'rotate(-90deg)' : 'none'}; transition: transform 0.2s;">
+              ${utilityIconSvg("chevronDown")}
+            </button>
+          </div>
+          <div class="card-body" style="display: ${comp.collapsed ? 'none' : 'block'};">
+            <div class="record-related-card-container">
+              ${renderRelatedPanel(objectName, comp)}
             </div>
           </div>
+        </div>
+      `;
+    } else if (comp.name === 'activity') {
+      return `
+        <div class="card record-activity-card" style="background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-md); box-shadow: var(--shadow-sm); overflow: hidden; margin-bottom: 16px;">
+          <div style="padding: 12px 20px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; background: var(--surface-2);">
+            <h3 style="margin: 0; font-size: 14px; font-weight: 600; color: var(--text-1);">${escapeHtml(compTitle)}</h3>
+            <div style="display: flex; align-items: center; gap: 12px;">
+              <button class="cell-button-link" onclick="loadRecordActivity('${objectName}', '${id}')" style="font-size: 12px; color: var(--accent); background: none; border: none; cursor: pointer; padding: 0;">Refresh</button>
+              <button class="btn btn-ghost btn-sm" onclick="toggleCardCollapse(this)" style="padding: 4px; display: flex; align-items: center; justify-content: center; border: none; background: transparent; cursor: pointer; transform: ${comp.collapsed ? 'rotate(-90deg)' : 'none'}; transition: transform 0.2s;">
+                ${utilityIconSvg("chevronDown")}
+              </button>
+            </div>
+          </div>
+          <div class="card-body" style="padding: 20px; display: ${comp.collapsed ? 'none' : 'block'};">
+            <div id="activityTimeline">
+              <div class="activity-empty"><p>Loading activities...</p></div>
+            </div>
+          </div>
+        </div>
+      `;
+    } else if (comp.name === 'chatter') {
+      return `
+        <div class="card record-chatter-card" style="background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-md); box-shadow: var(--shadow-sm); overflow: hidden; margin-bottom: 16px;">
+          <div style="padding: 12px 20px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; background: var(--surface-2);">
+            <h3 style="margin: 0; font-size: 14px; font-weight: 600; color: var(--text-1);">${escapeHtml(compTitle)}</h3>
+            <button class="btn btn-ghost btn-sm" onclick="toggleCardCollapse(this)" style="padding: 4px; display: flex; align-items: center; justify-content: center; border: none; background: transparent; cursor: pointer; transform: ${comp.collapsed ? 'rotate(-90deg)' : 'none'}; transition: transform 0.2s;">
+              ${utilityIconSvg("chevronDown")}
+            </button>
+          </div>
+          <div class="card-body" style="padding: 20px; display: ${comp.collapsed ? 'none' : 'block'};">
+            ${renderChatterPanel(objectName)}
+          </div>
+        </div>
+      `;
+    }
+    return '';
+  };
+
+  const renderRegionComponents = (regionName) => {
+    const components = pageConfig.regions[regionName] || [];
+    const resolved = components.map(c => resolveComponent(c)).filter(c => c.visible);
+
+    if (resolved.length === 0) return '';
+
+    const isTabbed = (regionName === 'left' || regionName === 'right' || regionName === 'main' || regionName === 'bottom') && resolved.length > 1;
+
+    if (isTabbed) {
+      const headersHtml = resolved.map((comp, idx) => {
+        const compLabel = {
+          'compact-layout': 'Compact Layout',
+          'details': 'Details',
+          'related-lists': 'Related',
+          'activity': 'Activity',
+          'chatter': 'Chatter'
+        }[comp.name] || comp.name;
+
+        const activeClass = idx === 0 ? 'active' : '';
+        const borderStyle = idx === 0 
+          ? 'border-bottom: 3px solid var(--accent); color: var(--accent); font-weight: 700;' 
+          : 'border-bottom: 3px solid transparent; color: var(--text-2);';
+
+        return `
+          <li class="custom-tab-header ${activeClass}" 
+              data-region="${regionName}" 
+              data-index="${idx}" 
+              onclick="switchCustomTab('${regionName}', ${idx})" 
+              style="padding: 10px 4px; font-size: 13.5px; font-weight: 600; cursor: pointer; transition: all 0.2s; ${borderStyle}">
+            ${escapeHtml(compLabel)}
+          </li>
         `;
-      }
-      return '';
-    }).join('');
+      }).join('');
+
+      const contentsHtml = resolved.map((comp, idx) => {
+        const displayStyle = idx === 0 ? 'display: block;' : 'display: none;';
+        const componentHtml = renderSingleComponent(comp, true);
+
+        return `
+          <div class="custom-tab-content-${regionName}" id="tab-content-${regionName}-${idx}" style="${displayStyle}">
+            ${componentHtml}
+          </div>
+        `;
+      }).join('');
+
+      return `
+        <div class="card custom-tab-container" style="background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-md); box-shadow: var(--shadow-sm); overflow: hidden; margin-bottom: 16px;">
+          <ul class="custom-tab-nav" style="display: flex; gap: 24px; border-bottom: 1px solid var(--border); margin: 0; padding: 0 20px; list-style: none; background: transparent;">
+            ${headersHtml}
+          </ul>
+          <div class="custom-tab-contents" style="padding: 20px;">
+            ${contentsHtml}
+          </div>
+        </div>
+      `;
+    } else {
+      return resolved.map(comp => renderSingleComponent(comp, false)).join('');
+    }
   };
 
   let layoutHtml = '';
@@ -8714,947 +8812,25 @@ document.addEventListener("DOMContentLoaded", async () => {
     });
 });
 
-/* ── Record Detail Layout Editor & Drag-and-Drop ─────────────────── */
-let isEditingLayout = false;
-let editingLayoutData = null;
-let layoutFieldSearchQuery = "";
-
-function startRearrangingFields() {
-  if (!detailRecordState) return;
-  const objectName = detailRecordState.objectName;
-  const allFields = detailRecordState.fields || [];
-  
-  // Clone, normalize, and filter active layout fields to only keep fields in metadata
-  const rawLayout = getActiveLayout(objectName);
-  const normalized = normalizeLayoutData(rawLayout);
-  
-  editingLayoutData = normalized.map(section => {
-    const leftFiltered = (section.leftFields || []).filter(fieldEntry => {
-      const name = typeof fieldEntry === "string" ? fieldEntry : fieldEntry.name;
-      return findLayoutField(name, allFields) !== undefined;
-    });
-    
-    const rightFiltered = (section.rightFields || []).filter(fieldEntry => {
-      const name = typeof fieldEntry === "string" ? fieldEntry : fieldEntry.name;
-      return findLayoutField(name, allFields) !== undefined;
-    });
-    
-    return {
-      title: section.title,
-      columns: section.columns || 2,
-      leftFields: leftFiltered,
-      rightFields: rightFiltered
-    };
+function switchCustomTab(regionName, activeIdx) {
+  const contents = document.querySelectorAll(`.custom-tab-content-${regionName}`);
+  contents.forEach((el, idx) => {
+    el.style.display = idx === activeIdx ? 'block' : 'none';
   });
   
-  isEditingLayout = true;
-  layoutFieldSearchQuery = "";
-  
-  // Open modal
-  const existing = $("layoutEditorModalOverlay");
-  if (existing) existing.remove();
-
-  const overlay = document.createElement("div");
-  overlay.id = "layoutEditorModalOverlay";
-  overlay.className = "overlay open";
-  overlay.style.zIndex = "9998";
-  
-  overlay.addEventListener("click", (e) => {
-    if (e.target === overlay) {
-      cancelCustomLayout();
-    }
-  });
-
-  // Render stable modal wrapper
-  overlay.innerHTML = `
-    <div class="modal modal-wide layout-editor-modal" style="width: min(1300px, calc(100vw - 40px)); height: min(90vh, 850px); max-width: 1300px; max-height: 90vh; display: flex; flex-direction: column; padding: 0;">
-      <div class="modal-head">
-        <div class="modal-title-group">
-          <div class="modal-obj-icon">🛠️</div>
-          <h2>Page Layout Editor - ${escapeHtml(objectName)}</h2>
-        </div>
-        <button class="close-btn" onclick="cancelCustomLayout()">
-          <svg viewBox="0 0 20 20" width="18" height="18" fill="currentColor">
-            <path fill-rule="evenodd"
-              d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z"
-              clip-rule="evenodd" />
-          </svg>
-        </button>
-      </div>
-      <div class="modal-body" id="layoutEditorModalBody" style="flex: 1; display: flex; flex-direction: column; overflow: hidden; padding: 20px; background: var(--bg-canvas, #f3f5f9);">
-        ${renderLayoutEditorBodyHtml(objectName)}
-      </div>
-    </div>
-  `;
-
-  document.body.appendChild(overlay);
-  
-  // Initialize available fields search and drag-and-drop
-  setupAvailableFieldsFilter();
-}
-
-function getActiveLayout(objectName) {
-  if (DB_LAYOUT_CACHE[objectName]) {
-    return DB_LAYOUT_CACHE[objectName];
-  }
-  if (LAYOUT_CACHE[objectName]) {
-    return LAYOUT_CACHE[objectName];
-  }
-  return OBJECT_FIELD_LAYOUTS[objectName] || [];
-}
-
-function normalizeLayoutData(layout) {
-  return layout.map(section => ({
-    title: section.title || "Information",
-    columns: section.columns || 2,
-    leftFields: section.leftFields || section.fields || [],
-    rightFields: section.rightFields || []
-  }));
-}
-
-function renderLayoutEditorBodyHtml(objectName) {
-  // Collect all field names currently in the layout
-  const activeFieldNames = new Set();
-  editingLayoutData.forEach(section => {
-    (section.leftFields || []).forEach(f => {
-      const name = typeof f === 'string' ? f : f.name;
-      activeFieldNames.add(name);
-    });
-    (section.rightFields || []).forEach(f => {
-      const name = typeof f === 'string' ? f : f.name;
-      activeFieldNames.add(name);
-    });
-  });
-  
-  // Filter all fields from detailRecordState to find available fields
-  const allFields = detailRecordState.fields || [];
-  const availableFields = allFields.filter(f => !activeFieldNames.has(f.name));
-  
-  return `
-    <div class="layout-editor-container" style="display: flex; gap: 20px; background: transparent; border: none; border-radius: 0; padding: 0; margin-top: 0; height: 100%; box-shadow: none;">
-      <div class="layout-editor-sidebar" style="width: 280px; border-right: 1px solid var(--border-color, #e0e0e0); padding-right: 20px; display: flex; flex-direction: column; height: 100%;">
-        <div class="sidebar-header" style="margin-bottom: 12px;">
-          <h3 style="font-size: 14px; font-weight: 600; margin-bottom: 8px;">Available Fields</h3>
-          <input type="text" id="layoutFieldSearch" placeholder="Search fields..." class="layout-search-input">
-        </div>
-        <div class="available-fields-list" id="availableFieldsList" style="flex: 1; overflow-y: auto;">
-          ${renderAvailableFieldsList(availableFields)}
-        </div>
-      </div>
-      
-      <div class="layout-editor-canvas" style="flex: 1; display: flex; flex-direction: column; height: 100%; overflow: hidden;">
-        <div class="canvas-header" style="display: flex; align-items: center; gap: 10px; margin-bottom: 16px; padding-bottom: 12px; border-bottom: 1px solid var(--border-color, #e0e0e0); justify-content: flex-end;">
-          <button class="btn btn-primary btn-sm" onclick="saveCustomLayout()">${utilityIconSvg("like")} Save Layout</button>
-          <button class="btn btn-ghost btn-sm" onclick="cancelCustomLayout()">Cancel</button>
-          <button class="btn btn-ghost btn-danger-link btn-sm" onclick="resetCustomLayoutToDefault()">${utilityIconSvg("refresh")} Reset</button>
-          <button class="btn btn-ghost btn-sm" onclick="addNewLayoutSection()">${utilityIconSvg("comment")} + Add Section</button>
-        </div>
-        <div class="canvas-sections" id="canvasSections" style="flex: 1; overflow-y: auto; padding-right: 8px; display: flex; flex-direction: column; gap: 20px;">
-          ${editingLayoutData.map((section, sIdx) => renderEditorSection(section, sIdx)).join("")}
-        </div>
-      </div>
-    </div>
-  `;
-}
-
-function renderAvailableFieldsList(availableFields) {
-  if (availableFields.length === 0) {
-    return `<div class="sidebar-empty">All fields are on the layout</div>`;
-  }
-  return availableFields.map(field => `
-    <div class="available-field-item" 
-         draggable="true" 
-         ondragstart="layoutDragStartFromSidebar(event, '${field.name}')"
-         data-field-name="${field.name}"
-         data-field-label="${field.label || labelFor(field.name)}">
-      <div>
-        <span class="field-item-label">${escapeHtml(field.label || labelFor(field.name))}</span>
-        <span class="field-item-name">${escapeHtml(field.name)}</span>
-      </div>
-      <button class="btn btn-icon-only btn-ghost-link" onclick="addFieldToSectionFromSidebar('${field.name}')" title="Add to Section">
-        +
-      </button>
-    </div>
-  `).join("");
-}
-
-function renderEditorSection(section, sIdx) {
-  const cols = section.columns || 2;
-  return `
-    <div class="layout-edit-section" data-section-index="${sIdx}">
-      <div class="layout-edit-section-header" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
-        <input type="text" class="layout-edit-section-title-input" value="${escapeHtml(section.title)}" onchange="updateSectionTitle(${sIdx}, this.value)" style="width: 40%;">
-        
-        <div class="section-actions" style="display: flex; align-items: center; gap: 8px;">
-          <select class="btn btn-ghost btn-sm" onchange="changeSectionLayout(${sIdx}, this.value)" style="font-size: 12px; height: 28px; padding: 0 8px; border-radius: 4px; border: 1px solid var(--border-color, #d8dde6); background: white; cursor: pointer; font-weight: 500;">
-            <option value="2" ${cols === 2 ? 'selected' : ''}>2 Columns</option>
-            <option value="1" ${cols === 1 ? 'selected' : ''}>1 Column</option>
-          </select>
-          
-          <button class="btn btn-icon-only btn-ghost-link" onclick="moveSection(${sIdx}, -1)" ${sIdx === 0 ? 'disabled' : ''} title="Move Section Up">
-            ▲
-          </button>
-          <button class="btn btn-icon-only btn-ghost-link" onclick="moveSection(${sIdx}, 1)" ${sIdx === editingLayoutData.length - 1 ? 'disabled' : ''} title="Move Section Down">
-            ▼
-          </button>
-          <button class="btn btn-icon-only btn-danger-link" onclick="deleteLayoutSection(${sIdx})" title="Delete Section">
-            ${utilityIconSvg("trash")}
-          </button>
-        </div>
-      </div>
-      
-      ${cols === 1 
-        ? `
-        <div class="layout-edit-columns cols-1">
-          <div class="layout-edit-column" 
-               data-column="left"
-               ondragover="layoutAllowDrop(event)"
-               ondragenter="layoutDragEnter(event)"
-               ondragleave="layoutDragLeave(event)"
-               ondrop="layoutDropOnColumn(event, ${sIdx}, 'left')"
-               style="display: flex; flex-direction: column; gap: 8px; min-height: 80px; padding: 8px; border: 1px dashed transparent; border-radius: 6px; transition: all 0.2s;">
-            ${(section.leftFields || []).map((fieldEntry, fIdx) => renderEditorField(fieldEntry, sIdx, 'left', fIdx)).join("")}
-            ${(section.leftFields || []).length === 0 ? '<div class="grid-empty-msg">Drag fields here or add from sidebar</div>' : ''}
-          </div>
-        </div>
-        ` 
-        : `
-        <div class="layout-edit-columns cols-2" style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
-          <div class="layout-edit-column" 
-               data-column="left"
-               ondragover="layoutAllowDrop(event)"
-               ondragenter="layoutDragEnter(event)"
-               ondragleave="layoutDragLeave(event)"
-               ondrop="layoutDropOnColumn(event, ${sIdx}, 'left')"
-               style="display: flex; flex-direction: column; gap: 8px; min-height: 80px; padding: 8px; border: 1px dashed transparent; border-radius: 6px; transition: all 0.2s;">
-            ${(section.leftFields || []).map((fieldEntry, fIdx) => renderEditorField(fieldEntry, sIdx, 'left', fIdx)).join("")}
-            ${(section.leftFields || []).length === 0 ? '<div class="grid-empty-msg">Drag fields here</div>' : ''}
-          </div>
-          <div class="layout-edit-column" 
-               data-column="right"
-               ondragover="layoutAllowDrop(event)"
-               ondragenter="layoutDragEnter(event)"
-               ondragleave="layoutDragLeave(event)"
-               ondrop="layoutDropOnColumn(event, ${sIdx}, 'right')"
-               style="display: flex; flex-direction: column; gap: 8px; min-height: 80px; padding: 8px; border: 1px dashed transparent; border-radius: 6px; transition: all 0.2s;">
-            ${(section.rightFields || []).map((fieldEntry, fIdx) => renderEditorField(fieldEntry, sIdx, 'right', fIdx)).join("")}
-            ${(section.rightFields || []).length === 0 ? '<div class="grid-empty-msg">Drag fields here</div>' : ''}
-          </div>
-        </div>
-        `
-      }
-    </div>
-  `;
-}
-
-function renderEditorField(fieldEntry, sIdx, columnKey, fIdx) {
-  const name = typeof fieldEntry === "string" ? fieldEntry : fieldEntry.name;
-  const readOnly = typeof fieldEntry === "object" ? fieldEntry.readOnly : false;
-  const label = labelFor(name);
-  return `
-    <div class="layout-edit-field" 
-         draggable="true" 
-         ondragstart="layoutDragStart(event, ${sIdx}, '${columnKey}', ${fIdx})"
-         ondragover="layoutAllowDrop(event)"
-         ondragenter="layoutFieldDragEnter(event)"
-         ondragleave="layoutFieldDragLeave(event)"
-         ondrop="layoutDropOnField(event, ${sIdx}, '${columnKey}', ${fIdx})"
-         data-field-name="${name}">
-      <span class="layout-field-drag-handle">${utilityIconSvg("sort")}</span>
-      <div class="layout-field-info">
-        <span class="layout-field-label">${escapeHtml(label)}</span>
-        <span class="layout-field-name">${escapeHtml(name)}${readOnly ? ' (Read Only)' : ''}</span>
-      </div>
-      <button class="layout-field-remove" onclick="removeFieldFromLayout(${sIdx}, '${columnKey}', ${fIdx})" title="Remove Field">
-        &times;
-      </button>
-    </div>
-  `;
-}
-
-function changeSectionLayout(sIdx, value) {
-  const cols = parseInt(value, 10);
-  const section = editingLayoutData[sIdx];
-  section.columns = cols;
-  
-  if (cols === 1) {
-    section.leftFields = [...(section.leftFields || []), ...(section.rightFields || [])];
-    section.rightFields = [];
-  } else {
-    // Split alternating
-    const left = [];
-    const right = [];
-    (section.leftFields || []).forEach((f, idx) => {
-      if (idx % 2 === 0) left.push(f);
-      else right.push(f);
-    });
-    section.leftFields = left;
-    section.rightFields = right;
-  }
-  reRenderLayoutEditor();
-}
-
-function updateSectionTitle(sIdx, newTitle) {
-  if (editingLayoutData && editingLayoutData[sIdx]) {
-    editingLayoutData[sIdx].title = newTitle || "Information";
-  }
-}
-
-function moveSection(sIdx, direction) {
-  if (!editingLayoutData) return;
-  const targetIdx = sIdx + direction;
-  if (targetIdx < 0 || targetIdx >= editingLayoutData.length) return;
-  
-  const temp = editingLayoutData[sIdx];
-  editingLayoutData[sIdx] = editingLayoutData[targetIdx];
-  editingLayoutData[targetIdx] = temp;
-  
-  reRenderLayoutEditor();
-}
-
-function deleteLayoutSection(sIdx) {
-  if (!editingLayoutData) return;
-  
-  editingLayoutData.splice(sIdx, 1);
-  
-  if (editingLayoutData.length === 0) {
-    editingLayoutData.push({ title: "Information", columns: 2, leftFields: [], rightFields: [] });
-  }
-  
-  reRenderLayoutEditor();
-}
-
-function removeFieldFromLayout(sIdx, columnKey, fIdx) {
-  if (!editingLayoutData) return;
-  const colArray = columnKey === "left" ? "leftFields" : "rightFields";
-  editingLayoutData[sIdx][colArray].splice(fIdx, 1);
-  reRenderLayoutEditor();
-}
-
-function addFieldToSectionFromSidebar(fieldName) {
-  if (!editingLayoutData) return;
-  if (!editingLayoutData[0].leftFields) {
-    editingLayoutData[0].leftFields = [];
-  }
-  editingLayoutData[0].leftFields.push(fieldName);
-  reRenderLayoutEditor();
-}
-
-function addNewLayoutSection() {
-  showAddSectionModal();
-}
-
-function showAddSectionModal() {
-  // Remove any existing section modal first
-  const existing = $("addSectionModalOverlay");
-  if (existing) existing.remove();
-
-  // Create overlay element
-  const overlay = document.createElement("div");
-  overlay.id = "addSectionModalOverlay";
-  overlay.className = "overlay open";
-  overlay.style.zIndex = "9999";
-
-  // Make clicking on overlay close the modal
-  overlay.addEventListener("click", (e) => {
-    if (e.target === overlay) {
-      closeAddSectionModal();
-    }
-  });
-
-  overlay.innerHTML = `
-    <div class="modal modal-sm" style="display: flex; flex-direction: column;">
-      <div class="modal-head">
-        <div class="modal-title-group">
-          <div class="modal-obj-icon">📁</div>
-          <h2>Add New Section</h2>
-        </div>
-        <button class="close-btn" onclick="closeAddSectionModal()">
-          <svg viewBox="0 0 20 20" width="18" height="18" fill="currentColor">
-            <path fill-rule="evenodd"
-              d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z"
-              clip-rule="evenodd" />
-          </svg>
-        </button>
-      </div>
-      <div class="modal-body">
-        <div class="form-group" style="margin-bottom: 20px;">
-          <label style="display: block; font-weight: 600; margin-bottom: 8px; font-size: 13px;">Section Name</label>
-          <input type="text" id="newSectionNameInput" class="layout-search-input" value="New Section" style="width: 100%;">
-        </div>
-      </div>
-      <div class="modal-foot">
-        <button class="btn btn-ghost" style="margin-right: 8px;" onclick="closeAddSectionModal()">Cancel</button>
-        <button class="btn btn-primary" onclick="confirmAddNewSection()">Add Section</button>
-      </div>
-    </div>
-  `;
-
-  document.body.appendChild(overlay);
-  
-  // Focus and select the text
-  setTimeout(() => {
-    const input = $("newSectionNameInput");
-    if (input) {
-      input.focus();
-      input.select();
-      
-      // Allow pressing Enter to submit
-      input.addEventListener("keydown", (e) => {
-        if (e.key === "Enter") {
-          confirmAddNewSection();
-        }
-      });
-    }
-  }, 50);
-}
-
-function closeAddSectionModal() {
-  const overlay = $("addSectionModalOverlay");
-  if (overlay) overlay.remove();
-}
-
-function confirmAddNewSection() {
-  const input = $("newSectionNameInput");
-  if (!input) return;
-  const title = input.value.trim();
-  if (!title) {
-    toast("Section name cannot be empty", "err");
-    return;
-  }
-  
-  if (editingLayoutData) {
-    editingLayoutData.push({ title: title, columns: 2, leftFields: [], rightFields: [] });
-    reRenderLayoutEditor();
-  }
-  
-  closeAddSectionModal();
-}
-
-function isFieldInLayout(fieldName) {
-  if (!editingLayoutData) return false;
-  return editingLayoutData.some(section => {
-    const leftMatch = (section.leftFields || []).some(f => (typeof f === 'string' ? f : f.name) === fieldName);
-    const rightMatch = (section.rightFields || []).some(f => (typeof f === 'string' ? f : f.name) === fieldName);
-    return leftMatch || rightMatch;
-  });
-}
-
-// Drag and Drop handlers
-function layoutDragStartFromSidebar(event, fieldName) {
-  event.dataTransfer.setData("text/plain", JSON.stringify({
-    source: "sidebar",
-    fieldName: fieldName
-  }));
-  event.dataTransfer.effectAllowed = "move";
-}
-
-function layoutDragStart(event, sectionIdx, columnKey, fieldIdx) {
-  event.dataTransfer.setData("text/plain", JSON.stringify({
-    source: "canvas",
-    sectionIdx: sectionIdx,
-    columnKey: columnKey,
-    fieldIdx: fieldIdx
-  }));
-  event.dataTransfer.effectAllowed = "move";
-}
-
-function layoutAllowDrop(event) {
-  event.preventDefault();
-}
-
-function layoutDragEnter(event) {
-  event.preventDefault();
-  event.currentTarget.classList.add("drag-over");
-}
-
-function layoutDragLeave(event) {
-  event.currentTarget.classList.remove("drag-over");
-}
-
-function layoutFieldDragEnter(event) {
-  event.preventDefault();
-  event.stopPropagation();
-  event.currentTarget.classList.add("drag-over");
-}
-
-function layoutFieldDragLeave(event) {
-  event.stopPropagation();
-  event.currentTarget.classList.remove("drag-over");
-}
-
-function layoutDropOnColumn(event, targetSectionIdx, targetColumnKey) {
-  event.preventDefault();
-  event.stopPropagation();
-  
-  // Clear highlights
-  document.querySelectorAll(".layout-edit-field, .layout-edit-column").forEach(el => el.classList.remove("drag-over"));
-  
-  const dataStr = event.dataTransfer.getData("text/plain");
-  if (!dataStr) return;
-  
-  try {
-    const data = JSON.parse(dataStr);
-    const targetColArray = targetColumnKey === "left" ? "leftFields" : "rightFields";
-    
-    if (data.source === "sidebar") {
-      const fieldName = data.fieldName;
-      if (!isFieldInLayout(fieldName)) {
-        if (!editingLayoutData[targetSectionIdx][targetColArray]) {
-          editingLayoutData[targetSectionIdx][targetColArray] = [];
-        }
-        editingLayoutData[targetSectionIdx][targetColArray].push(fieldName);
-        reRenderLayoutEditor();
-      }
-    } else if (data.source === "canvas") {
-      const sourceSecIdx = data.sectionIdx;
-      const sourceColKey = data.columnKey;
-      const sourceFieldIdx = data.fieldIdx;
-      
-      const sourceColArray = sourceColKey === "left" ? "leftFields" : "rightFields";
-      const fieldObj = editingLayoutData[sourceSecIdx][sourceColArray][sourceFieldIdx];
-      
-      editingLayoutData[sourceSecIdx][sourceColArray].splice(sourceFieldIdx, 1);
-      
-      if (!editingLayoutData[targetSectionIdx][targetColArray]) {
-        editingLayoutData[targetSectionIdx][targetColArray] = [];
-      }
-      editingLayoutData[targetSectionIdx][targetColArray].push(fieldObj);
-      
-      reRenderLayoutEditor();
-    }
-  } catch (e) {
-    console.error(e);
-  }
-}
-
-function layoutDropOnField(event, targetSectionIdx, targetColumnKey, targetFieldIdx) {
-  event.preventDefault();
-  event.stopPropagation();
-  
-  // Clear highlights
-  document.querySelectorAll(".layout-edit-field, .layout-edit-column").forEach(el => el.classList.remove("drag-over"));
-  
-  const dataStr = event.dataTransfer.getData("text/plain");
-  if (!dataStr) return;
-  
-  try {
-    const data = JSON.parse(dataStr);
-    const targetColArray = targetColumnKey === "left" ? "leftFields" : "rightFields";
-    
-    if (data.source === "sidebar") {
-      const fieldName = data.fieldName;
-      if (!isFieldInLayout(fieldName)) {
-        if (!editingLayoutData[targetSectionIdx][targetColArray]) {
-          editingLayoutData[targetSectionIdx][targetColArray] = [];
-        }
-        editingLayoutData[targetSectionIdx][targetColArray].splice(targetFieldIdx, 0, fieldName);
-        reRenderLayoutEditor();
-      }
-    } else if (data.source === "canvas") {
-      const sourceSecIdx = data.sectionIdx;
-      const sourceColKey = data.columnKey;
-      const sourceFieldIdx = data.fieldIdx;
-      
-      const sourceColArray = sourceColKey === "left" ? "leftFields" : "rightFields";
-      const fieldObj = editingLayoutData[sourceSecIdx][sourceColArray][sourceFieldIdx];
-      
-      editingLayoutData[sourceSecIdx][sourceColArray].splice(sourceFieldIdx, 1);
-      
-      let insertIdx = targetFieldIdx;
-      if (sourceSecIdx === targetSectionIdx && sourceColKey === targetColumnKey && sourceFieldIdx < targetFieldIdx) {
-        insertIdx = targetFieldIdx - 1;
-      }
-      
-      if (!editingLayoutData[targetSectionIdx][targetColArray]) {
-        editingLayoutData[targetSectionIdx][targetColArray] = [];
-      }
-      editingLayoutData[targetSectionIdx][targetColArray].splice(insertIdx, 0, fieldObj);
-      
-      reRenderLayoutEditor();
-    }
-  } catch (e) {
-    console.error(e);
-  }
-}
-
-function setupAvailableFieldsFilter() {
-  const searchInput = $("layoutFieldSearch");
-  if (!searchInput) return;
-  
-  // Restore current search query
-  searchInput.value = layoutFieldSearchQuery || "";
-  
-  const applyFilter = (query) => {
-    const q = query.toLowerCase().trim();
-    document.querySelectorAll("#availableFieldsList .available-field-item").forEach(item => {
-      const name = item.dataset.fieldName.toLowerCase();
-      const label = item.dataset.fieldLabel.toLowerCase();
-      if (name.includes(q) || label.includes(q)) {
-        item.style.display = "flex";
-      } else {
-        item.style.display = "none";
-      }
-    });
-  };
-
-  // Run the filter immediately on render
-  applyFilter(layoutFieldSearchQuery);
-
-  searchInput.addEventListener("input", (e) => {
-    layoutFieldSearchQuery = e.target.value;
-    applyFilter(layoutFieldSearchQuery);
-  });
-}
-
-function reRenderLayoutEditor() {
-  if (!detailRecordState) return;
-  
-  // 1. Save scroll positions
-  const canvasScroll = $("canvasSections") ? $("canvasSections").scrollTop : 0;
-  const sidebarScroll = $("availableFieldsList") ? $("availableFieldsList").scrollTop : 0;
-  
-  // 2. Re-render Layout Editor HTML inside stable body
-  const body = $("layoutEditorModalBody");
-  if (body) {
-    body.innerHTML = renderLayoutEditorBodyHtml(detailRecordState.objectName);
-  }
-  
-  // 3. Restore scroll positions immediately & with a safe timeout
-  const canvasEl = $("canvasSections");
-  const sidebarEl = $("availableFieldsList");
-  if (canvasEl) canvasEl.scrollTop = canvasScroll;
-  if (sidebarEl) sidebarEl.scrollTop = sidebarScroll;
-  
-  setTimeout(() => {
-    const cEl = $("canvasSections");
-    const sEl = $("availableFieldsList");
-    if (cEl) cEl.scrollTop = canvasScroll;
-    if (sEl) sEl.scrollTop = sidebarScroll;
-  }, 0);
-  
-  // 4. Initialize available fields search
-  setupAvailableFieldsFilter();
-}
-
-async function saveCustomLayout() {
-  if (!detailRecordState || !editingLayoutData) return;
-  const objectName = detailRecordState.objectName;
-  
-  try {
-    const res = await api(`/api/portal/layouts/${objectName}`, {
-      method: 'POST',
-      body: JSON.stringify({ layout: editingLayoutData })
-    });
-    if (res && res.success) {
-      DB_LAYOUT_CACHE[objectName] = editingLayoutData;
-      toast("Layout saved successfully!", "success");
+  const headers = document.querySelectorAll(`.custom-tab-header[data-region="${regionName}"]`);
+  headers.forEach((el, idx) => {
+    if (idx === activeIdx) {
+      el.classList.add('active');
+      el.style.borderBottom = '3px solid var(--accent)';
+      el.style.color = 'var(--accent)';
+      el.style.fontWeight = '700';
     } else {
-      toast("Failed to save layout to database", "err");
-    }
-  } catch (err) {
-    console.error("Failed to save custom layout:", err);
-    toast("Network error saving layout", "err");
-  }
-  
-  isEditingLayout = false;
-  editingLayoutData = null;
-  
-  // Re-render record detail view
-  restoreStandardDetailView();
-}
-
-function cancelCustomLayout() {
-  isEditingLayout = false;
-  editingLayoutData = null;
-  restoreStandardDetailView();
-}
-
-async function resetCustomLayoutToDefault() {
-  if (!detailRecordState) return;
-  const objectName = detailRecordState.objectName;
-  
-  if (confirm("Are you sure you want to reset layout to standard Salesforce default?")) {
-    try {
-      const res = await api(`/api/portal/layouts/${objectName}`, {
-        method: 'DELETE'
-      });
-      if (res && res.success) {
-        delete DB_LAYOUT_CACHE[objectName];
-        toast("Layout reset to default", "success");
-      } else {
-        toast("Failed to reset layout", "err");
-      }
-    } catch (err) {
-      console.error("Failed to reset layout:", err);
-      toast("Network error resetting layout", "err");
-    }
-    
-    isEditingLayout = false;
-    editingLayoutData = null;
-    restoreStandardDetailView();
-  }
-}
-
-function restoreStandardDetailView() {
-  if (!detailRecordState) return;
-  
-  // Close the modal layout editor overlay if it exists
-  const overlay = $("layoutEditorModalOverlay");
-  if (overlay) overlay.remove();
-  
-  const { objectName, record, fields } = detailRecordState;
-  
-  const displayFields = fields
-    .filter(
-      (field) =>
-        record[field.name] !== null &&
-        record[field.name] !== undefined &&
-        field.name !== "attributes",
-    )
-    .slice(0, 80);
-    
-  // Re-render Details Content
-  const detailsContent = $("detailsContent");
-  if (detailsContent) {
-    detailsContent.innerHTML = renderConfiguredDetailSections(objectName, record, fields, displayFields);
-  } else if ($("recordDetailsPanel")) {
-    $("recordDetailsPanel").innerHTML = `
-      <div id="detailsContent">
-        ${renderConfiguredDetailSections(objectName, record, fields, displayFields)}
-      </div>
-    `;
-  }
-}
-
-/* ── Customize Compact Layout Modal & Supabase Persistence ───────── */
-let compactLayoutDraft = [];
-
-async function openCustomizeCompactLayoutModal() {
-  if (!detailRecordState) return;
-  const objectName = detailRecordState.objectName;
-  
-  // Load current custom compact fields as draft
-  compactLayoutDraft = [...getCustomCompactFields(objectName)];
-  
-  // Open modal
-  const existing = $("compactLayoutModalOverlay");
-  if (existing) existing.remove();
-
-  const overlay = document.createElement("div");
-  overlay.id = "compactLayoutModalOverlay";
-  overlay.className = "overlay open";
-  overlay.style.zIndex = "9999";
-  
-  overlay.addEventListener("click", (e) => {
-    if (e.target === overlay) {
-      closeCompactLayoutModal();
+      el.classList.remove('active');
+      el.style.borderBottom = '3px solid transparent';
+      el.style.color = 'var(--text-2)';
+      el.style.fontWeight = '600';
     }
   });
-
-  overlay.innerHTML = `
-    <div class="modal modal-sm" style="display: flex; flex-direction: column; max-width: 500px; padding: 0;">
-      <div class="modal-head">
-        <div class="modal-title-group">
-          <div class="modal-obj-icon">⚙️</div>
-          <h2>Customize Compact Layout</h2>
-        </div>
-        <button class="close-btn" onclick="closeCompactLayoutModal()">
-          <svg viewBox="0 0 20 20" width="18" height="18" fill="currentColor">
-            <path fill-rule="evenodd"
-              d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z"
-              clip-rule="evenodd" />
-          </svg>
-        </button>
-      </div>
-      <div class="modal-body" style="display: flex; gap: 15px; height: 350px; overflow: hidden; padding: 15px;">
-        <div style="flex: 1; display: flex; flex-direction: column; border-right: 1px solid var(--border-color, #e0e0e0); padding-right: 15px;">
-          <h4 style="font-size: 13px; font-weight: 600; margin-bottom: 8px;">Selected Fields</h4>
-          <div id="compactSelectedFields" style="flex: 1; overflow-y: auto;">
-            ${renderCompactSelectedFieldsHtml()}
-          </div>
-        </div>
-        <div style="flex: 1; display: flex; flex-direction: column;">
-          <h4 style="font-size: 13px; font-weight: 600; margin-bottom: 8px;">Available Fields</h4>
-          <input type="text" id="compactFieldSearch" placeholder="Search..." class="layout-search-input" style="margin-bottom: 8px; font-size: 12px; padding: 6px 10px;">
-          <div id="compactAvailableFields" style="flex: 1; overflow-y: auto;">
-            ${renderCompactAvailableFieldsHtml(objectName)}
-          </div>
-        </div>
-      </div>
-      <div class="modal-foot">
-        <button class="btn btn-ghost" style="margin-right: auto;" onclick="resetCompactLayoutToDefault()">Reset to Default</button>
-        <button class="btn btn-ghost" style="margin-right: 8px;" onclick="closeCompactLayoutModal()">Cancel</button>
-        <button class="btn btn-primary" onclick="saveCompactLayout()">Save</button>
-      </div>
-    </div>
-  `;
-
-  document.body.appendChild(overlay);
-  setupCompactFieldsSearch();
 }
 
-function renderCompactSelectedFieldsHtml() {
-  if (compactLayoutDraft.length === 0) {
-    return `<div style="text-align: center; color: var(--text-muted, #706e6b); font-size: 12px; padding: 20px;">No fields selected</div>`;
-  }
-  return compactLayoutDraft.map((field, idx) => `
-    <div style="display: flex; align-items: center; justify-content: space-between; padding: 8px 10px; background: var(--bg-hover, #f3f5f9); border: 1px solid var(--border-color, #d8dde6); border-radius: 4px; margin-bottom: 6px; font-size: 12.5px;">
-      <div style="display: flex; align-items: center; gap: 6px;">
-        <div style="display: flex; flex-direction: column; gap: 2px;">
-          <button style="border: none; background: none; font-size: 10px; cursor: pointer; line-height: 1; padding: 0;" onclick="moveCompactField(${idx}, -1)" ${idx === 0 ? 'disabled' : ''}>▲</button>
-          <button style="border: none; background: none; font-size: 10px; cursor: pointer; line-height: 1; padding: 0;" onclick="moveCompactField(${idx}, 1)" ${idx === compactLayoutDraft.length - 1 ? 'disabled' : ''}>▼</button>
-        </div>
-        <span style="font-weight: 600;">${escapeHtml(labelFor(field))}</span>
-      </div>
-      <button style="border: none; background: none; color: #c23934; cursor: pointer; font-size: 16px; padding: 0 4px;" onclick="removeCompactField(${idx})">&times;</button>
-    </div>
-  `).join("");
-}
-
-function renderCompactAvailableFieldsHtml(objectName) {
-  const allFields = detailRecordState.fields || [];
-  const selectedSet = new Set(compactLayoutDraft);
-  const available = allFields.filter(f => !selectedSet.has(f.name));
-  
-  if (available.length === 0) {
-    return `<div style="text-align: center; color: var(--text-muted, #706e6b); font-size: 12px; padding: 20px;">All fields added</div>`;
-  }
-  
-  return available.map(field => `
-    <div class="compact-available-item" 
-         style="display: flex; align-items: center; justify-content: space-between; padding: 6px 8px; background: #fff; border: 1px solid var(--border-color, #d8dde6); border-radius: 4px; margin-bottom: 6px; font-size: 12px;"
-         data-name="${field.name.toLowerCase()}"
-         data-label="${(field.label || labelFor(field.name)).toLowerCase()}">
-      <div style="display: flex; flex-direction: column;">
-        <span style="font-weight: 500;">${escapeHtml(field.label || labelFor(field.name))}</span>
-        <span style="font-size: 10px; color: var(--text-muted, #706e6b);">${escapeHtml(field.name)}</span>
-      </div>
-      <button class="btn btn-icon-only btn-ghost-link btn-sm" onclick="addCompactField('${field.name}')" title="Add Field">+</button>
-    </div>
-  `).join("");
-}
-
-function moveCompactField(idx, direction) {
-  const targetIdx = idx + direction;
-  if (targetIdx < 0 || targetIdx >= compactLayoutDraft.length) return;
-  const temp = compactLayoutDraft[idx];
-  compactLayoutDraft[idx] = compactLayoutDraft[targetIdx];
-  compactLayoutDraft[targetIdx] = temp;
-  
-  reRenderCompactModal();
-}
-
-function removeCompactField(idx) {
-  compactLayoutDraft.splice(idx, 1);
-  reRenderCompactModal();
-}
-
-function addCompactField(fieldName) {
-  compactLayoutDraft.push(fieldName);
-  reRenderCompactModal();
-}
-
-function reRenderCompactModal() {
-  const selectedContainer = $("compactSelectedFields");
-  const availableContainer = $("compactAvailableFields");
-  if (selectedContainer) selectedContainer.innerHTML = renderCompactSelectedFieldsHtml();
-  if (availableContainer) availableContainer.innerHTML = renderCompactAvailableFieldsHtml(detailRecordState.objectName);
-  setupCompactFieldsSearch();
-}
-
-function setupCompactFieldsSearch() {
-  const searchInput = $("compactFieldSearch");
-  if (!searchInput) return;
-  searchInput.addEventListener("input", (e) => {
-    const q = e.target.value.toLowerCase().trim();
-    document.querySelectorAll("#compactAvailableFields .compact-available-item").forEach(item => {
-      const name = item.dataset.name;
-      const label = item.dataset.label;
-      if (name.includes(q) || label.includes(q)) {
-        item.style.display = "flex";
-      } else {
-        item.style.display = "none";
-      }
-    });
-  });
-}
-
-function closeCompactLayoutModal() {
-  const overlay = $("compactLayoutModalOverlay");
-  if (overlay) overlay.remove();
-}
-
-async function saveCompactLayout() {
-  if (!detailRecordState) return;
-  const objectName = detailRecordState.objectName;
-  
-  try {
-    const res = await api(`/api/portal/compact-layouts/${objectName}`, {
-      method: 'POST',
-      body: JSON.stringify({ fields: compactLayoutDraft })
-    });
-    if (res && res.success) {
-      COMPACT_LAYOUT_CACHE[objectName] = compactLayoutDraft;
-      toast("Compact layout saved successfully!", "success");
-      closeCompactLayoutModal();
-      
-      // Refresh details page header by re-rendering
-      refreshRecordDetailPageHeader();
-    } else {
-      toast("Failed to save compact layout", "err");
-    }
-  } catch (err) {
-    console.error(err);
-    toast("Network error saving compact layout", "err");
-  }
-}
-
-async function resetCompactLayoutToDefault() {
-  if (!detailRecordState) return;
-  const objectName = detailRecordState.objectName;
-  
-  if (confirm("Reset compact layout to default?")) {
-    try {
-      const res = await api(`/api/portal/compact-layouts/${objectName}`, {
-        method: 'DELETE'
-      });
-      if (res && res.success) {
-        delete COMPACT_LAYOUT_CACHE[objectName];
-        toast("Compact layout reset to default", "success");
-        closeCompactLayoutModal();
-        refreshRecordDetailPageHeader();
-      } else {
-        toast("Failed to reset compact layout", "err");
-      }
-    } catch (err) {
-      console.error(err);
-      toast("Network error resetting compact layout", "err");
-    }
-  }
-}
-
-function refreshRecordDetailPageHeader() {
-  if (!detailRecordState) return;
-  const { objectName, record, fields } = detailRecordState;
-  
-  // Re-run getSummaryFields
-  const summaryFields = getResolvedCompactFields(objectName, fields);
-    
-  // Find record-summary container and replace its contents
-  const summaryContainer = document.querySelector(".record-summary");
-  if (summaryContainer) {
-    summaryContainer.innerHTML = `
-      ${summaryFields
-        .map(
-          (field) => `
-        <div>
-          <span>${escapeHtml(labelFor(field))}</span>
-          <strong>${formatValue(field, getValue(record, field), record)}</strong>
-        </div>
-      `,
-        )
-        .join("")}
-    `;
-  }
-}
