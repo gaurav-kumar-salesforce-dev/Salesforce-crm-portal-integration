@@ -30,7 +30,8 @@ export default {
       sortBy,
       sortDir,
       showNew,
-      showViewAll
+      showViewAll,
+      isSingle: true
     };
 
     if (!childObject || !relationshipName) {

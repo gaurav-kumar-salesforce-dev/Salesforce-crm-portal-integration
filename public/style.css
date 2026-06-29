@@ -2959,6 +2959,178 @@ textarea.form-ctrl { resize: vertical; min-height: 80px; line-height: 1.5; }
   background: #f8fbff;
 }
 
+.related-panel.related-panel-single {
+  border-color: #d8dde6;
+  border-radius: 4px;
+  box-shadow: none;
+}
+
+.related-panel-single .related-head {
+  gap: 12px;
+  padding: 10px 12px 8px;
+  border-bottom: 0;
+  background: var(--surface);
+}
+
+.related-panel-single .related-head h3 {
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.related-panel-single .related-head h3 .object-icon {
+  width: 18px;
+  height: 18px;
+  border-radius: 3px;
+}
+
+.related-panel-single .related-head h3 .object-icon svg {
+  width: 12px;
+  height: 12px;
+}
+
+.related-panel-single .related-head p {
+  display: none;
+}
+
+.related-panel-single .btn-related-new {
+  min-height: 48px;
+  padding: 8px 19px;
+  border-radius: 8px;
+  box-shadow: 0 14px 28px rgba(1, 118, 211, 0.22);
+  font-size: 15px;
+}
+
+.related-cards-list-wrap {
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+}
+
+.related-panel-single .related-card-item {
+  display: block;
+  padding: 10px 12px 11px;
+  border-bottom: 1px solid #d8dde6;
+  background: var(--surface);
+  cursor: pointer;
+}
+
+.related-panel-single .related-card-item:hover {
+  background: #f7f9fc;
+}
+
+.related-panel-single .related-card-topline {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-height: 24px;
+}
+
+.related-panel-single .related-card-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.related-panel-single .related-card-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 18px;
+  width: 18px;
+  height: 18px;
+}
+
+.related-panel-single .related-card-icon .object-icon {
+  width: 18px;
+  height: 18px;
+  border-radius: 3px;
+}
+
+.related-panel-single .related-card-icon .object-icon svg {
+  width: 12px;
+  height: 12px;
+}
+
+.related-panel-single .related-card-title .cell-button-link {
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.related-panel-single .related-card-fields {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  column-gap: 10px;
+  row-gap: 2px;
+  padding: 4px 34px 0 0;
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.related-panel-single .related-card-field {
+  display: contents;
+}
+
+.related-panel-single .related-card-field span {
+  color: var(--text-2);
+  font-weight: 400;
+}
+
+.related-panel-single .related-card-field strong {
+  min-width: 0;
+  color: var(--text-1);
+  font-weight: 400;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.related-panel-single .related-card-field .cell-button-link {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: top;
+  white-space: nowrap;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.related-menu-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 20px;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 1px solid #b9c7d8;
+  border-radius: 999px;
+  background: var(--surface);
+  color: #1b4f8c;
+  cursor: pointer;
+}
+
+.related-menu-btn:hover {
+  border-color: #0176d3;
+  background: #f3f8ff;
+}
+
+.related-menu-btn svg {
+  width: 12px;
+  height: 12px;
+  stroke-width: 2.4;
+}
+
+.related-card-menu {
+  margin-right: 1px;
+}
+
 .related-empty {
   padding: 26px 16px;
 }
@@ -2969,6 +3141,17 @@ textarea.form-ctrl { resize: vertical; min-height: 80px; line-height: 1.5; }
   color: var(--text-3);
   font-size: 12px;
   text-align: center;
+}
+
+.related-panel-single .related-view-all {
+  padding: 8px 14px;
+  border-top: 0;
+  background: var(--surface);
+}
+
+.related-panel-single .related-view-all .cell-button-link {
+  font-size: 10px;
+  font-weight: 400;
 }
 
 .mini-table {
@@ -6007,12 +6190,24 @@ html[data-theme="dark"] .related-head {
   border-bottom-color: #2a2d3e;
 }
 
+html[data-theme="dark"] .related-panel-single .related-head {
+  background: #1a1d27;
+}
+
+html[data-theme="dark"] .related-panel-single .related-card-item,
 html[data-theme="dark"] .related-item {
   border-bottom-color: #2a2d3e;
 }
 
+html[data-theme="dark"] .related-panel-single .related-card-item:hover,
 html[data-theme="dark"] .related-item:hover {
   background: #1f2235;
+}
+
+html[data-theme="dark"] .related-menu-btn {
+  background: #1a1d27;
+  border-color: #3b4660;
+  color: #9ecbff;
 }
 
 /* ── Kanban headers ────────────────────────────────────── */

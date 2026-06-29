@@ -4879,9 +4879,6 @@ function renderRecordDetailPage(
           </div>
           <div class="page-actions" style="display: flex; gap: 8px; align-items: center;">
             <button class="btn btn-ghost" onclick="restoreListContent()">Back</button>
-            ${canDo(objectName, "can_edit") && canEditThisRecord
-              ? '<button class="btn btn-primary" onclick="editCurrentDetailRecord()">Edit</button>'
-              : ""}
           </div>
         </div>
       </div>
@@ -5111,8 +5108,9 @@ function getRelatedListConfigs(objectName) {
 function renderRelatedListShell(config, noMargin = false) {
   const showNew = config.showNew !== false;
   const canCreateRelated = showNew && canDo(config.objectName, "can_create") && currentDetailCanEdit();
+  const isSingle = isSingleRelatedList(config);
   return `
-    <div class="related-panel ${noMargin ? "no-margin" : ""}" id="relatedPanel-${escapeHtml(config.key)}">
+    <div class="related-panel ${isSingle ? "related-panel-single" : ""} ${noMargin ? "no-margin" : ""}" id="relatedPanel-${escapeHtml(config.key)}">
       <div class="related-head">
         <div>
           <h3>${objectIcon(config.objectName)}<span id="relatedTitle-${escapeHtml(config.key)}">${escapeHtml(config.title)}</span></h3>
@@ -5123,6 +5121,9 @@ function renderRelatedListShell(config, noMargin = false) {
             <span aria-hidden="true">+</span>
             New
           </button>
+          ${isSingle ? `<button class="related-menu-btn" type="button" title="Show related actions" aria-label="Show related actions" onclick="viewAllRelatedRecords('${escapeJs(config.key)}')">
+            ${utilityIconSvg("chevronDown")}
+          </button>` : ""}
         </div>
       </div>
       <div class="related-list-body" id="relatedList-${escapeHtml(config.key)}">
@@ -5140,6 +5141,11 @@ function relatedListSubtitle(objectName) {
       Case: "Cases associated with this record.",
     }[objectName] || "Related records associated with this record."
   );
+}
+
+function isSingleRelatedList(config) {
+  const key = String(config?.key || "");
+  return Boolean(config?.isSingle || key.startsWith("rel_single_") || key.includes("_single_"));
 }
 
 async function loadRelatedRecords(objectName, id) {
@@ -5172,7 +5178,8 @@ async function loadRelatedRecords(objectName, id) {
               showNew: c.config.showNew !== false,
               showViewAll: c.config.showViewAll !== false,
               showEdit: c.config.showEdit !== false,
-              showDelete: c.config.showDelete !== false
+              showDelete: c.config.showDelete !== false,
+              isSingle: true
             });
           }
         }
@@ -5224,69 +5231,23 @@ function renderRelatedList(config, list) {
   }
 
   const showViewAll = config.showViewAll !== false;
-  const isSingleCard = config.key.startsWith('rel_single_');
-  const totalCount = Number(list.totalSize || records.length);
+  const isSingleCard = isSingleRelatedList(config);
 
   if (isSingleCard) {
-    const maxDisplay = 3;
+    const maxDisplay = Math.max(1, Number(config.limit || 3));
     const displayRecords = records.slice(0, maxDisplay);
 
-    const cardsHtml = displayRecords.map(record => {
-      const primaryVal = getValue(record, "Name") || getValue(record, "CaseNumber") || "-";
-      const detailFields = (config.fields || ['Name']).filter(f => f !== 'Name' && f !== 'CaseNumber' && f !== 'Id');
-      
-      const fieldsHtml = detailFields.map(f => {
-        const label = labelFor(f);
-        const valHtml = renderRelatedCell(config.objectName, record, f);
-        return `
-          <div style="display: grid; grid-template-columns: 80px 1fr; gap: 8px; margin-bottom: 4px; font-size: 12px; line-height: 1.4;">
-            <span style="color: var(--text-secondary); font-weight: 500;">${escapeHtml(label)}:</span>
-            <span style="color: var(--text-primary); font-weight: 400; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${valHtml}</span>
-          </div>
-        `;
-      }).join('');
-
-      return `
-        <div class="related-card-item" style="padding: 12px 16px; border-bottom: 1px solid var(--border); transition: background-color 0.2s;" onmouseover="this.style.backgroundColor='var(--surface-2)'" onmouseout="this.style.backgroundColor='transparent'">
-          <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px;">
-            <div style="display: flex; align-items: center; gap: 8px;">
-              <div style="transform: scale(0.7); transform-origin: center; display: inline-flex; width: 24px; height: 24px; align-items: center; justify-content: center;">
-                ${objectIcon(config.objectName, record)}
-              </div>
-              <button class="cell-button-link" style="font-size: 13px; font-weight: 600;" onclick="openRecordDetail('${config.objectName}', '${escapeJs(record.Id)}')">
-                ${escapeHtml(primaryVal)}
-              </button>
-            </div>
-            <button class="btn btn-icon-only btn-ghost-link" style="padding: 2px; font-size: 12px; color: var(--text-muted);">
-              <svg class="slds-button__icon" viewBox="0 0 24 24" style="width: 14px; height: 14px; fill: var(--text-muted);"><path d="M12 15a1 1 0 01-.7-.3l-6-6a1 1 0 011.4-1.4l5.3 5.3 5.3-5.3a1 1 0 011.4 1.4l-6 6a1 1 0 01-.7.3z"/></svg>
-            </button>
-          </div>
-          <div style="padding-left: 32px;">
-            ${fieldsHtml}
-          </div>
-        </div>
-      `;
-    }).join('');
-
-    const showViewAllLink = showViewAll && (totalCount > maxDisplay);
-
     body.innerHTML = `
-      <div class="related-cards-list-wrap" style="display: flex; flex-direction: column; background: var(--surface);">
-        ${cardsHtml}
+      <div class="related-cards-list-wrap">
+        ${displayRecords.map((record) => renderRelatedCardItem(config, record)).join("")}
       </div>
-      ${showViewAllLink ? `
-        <div class="related-view-all" style="padding: 10px 16px; border-top: 1px solid var(--border); text-align: center; background: var(--surface-2);">
-          <button class="cell-button-link" style="font-weight: 600; font-size: 12px;" onclick="viewAllRelatedRecords('${escapeJs(config.key)}')">
-            View All
-          </button>
-        </div>
-      ` : ""}
+      ${showViewAll ? `<div class="related-view-all"><button class="cell-button-link" onclick="viewAllRelatedRecords('${escapeJs(config.key)}')">View All</button></div>` : ""}
     `;
     return;
   }
 
+  const totalCount = Number(list.totalSize || records.length);
   const hasMore = totalCount > records.length;
-
   body.innerHTML = `
     <div class="mini-table-wrap related-table-wrap">
       <table class="mini-table related-table">
@@ -5309,6 +5270,38 @@ function renderRelatedList(config, list) {
       </table>
     </div>
     ${(showViewAll && hasMore) ? `<div class="related-view-all"><button class="cell-button-link" onclick="viewAllRelatedRecords('${escapeJs(config.key)}')">View All</button></div>` : ""}
+  `;
+}
+
+function renderRelatedCardItem(config, record) {
+  const primaryVal = getValue(record, "Name") || getValue(record, "CaseNumber") || "-";
+  const primaryFields = new Set(["Name", "CaseNumber", "Id"]);
+  const detailFields = (config.fields || ["Name"]).filter((field) => !primaryFields.has(field));
+
+  return `
+    <article class="related-card-item" onclick="openRecordDetail('${config.objectName}', '${escapeJs(record.Id)}')">
+      <div class="related-card-topline">
+        <div class="related-card-title">
+          <span class="related-card-icon">${objectIcon(config.objectName, record)}</span>
+          <button class="cell-button-link" onclick="event.stopPropagation(); openRecordDetail('${config.objectName}', '${escapeJs(record.Id)}')">
+            ${escapeHtml(primaryVal)}
+          </button>
+        </div>
+        <button class="related-menu-btn related-card-menu" type="button" title="Open related record" aria-label="Open related record" onclick="event.stopPropagation(); openRecordDetail('${config.objectName}', '${escapeJs(record.Id)}')">
+          ${utilityIconSvg("chevronDown")}
+        </button>
+      </div>
+      ${detailFields.length ? `
+        <div class="related-card-fields">
+          ${detailFields.map((field) => `
+            <div class="related-card-field">
+              <span>${escapeHtml(labelFor(field))}:</span>
+              <strong>${renderRelatedCell(config.objectName, record, field)}</strong>
+            </div>
+          `).join("")}
+        </div>
+      ` : ""}
+    </article>
   `;
 }
 
@@ -8997,4 +8990,3 @@ function switchCustomTabNew(regionName, tabPath) {
     c.style.display = subIdx === activeSubIdx ? 'block' : 'none';
   });
 }
-
