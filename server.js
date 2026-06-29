@@ -6373,7 +6373,8 @@ app.get('/api/:object/:id/related', checkAuth, async (req, res, next) => {
       });
     }
 
-    let customRelatedLists = null;
+    let customRelatedLists = [];
+    let hasCustom = false;
     try {
       const { data, error } = await supabase
         .from('portal_record_pages')
@@ -6384,11 +6385,32 @@ app.get('/api/:object/:id/related', checkAuth, async (req, res, next) => {
       if (!error && data && data.regions) {
         for (const r of Object.keys(data.regions)) {
           const list = data.regions[r] || [];
-          const found = list.find(c => c && typeof c === 'object' && c.name === 'related-lists');
-          if (found && found.relatedLists && found.relatedLists.length > 0) {
-            customRelatedLists = found.relatedLists.filter(c => c && c.enabled);
-            break;
-          }
+          list.forEach(c => {
+            if (c && typeof c === 'object') {
+              if (c.name === 'related-lists') {
+                hasCustom = true;
+                if (c.relatedLists && c.relatedLists.length > 0) {
+                  customRelatedLists.push(...c.relatedLists.filter(rl => rl && rl.enabled));
+                }
+              } else if (c.name === 'related-list-single') {
+                hasCustom = true;
+                if (c.config && c.config.childObject && c.config.relationshipName) {
+                  const key = c.config.key || `${c.config.relationshipName.toLowerCase()}_single_${r}`;
+                  customRelatedLists.push({
+                    key: key,
+                    objectName: c.config.childObject,
+                    relationshipName: c.config.relationshipName,
+                    field: c.config.field,
+                    title: c.config.title || c.title || c.config.relationshipName,
+                    fields: c.config.fields || [],
+                    limit: c.config.limit || 5,
+                    sortBy: c.config.sortBy,
+                    sortDir: c.config.sortDir || 'ASC'
+                  });
+                }
+              }
+            }
+          });
         }
       }
     } catch (dbErr) {
@@ -6396,7 +6418,7 @@ app.get('/api/:object/:id/related', checkAuth, async (req, res, next) => {
     }
 
     let lists;
-    if (customRelatedLists) {
+    if (hasCustom) {
       lists = await getCustomRelatedListForRecord(object, id, customRelatedLists);
     } else {
       lists = await getRelatedListsForRecord(object, id);

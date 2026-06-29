@@ -7812,7 +7812,8 @@ function deletePublicGroup(id, name) {
       { name: 'details', label: 'Details', desc: 'Object record fields and sections.' },
       { name: 'related-lists', label: 'Related Lists', desc: 'Related record tables.' },
       { name: 'activity', label: 'Activity', desc: 'Activity timeline and tasks.' },
-      { name: 'chatter', label: 'Chatter', desc: 'Collaborative feed and posts.' }
+      { name: 'chatter', label: 'Chatter', desc: 'Collaborative feed and posts.' },
+      { name: 'related-list-single', label: 'Related List (Single)', desc: 'A single, configurable related list for a child object.' }
     ];
 
     async function startEditingRecordPage(objectName) {
@@ -7867,7 +7868,8 @@ function deletePublicGroup(id, name) {
               title: c.title || '',
               collapsed: !!c.collapsed,
               visible: c.visible !== false,
-              relatedLists: c.relatedLists || null
+              relatedLists: c.relatedLists || null,
+              config: c.config || null
             };
             
             if (resolved.name === 'related-lists' && !resolved.relatedLists) {
@@ -7902,7 +7904,26 @@ function deletePublicGroup(id, name) {
 
         adminRecordPageOriginalJson = JSON.stringify(adminRecordPageDraft);
 
-        renderRecordPageBuilder();
+        const childObjectsToLoad = new Set();
+        defaultRegions.forEach(r => {
+          const comps = adminRecordPageDraft.regions[r] || [];
+          comps.forEach(c => {
+            if (c && c.name === 'related-list-single' && c.config && c.config.childObject) {
+              childObjectsToLoad.add(c.config.childObject);
+            }
+          });
+        });
+
+        if (childObjectsToLoad.size > 0) {
+          Promise.all(Array.from(childObjectsToLoad).map(obj => loadChildObjectFields(obj))).then(() => {
+            renderRecordPageBuilder();
+          }).catch(err => {
+            console.error('Error preloading child fields:', err);
+            renderRecordPageBuilder();
+          });
+        } else {
+          renderRecordPageBuilder();
+        }
       } catch (e) {
         pane.innerHTML = `<div style="color:var(--danger);padding:20px;text-align:center">${esc(e.message)}</div>`;
       }
@@ -8082,6 +8103,79 @@ function deletePublicGroup(id, name) {
             </div>
           `;
         }).join('');
+      } else if (cName === 'related-list-single') {
+        const config = compData.config || {};
+        if (!config.childObject || !config.relationshipName) {
+          return `
+            <div style="border: 1px solid var(--border); border-radius: 6px; padding: 24px; text-align: center; color: var(--text-muted); background: var(--surface);">
+              <h3 style="font-size: 14px; font-weight: 600;">Related List - Single</h3>
+              <p style="font-size: 12px; margin-top: 4px;">Configure this widget in the right sidebar properties.</p>
+            </div>
+          `;
+        }
+
+        const showNew = config.showNew !== false;
+        const showViewAll = config.showViewAll !== false;
+        const fields = config.fields || ['Name'];
+        
+        const detailFields = fields.filter(f => f !== 'Name' && f !== 'CaseNumber' && f !== 'Id');
+        const showViewAllLink = showViewAll;
+        
+        const previewItemsHtml = [1, 2].map(num => {
+          const primaryLabel = fields.includes('CaseNumber') ? 'CaseNumber' : 'Name';
+          const primaryVal = `[Sample ${primaryLabel} ${num}]`;
+          
+          const fieldsHtml = detailFields.map(f => {
+            return `
+              <div style="display: grid; grid-template-columns: 80px 1fr; gap: 8px; margin-bottom: 4px; font-size: 12px; line-height: 1.4;">
+                <span style="color: var(--text-secondary); font-weight: 500;">${esc(f)}:</span>
+                <span style="color: var(--text-primary); font-weight: 400; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">[Sample ${esc(f)}]</span>
+              </div>
+            `;
+          }).join('');
+
+          const iconChild = config.childObject || 'Contact';
+
+          return `
+            <div class="related-card-item" style="padding: 12px 16px; border-bottom: 1px solid var(--border);">
+              <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px;">
+                <div style="display: flex; align-items: center; gap: 8px;">
+                  <div style="transform: scale(0.7); transform-origin: center; display: inline-flex; width: 24px; height: 24px; align-items: center; justify-content: center;">
+                    <span class="object-icon object-icon-${iconChild.toLowerCase()}" aria-hidden="true">
+                      ${iconChild.toLowerCase() === 'contact' ? '<svg viewBox="0 0 24 24"><path d="M12 12.2a3.9 3.9 0 100-7.8 3.9 3.9 0 000 7.8zM5 20a7 7 0 0114 0H5zm3.4-6.8a6.7 6.7 0 007.2 0 8.9 8.9 0 00-7.2 0z"/></svg>' : '<svg viewBox="0 0 24 24"><path d="M5 20V8.2L12 5l7 3.2V20h-5v-5h-4v5H5zm2-2h2v-3H7v3zm0-5h2v-2H7v2zm4 0h2v-2h-2v2zm4 0h2v-2h-2v2zm0 5h2v-3h-2v3zM8.3 9h7.4L12 7.3 8.3 9z"/></svg>'}
+                    </span>
+                  </div>
+                  <span style="color: var(--accent); font-size: 13px; font-weight: 600; cursor: pointer;">
+                    ${esc(primaryVal)}
+                  </span>
+                </div>
+                <button class="btn btn-icon-only btn-ghost-link" disabled style="padding: 2px; font-size: 12px; color: var(--text-muted); opacity: 0.5;">
+                  ▼
+                </button>
+              </div>
+              <div style="padding-left: 32px;">
+                ${fieldsHtml}
+              </div>
+            </div>
+          `;
+        }).join('');
+
+        return `
+          <div style="background: var(--surface); border: 1px solid var(--border); border-radius: 6px; box-shadow: var(--shadow-sm); overflow: hidden; margin-bottom: 16px;">
+            <div style="padding: 12px 16px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; background: var(--surface-2);">
+              <h3 style="margin: 0; font-size: 13px; font-weight: 700; color: var(--text-primary); text-transform: uppercase; letter-spacing: 0.5px;">${esc(config.title || config.relationshipName)} (2)</h3>
+              ${showNew ? `<button class="btn btn-ghost btn-sm" disabled style="padding: 4px 8px; font-size: 11px; opacity: 0.6;">New</button>` : ''}
+            </div>
+            <div style="display: flex; flex-direction: column; background: var(--surface);">
+              ${previewItemsHtml}
+            </div>
+            ${showViewAllLink ? `
+              <div style="padding: 10px 16px; border-top: 1px solid var(--border); text-align: center; background: var(--surface-2);">
+                <a href="#" onclick="event.preventDefault()" style="color: var(--accent); text-decoration: none; font-size: 12px; font-weight: 600;">View All</a>
+              </div>
+            ` : ''}
+          </div>
+        `;
       } else if (cName === 'activity') {
         return `
           <div style="background: var(--surface); border: 1px solid var(--border); border-radius: 6px; box-shadow: var(--shadow-sm); overflow: hidden; padding: 16px; margin-bottom: 16px; display: flex; flex-direction: column; gap: 12px;">
@@ -8380,64 +8474,117 @@ function deletePublicGroup(id, name) {
             name: c.name,
             title: c.title || '',
             collapsed: !!c.collapsed,
-            visible: c.visible !== false
+            visible: c.visible !== false,
+            config: c.config || null,
+            relatedLists: c.relatedLists || null
           };
         }).filter(c => c.visible);
 
         if (resolved.length === 0) return '';
 
-        const isTabbed = (regionName === 'left' || regionName === 'right' || regionName === 'main' || regionName === 'bottom') && resolved.length > 1;
+        const hasRelatedLists = resolved.some(c => c.name === 'related-lists');
+        const hasDetails = resolved.some(c => c.name === 'details');
+        const groupLeftTabs = hasRelatedLists && hasDetails;
 
-        if (isTabbed) {
-          const headersHtml = resolved.map((comp, idx) => {
-            const compLabel = {
-              'compact-layout': 'Compact Layout',
-              'details': 'Details',
-              'related-lists': 'Related',
-              'activity': 'Activity',
-              'chatter': 'Chatter'
-            }[comp.name] || comp.name;
+        const hasActivity = resolved.some(c => c.name === 'activity');
+        const hasChatter = resolved.some(c => c.name === 'chatter');
+        const groupRightTabs = hasActivity && hasChatter;
 
-            const activeClass = idx === 0 ? 'active' : '';
-            const borderStyle = idx === 0 
-              ? 'border-bottom: 3px solid var(--accent); color: var(--accent); font-weight: 700;' 
-              : 'border-bottom: 3px solid transparent; color: var(--text-muted);';
+        const itemsToRender = [];
+        let i = 0;
+        while (i < resolved.length) {
+          const comp = resolved[i];
+          if (groupLeftTabs && (comp.name === 'related-lists' || comp.name === 'details')) {
+            const otherName = comp.name === 'related-lists' ? 'details' : 'related-lists';
+            const otherIdx = resolved.findIndex((c, idx) => idx > i && c.name === otherName);
+            if (otherIdx !== -1) {
+              const otherComp = resolved[otherIdx];
+              itemsToRender.push({
+                type: 'tab-container',
+                components: [comp, otherComp],
+                originalIndices: [i, otherIdx]
+              });
+              resolved.splice(otherIdx, 1);
+              i++;
+              continue;
+            }
+          }
+          
+          if (groupRightTabs && (comp.name === 'activity' || comp.name === 'chatter')) {
+            const otherName = comp.name === 'activity' ? 'chatter' : 'activity';
+            const otherIdx = resolved.findIndex((c, idx) => idx > i && c.name === otherName);
+            if (otherIdx !== -1) {
+              const otherComp = resolved[otherIdx];
+              itemsToRender.push({
+                type: 'tab-container',
+                components: [comp, otherComp],
+                originalIndices: [i, otherIdx]
+              });
+              resolved.splice(otherIdx, 1);
+              i++;
+              continue;
+            }
+          }
 
-            return `
-              <li class="custom-preview-tab-header ${activeClass}" 
-                  data-region="${regionName}" 
-                  data-index="${idx}" 
-                  onclick="switchCustomPreviewTab('${regionName}', ${idx})" 
-                  style="padding: 10px 4px; font-size: 13.5px; font-weight: 600; cursor: pointer; transition: all 0.2s; ${borderStyle}">
-                ${esc(compLabel)}
-              </li>
-            `;
-          }).join('');
-
-          const contentsHtml = resolved.map((comp, idx) => {
-            const displayStyle = idx === 0 ? 'display: block;' : 'display: none;';
-            const componentHtml = renderComponentPreview(comp, true);
-
-            return `
-              <div class="custom-preview-tab-content-${regionName}" id="preview-tab-content-${regionName}-${idx}" style="${displayStyle}">
-                ${componentHtml}
-              </div>
-            `;
-          }).join('');
-
-          return `
-            <div class="card custom-tab-container" style="background: var(--surface); border: 1px solid var(--border); border-radius: 6px; box-shadow: var(--shadow-sm); overflow: hidden; margin-bottom: 16px;">
-              <ul class="custom-tab-nav" style="display: flex; gap: 24px; border-bottom: 1px solid var(--border); margin: 0; padding: 0 20px; list-style: none; background: transparent;">
-                ${headersHtml}
-              </ul>
-              <div class="custom-tab-contents" style="padding: 20px;">
-                ${contentsHtml}
-              </div>
-            </div>
-          `;
-        } else {
-          return resolved.map(c => renderComponentPreview(c, false)).join('');
+          itemsToRender.push({
+            type: 'single',
+            component: comp,
+            index: i
+          });
+          i++;
         }
+
+        return itemsToRender.map((item, itemIdx) => {
+          if (item.type === 'tab-container') {
+            const headersHtml = item.components.map((comp, idx) => {
+              const compLabel = {
+                'related-lists': 'Related',
+                'details': 'Details',
+                'activity': 'Activity',
+                'chatter': 'Chatter'
+              }[comp.name] || comp.name;
+
+              const activeClass = idx === 0 ? 'active' : '';
+              const borderStyle = idx === 0 
+                ? 'border-bottom: 3px solid var(--accent); color: var(--accent); font-weight: 700;' 
+                : 'border-bottom: 3px solid transparent; color: var(--text-muted);';
+
+              return `
+                <li class="custom-preview-tab-header ${activeClass}" 
+                    data-region="${regionName}" 
+                    data-index="${itemIdx}-${idx}" 
+                    onclick="switchCustomPreviewTab('${regionName}', '${itemIdx}-${idx}')" 
+                    style="padding: 10px 4px; font-size: 13.5px; font-weight: 600; cursor: pointer; transition: all 0.2s; ${borderStyle}">
+                  ${esc(compLabel)}
+                </li>
+              `;
+            }).join('');
+
+            const contentsHtml = item.components.map((comp, idx) => {
+              const displayStyle = idx === 0 ? 'display: block;' : 'display: none;';
+              const componentHtml = renderComponentPreview(comp, true);
+
+              return `
+                <div class="custom-preview-tab-content-${regionName}-${itemIdx}" id="preview-tab-content-${regionName}-${itemIdx}-${idx}" style="${displayStyle}">
+                  ${componentHtml}
+                </div>
+              `;
+            }).join('');
+
+            return `
+              <div class="card custom-tab-container" style="background: var(--surface); border: 1px solid var(--border); border-radius: 6px; box-shadow: var(--shadow-sm); overflow: hidden; margin-bottom: 16px;">
+                <ul class="custom-tab-nav" style="display: flex; gap: 24px; border-bottom: 1px solid var(--border); margin: 0; padding: 0 20px; list-style: none; background: transparent;">
+                  ${headersHtml}
+                </ul>
+                <div class="custom-tab-contents" style="padding: 20px;">
+                  ${contentsHtml}
+                </div>
+              </div>
+            `;
+          } else {
+            return renderComponentPreview(item.component, false);
+          }
+        }).join('');
       };
 
       let gridHtml = '';
@@ -8539,7 +8686,7 @@ function deletePublicGroup(id, name) {
       });
 
       const componentLibraryHtml = ADMIN_RECORD_PAGE_COMPONENTS.map(comp => {
-        const inUse = placedComponents.has(comp.name);
+        const inUse = comp.name === 'related-list-single' ? false : placedComponents.has(comp.name);
         return `
           <div class="builder-component-item ${inUse ? 'in-use' : ''}"
                draggable="${!inUse}"
@@ -8745,6 +8892,129 @@ function deletePublicGroup(id, name) {
               </div>
             </div>
           `;
+        } else if (compData.name === 'related-list-single') {
+          const config = compData.config || {};
+          const childFields = config.childObject ? (childObjectFieldsCache[config.childObject] || []) : [];
+
+          let fieldsCheckboxes = '<span style="font-size: 11px; color: var(--text-muted); font-style: italic;">Select a related list first</span>';
+          if (config.childObject) {
+            fieldsCheckboxes = childFields.length === 0 
+              ? '<span style="font-size: 11px; color: var(--text-muted); font-style: italic;">Loading fields...</span>' 
+              : childFields.map(f => {
+                  const isChecked = (config.fields || []).includes(f.name);
+                  return `
+                    <div style="display: flex; align-items: center; gap: 8px;">
+                      <input type="checkbox" id="single-col-${esc(f.name)}" ${isChecked ? 'checked' : ''} onchange="toggleSelectedComponentConfigField('${esc(f.name)}', this.checked)">
+                      <label for="single-col-${esc(f.name)}" style="font-size: 12px; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${esc(f.label)}</label>
+                    </div>
+                  `;
+                }).join('');
+          }
+
+          sidebarRightHtml = `
+            <div style="display: flex; flex-direction: column; gap: 16px;">
+              <div style="border-bottom: 1px solid var(--border); padding-bottom: 10px;">
+                <h4 style="margin: 0; font-size: 14px; font-weight: 700; color: var(--text-primary);">Related List - Single</h4>
+              </div>
+              
+              <div>
+                <label class="form-label" style="font-size: 11px; font-weight: 700; text-transform: uppercase; color: var(--text-secondary); margin-bottom: 4px; display: block;">Parent Record</label>
+                <input type="text" value="Use This ${esc(adminRecordPageObjectName)}" class="form-ctrl" disabled style="background: var(--surface-2); font-size: 13px; padding: 6px 10px; border-radius: 6px; border: 1px solid var(--border);">
+              </div>
+
+              <div>
+                <label class="form-label" style="font-size: 11px; font-weight: 700; text-transform: uppercase; color: var(--text-secondary); margin-bottom: 4px; display: block;">Related List <span style="color:var(--accent)">*</span></label>
+                <select class="form-ctrl" 
+                        onchange="builderSelectRelatedListRelationship(this.value)"
+                        style="font-size: 13px; padding: 6px 10px; border-radius: 6px; border: 1px solid var(--border-2); background: var(--surface);">
+                  <option value="">-- Select Child Relationship --</option>
+                  ${adminObjectChildRelationships.map(rel => `
+                    <option value="${esc(rel.relationshipName)}" ${config.relationshipName === rel.relationshipName ? 'selected' : ''}>
+                      ${esc(rel.relationshipName)} (${esc(rel.childSObject)})
+                    </option>
+                  `).join('')}
+                </select>
+              </div>
+              
+              <div>
+                <label class="form-label" style="font-size: 11px; font-weight: 700; text-transform: uppercase; color: var(--text-secondary); margin-bottom: 4px; display: block;">List Title</label>
+                <input type="text" 
+                       value="${esc(config.title || '')}" 
+                       placeholder="${esc(config.relationshipName || 'Related List')}" 
+                       class="form-ctrl" 
+                       oninput="updateSelectedComponentConfigProperty('title', this.value)"
+                       style="font-size: 13px; padding: 6px 10px; border-radius: 6px; border: 1px solid var(--border-2); background: var(--surface);">
+              </div>
+
+              <div>
+                <label class="form-label" style="font-size: 11px; font-weight: 700; text-transform: uppercase; color: var(--text-secondary); margin-bottom: 4px; display: block;">Records Limit</label>
+                <select class="form-ctrl" 
+                        onchange="updateSelectedComponentConfigProperty('limit', Number(this.value))"
+                        style="font-size: 13px; padding: 6px 10px; border-radius: 6px; border: 1px solid var(--border-2); background: var(--surface);">
+                  <option value="5" ${config.limit === 5 ? 'selected' : ''}>5</option>
+                  <option value="10" ${config.limit === 10 ? 'selected' : ''}>10</option>
+                  <option value="25" ${config.limit === 25 ? 'selected' : ''}>25</option>
+                  <option value="50" ${config.limit === 50 ? 'selected' : ''}>50</option>
+                </select>
+              </div>
+
+              <div>
+                <label class="form-label" style="font-size: 11px; font-weight: 700; text-transform: uppercase; color: var(--text-secondary); margin-bottom: 4px; display: block;">Default Sort</label>
+                <div style="display: flex; gap: 8px;">
+                  <select class="form-ctrl" 
+                          onchange="updateSelectedComponentConfigProperty('sortBy', this.value)"
+                          style="flex: 2; font-size: 13px; padding: 6px 10px; border-radius: 6px; border: 1px solid var(--border-2); background: var(--surface);">
+                    <option value="CreatedDate" ${config.sortBy === 'CreatedDate' ? 'selected' : ''}>Created Date</option>
+                    <option value="LastModifiedDate" ${config.sortBy === 'LastModifiedDate' ? 'selected' : ''}>Modified Date</option>
+                    <option value="Name" ${config.sortBy === 'Name' ? 'selected' : ''}>Name</option>
+                    ${childFields.filter(f => f.name !== 'CreatedDate' && f.name !== 'LastModifiedDate' && f.name !== 'Name').map(f => `
+                      <option value="${esc(f.name)}" ${config.sortBy === f.name ? 'selected' : ''}>${esc(f.label)}</option>
+                    `).join('')}
+                  </select>
+                  <select class="form-ctrl" 
+                          onchange="updateSelectedComponentConfigProperty('sortDir', this.value)"
+                          style="flex: 1; font-size: 13px; padding: 6px 10px; border-radius: 6px; border: 1px solid var(--border-2); background: var(--surface);">
+                    <option value="ASC" ${config.sortDir === 'ASC' ? 'selected' : ''}>ASC</option>
+                    <option value="DESC" ${config.sortDir === 'DESC' ? 'selected' : ''}>DESC</option>
+                  </select>
+                </div>
+              </div>
+
+              <div>
+                <label class="form-label" style="font-size: 11px; font-weight: 700; text-transform: uppercase; color: var(--text-secondary); margin-bottom: 4px; display: block;">Show Actions</label>
+                <div style="display: flex; flex-direction: column; gap: 6px; padding: 4px 0;">
+                  <div style="display: flex; align-items: center; gap: 8px;">
+                    <input type="checkbox" id="singleShowNew" ${config.showNew !== false ? 'checked' : ''} onchange="updateSelectedComponentConfigProperty('showNew', this.checked)">
+                    <label for="singleShowNew" style="font-size: 12px; font-weight: 600; cursor: pointer;">New Button</label>
+                  </div>
+                  <div style="display: flex; align-items: center; gap: 8px;">
+                    <input type="checkbox" id="singleShowViewAll" ${config.showViewAll !== false ? 'checked' : ''} onchange="updateSelectedComponentConfigProperty('showViewAll', this.checked)">
+                    <label for="singleShowViewAll" style="font-size: 12px; font-weight: 600; cursor: pointer;">View All Link</label>
+                  </div>
+                </div>
+              </div>
+
+              <div>
+                <label class="form-label" style="font-size: 11px; font-weight: 700; text-transform: uppercase; color: var(--text-secondary); margin-bottom: 4px; display: block;">Visible Columns</label>
+                <div style="max-height: 180px; overflow-y: auto; border: 1px solid var(--border-2); border-radius: 6px; padding: 8px; background: var(--surface); display: flex; flex-direction: column; gap: 6px;">
+                  ${fieldsCheckboxes}
+                </div>
+              </div>
+
+              <div style="margin-top: 16px; border-top: 1px solid var(--border); padding-top: 16px; display: flex; flex-direction: column; gap: 8px;">
+                <button class="btn btn-ghost btn-danger-link btn-sm" 
+                        style="width: 100%; text-align: center; display: block;"
+                        onclick="builderRemoveComponent('${compData.name}', '${adminRecordPageSelectedComponent.region}', event)">
+                  Remove Component
+                </button>
+                <button class="btn btn-ghost btn-sm" 
+                        style="width: 100%; text-align: center;"
+                        onclick="builderClearSelection()">
+                  Deselect Component
+                </button>
+              </div>
+            </div>
+          `;
         } else {
           sidebarRightHtml = `
             <div style="display: flex; flex-direction: column; gap: 16px;">
@@ -8929,6 +9199,103 @@ function deletePublicGroup(id, name) {
       }
     }
 
+    function updateSelectedComponentConfigProperty(key, value) {
+      if (!adminRecordPageSelectedComponent) return;
+      const { region, index } = adminRecordPageSelectedComponent;
+      const regionList = adminRecordPageDraft.regions[region] || [];
+      const compData = regionList[index];
+      if (compData && compData.config) {
+        compData.config[key] = value;
+        
+        const hasChanges = checkAdminRecordPageHasChanges();
+        const saveBtn = document.getElementById('recordPageSaveBtn');
+        if (saveBtn) {
+          saveBtn.disabled = !hasChanges;
+          saveBtn.style.opacity = hasChanges ? '1' : '0.5';
+          saveBtn.style.cursor = hasChanges ? 'pointer' : 'default';
+        }
+        
+        renderRecordPageBuilder();
+      }
+    }
+
+    function toggleSelectedComponentConfigField(fieldName, checked) {
+      if (!adminRecordPageSelectedComponent) return;
+      const { region, index } = adminRecordPageSelectedComponent;
+      const regionList = adminRecordPageDraft.regions[region] || [];
+      const compData = regionList[index];
+      if (compData && compData.config) {
+        let currentFields = compData.config.fields || [];
+        if (checked) {
+          if (!currentFields.includes(fieldName)) {
+            currentFields.push(fieldName);
+          }
+        } else {
+          currentFields = currentFields.filter(f => f !== fieldName);
+        }
+        compData.config.fields = currentFields;
+
+        const hasChanges = checkAdminRecordPageHasChanges();
+        const saveBtn = document.getElementById('recordPageSaveBtn');
+        if (saveBtn) {
+          saveBtn.disabled = !hasChanges;
+          saveBtn.style.opacity = hasChanges ? '1' : '0.5';
+          saveBtn.style.cursor = hasChanges ? 'pointer' : 'default';
+        }
+
+        renderRecordPageBuilder();
+      }
+    }
+
+    function builderSelectRelatedListRelationship(relName) {
+      if (!adminRecordPageSelectedComponent) return;
+      const { region, index } = adminRecordPageSelectedComponent;
+      const regionList = adminRecordPageDraft.regions[region] || [];
+      const compData = regionList[index];
+      if (compData && compData.config) {
+        const rel = adminObjectChildRelationships.find(r => r.relationshipName === relName);
+        if (rel) {
+          compData.config.relationshipName = rel.relationshipName;
+          compData.config.childObject = rel.childSObject;
+          compData.config.field = rel.field;
+          compData.config.title = rel.relationshipName;
+          
+          const standardFields = {
+            Contact: ["Name", "Title", "Email", "Phone"],
+            Opportunity: ["Name", "StageName", "Amount", "CloseDate"],
+            Case: ["CaseNumber", "Subject", "Status", "Priority"]
+          }[rel.childSObject] || ["Name"];
+          
+          compData.config.fields = standardFields;
+          compData.config.sortBy = 'CreatedDate';
+          compData.config.sortDir = 'DESC';
+          
+          if (!childObjectFieldsCache[rel.childSObject]) {
+            loadChildObjectFields(rel.childSObject).then(() => {
+              renderRecordPageBuilder();
+            });
+          } else {
+            renderRecordPageBuilder();
+          }
+        } else {
+          compData.config.relationshipName = '';
+          compData.config.childObject = '';
+          compData.config.field = '';
+          compData.config.title = '';
+          compData.config.fields = ['Name'];
+          renderRecordPageBuilder();
+        }
+
+        const hasChanges = checkAdminRecordPageHasChanges();
+        const saveBtn = document.getElementById('recordPageSaveBtn');
+        if (saveBtn) {
+          saveBtn.disabled = !hasChanges;
+          saveBtn.style.opacity = hasChanges ? '1' : '0.5';
+          saveBtn.style.cursor = hasChanges ? 'pointer' : 'default';
+        }
+      }
+    }
+
     function selectRelatedListToEdit(relKey) {
       adminActiveRelatedListConfigKey = relKey;
       const compData = adminRecordPageDraft.regions[adminRecordPageSelectedComponent.region][adminRecordPageSelectedComponent.index];
@@ -9080,12 +9447,14 @@ function deletePublicGroup(id, name) {
         
         if (dragData.type === 'library') {
           let isDuplicate = false;
-          Object.keys(adminRecordPageDraft.regions).forEach(r => {
-            const list = adminRecordPageDraft.regions[r] || [];
-            if (list.some(c => c.name === dragData.name)) {
-              isDuplicate = true;
-            }
-          });
+          if (dragData.name !== 'related-list-single') {
+            Object.keys(adminRecordPageDraft.regions).forEach(r => {
+              const list = adminRecordPageDraft.regions[r] || [];
+              if (list.some(c => c.name === dragData.name)) {
+                isDuplicate = true;
+              }
+            });
+          }
 
           if (isDuplicate) {
             toast('This component is already placed on the page.', 'err');
@@ -9096,6 +9465,25 @@ function deletePublicGroup(id, name) {
             adminRecordPageDraft.regions[targetRegion] = [];
           }
           const newComp = { name: dragData.name, title: '', collapsed: false, visible: true };
+          if (dragData.name === 'related-list-single') {
+            const uniqId = Math.random().toString(36).substring(2, 9);
+            newComp.config = {
+              parentObject: adminRecordPageObjectName,
+              childObject: '',
+              relationshipName: '',
+              field: '',
+              title: '',
+              fields: ['Name'],
+              limit: 5,
+              sortBy: 'CreatedDate',
+              sortDir: 'DESC',
+              showNew: true,
+              showViewAll: true,
+              showEdit: true,
+              showDelete: true,
+              key: `rel_single_${uniqId}`
+            };
+          }
           adminRecordPageDraft.regions[targetRegion].splice(insertIdx, 0, newComp);
         } else if (dragData.type === 'canvas') {
           const srcList = adminRecordPageDraft.regions[dragData.region] || [];
@@ -9254,7 +9642,8 @@ function deletePublicGroup(id, name) {
             title: c.title || '',
             collapsed: !!c.collapsed,
             visible: c.visible !== false,
-            relatedLists: c.relatedLists || null
+            relatedLists: c.relatedLists || null,
+            config: c.config || null
           };
           
           if (resolved.name === 'related-lists' && !resolved.relatedLists) {
@@ -9299,6 +9688,10 @@ function deletePublicGroup(id, name) {
     }
 
     function switchCustomPreviewTab(regionName, activeIdx) {
+      if (typeof activeIdx === 'string' && activeIdx.includes('-')) {
+        switchCustomPreviewTabNew(regionName, activeIdx);
+        return;
+      }
       const contents = document.querySelectorAll(`.custom-preview-tab-content-${regionName}`);
       contents.forEach((el, idx) => {
         el.style.display = idx === activeIdx ? 'block' : 'none';
@@ -9317,6 +9710,34 @@ function deletePublicGroup(id, name) {
           el.style.color = 'var(--text-muted)';
           el.style.fontWeight = '600';
         }
+      });
+    }
+
+    function switchCustomPreviewTabNew(regionName, tabPath) {
+      const parts = tabPath.split('-');
+      const itemIdx = parts[0];
+      const activeSubIdx = parseInt(parts[1]);
+
+      const headers = document.querySelectorAll(`.custom-preview-tab-header[data-region="${regionName}"][data-index^="${itemIdx}-"]`);
+      headers.forEach(h => {
+        const idx = parseInt(h.getAttribute('data-index').split('-')[1]);
+        if (idx === activeSubIdx) {
+          h.classList.add('active');
+          h.style.borderBottom = '3px solid var(--accent)';
+          h.style.color = 'var(--accent)';
+          h.style.fontWeight = '700';
+        } else {
+          h.classList.remove('active');
+          h.style.borderBottom = '3px solid transparent';
+          h.style.color = 'var(--text-muted)';
+          h.style.fontWeight = '600';
+        }
+      });
+
+      const contents = document.querySelectorAll(`.custom-preview-tab-content-${regionName}-${itemIdx}`);
+      contents.forEach(c => {
+        const subIdx = parseInt(c.id.split('-').pop());
+        c.style.display = subIdx === activeSubIdx ? 'block' : 'none';
       });
     }
   </script>

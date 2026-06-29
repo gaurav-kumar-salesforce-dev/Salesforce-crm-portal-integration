@@ -4475,6 +4475,27 @@ function closeModal() {
   modalPresetValues = {};
 }
 
+const CRM_COMPONENT_CACHE = new Map();
+
+async function preloadCrmComponent(name) {
+  if (CRM_COMPONENT_CACHE.has(name)) return CRM_COMPONENT_CACHE.get(name);
+  try {
+    const mod = await import(`/components/${name}/component.js`);
+    const comp = mod.default || mod;
+    CRM_COMPONENT_CACHE.set(name, comp);
+    return comp;
+  } catch (err) {
+    console.error(`Failed to load component ${name}:`, err);
+    const fallback = {
+      render(config, context) {
+        return `<div class="error-state compact"><p>Component "${name}" failed to load.</p></div>`;
+      }
+    };
+    CRM_COMPONENT_CACHE.set(name, fallback);
+    return fallback;
+  }
+}
+
 async function openRecordDetail(objectName, id) {
   if (!id || !OBJECT_META[objectName]) return;
   markCachedSelectedRecord(id);
@@ -4498,6 +4519,19 @@ async function openRecordDetail(objectName, id) {
       loadCompactLayoutForObject(objectName),
       loadRecordPageForObject(objectName)
     ]);
+
+    const pageConfig = RECORD_PAGE_CACHE[objectName] || getDeveloperDefaultLayout(objectName);
+    const componentNames = new Set(['compact-layout', 'details', 'activity', 'chatter', 'related-lists', 'related-list-single']);
+    if (pageConfig && pageConfig.regions) {
+      Object.keys(pageConfig.regions).forEach(r => {
+        (pageConfig.regions[r] || []).forEach(c => {
+          if (typeof c === 'string') componentNames.add(c);
+          else if (c && c.name) componentNames.add(c.name);
+        });
+      });
+    }
+    await Promise.all(Array.from(componentNames).map(name => preloadCrmComponent(name)));
+
     const record = data.record || {};
     const fields = data.fields || [];
     detailLookupLabels = data.lookupLabels || {};
@@ -4595,152 +4629,70 @@ function renderRecordDetailPage(
       name: c.name,
       title: c.title || '',
       collapsed: !!c.collapsed,
-      visible: c.visible !== false
+      visible: c.visible !== false,
+      config: c.config || null
     };
   };
 
   const renderSingleComponent = (comp, isTabbedChild = false) => {
-    const compLabel = {
-      'compact-layout': 'Compact Layout',
-      'details': 'Details',
-      'related-lists': 'Related',
-      'activity': 'Activity',
-      'chatter': 'Chatter'
-    }[comp.name] || comp.name;
+    const compInstance = CRM_COMPONENT_CACHE.get(comp.name);
+    if (compInstance) {
+      const renderContext = {
+        escapeHtml,
+        labelFor,
+        getValue,
+        formatValue,
+        record,
+        fields,
+        displayFields,
+        summaryFields,
+        objectName,
+        id,
+        isTabbedChild,
+        utilityIconSvg,
+        objectIcon,
+        canDo,
+        currentDetailCanEdit,
+        getRelatedListConfigs,
+        renderRelatedListShell,
+        renderConfiguredDetailSections,
+        renderChatterPanel,
+        renderRelatedPanel
+      };
 
-    const compTitle = comp.title || compLabel;
+      const contentHtml = compInstance.render(comp, renderContext);
 
-    if (isTabbedChild) {
+      if (isTabbedChild) {
+        return contentHtml;
+      }
+
+      const compLabel = {
+        'compact-layout': 'Compact Layout',
+        'details': 'Details',
+        'related-lists': 'Related Lists',
+        'activity': 'Activity',
+        'chatter': 'Chatter',
+        'related-list-single': 'Related List'
+      }[comp.name] || comp.name;
+
+      const compTitle = comp.title || (comp.config && comp.config.title) || compLabel;
+
       if (comp.name === 'compact-layout') {
         return `
-          <div class="record-summary" style="display: grid;">
-            ${summaryFields
-              .map(
-                (field) => `
-              <div>
-                <span>${escapeHtml(labelFor(field))}</span>
-                <strong>${formatValue(field, getValue(record, field), record)}</strong>
-              </div>
-            `,
-              )
-              .join("")}
+          <div class="record-hero card" style="margin-bottom: 16px; border: 1px solid var(--border); border-radius: var(--r-md); background: var(--surface); box-shadow: var(--shadow-sm); overflow: hidden;">
+            ${contentHtml}
           </div>
-        `;
-      } else if (comp.name === 'details') {
-        return `
-          <div id="detailsContent">
-            ${renderConfiguredDetailSections(objectName, record, fields, displayFields)}
-          </div>
-        `;
-      } else if (comp.name === 'related-lists') {
-        return `
-          <div class="record-related-card-container">
-            ${renderRelatedPanel(objectName, comp)}
-          </div>
-        `;
-      } else if (comp.name === 'activity') {
-        return `
-          <div id="activityTimeline">
-            <div class="activity-empty"><p>Loading activities...</p></div>
-          </div>
-        `;
-      } else if (comp.name === 'chatter') {
-        return `
-          ${renderChatterPanel(objectName)}
         `;
       }
-      return '';
+
+      return `
+        <div class="card record-${comp.name}-card" style="background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-md); box-shadow: var(--shadow-sm); overflow: hidden; margin-bottom: 16px;">
+          ${contentHtml}
+        </div>
+      `;
     }
 
-    if (comp.name === 'compact-layout') {
-      return `
-        <div class="record-hero card" style="margin-bottom: 16px; border: 1px solid var(--border); border-radius: var(--r-md); background: var(--surface); box-shadow: var(--shadow-sm); overflow: hidden;">
-          ${comp.title ? `
-            <div style="padding: 12px 20px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; background: var(--surface-2);">
-              <h3 style="margin: 0; font-size: 14px; font-weight: 600; color: var(--text-1);">${escapeHtml(compTitle)}</h3>
-            </div>
-          ` : ''}
-          <div class="record-summary" style="display: ${comp.collapsed ? 'none' : 'grid'};">
-            ${summaryFields
-              .map(
-                (field) => `
-              <div>
-                <span>${escapeHtml(labelFor(field))}</span>
-                <strong>${formatValue(field, getValue(record, field), record)}</strong>
-              </div>
-            `,
-              )
-              .join("")}
-          </div>
-        </div>
-      `;
-    } else if (comp.name === 'details') {
-      return `
-        <div class="card record-details-card" style="background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-md); box-shadow: var(--shadow-sm); overflow: hidden; margin-bottom: 16px;">
-          <div style="padding: 12px 20px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; background: var(--surface-2);">
-            <h3 style="margin: 0; font-size: 14px; font-weight: 600; color: var(--text-1);">${escapeHtml(compTitle)}</h3>
-            <div style="display: flex; align-items: center; gap: 12px;">
-              <button class="btn btn-ghost btn-sm" onclick="toggleCardCollapse(this)" style="padding: 4px; display: flex; align-items: center; justify-content: center; border: none; background: transparent; cursor: pointer; transform: ${comp.collapsed ? 'rotate(-90deg)' : 'none'}; transition: transform 0.2s;">
-                ${utilityIconSvg("chevronDown")}
-              </button>
-            </div>
-          </div>
-          <div class="card-body" style="padding: 20px; display: ${comp.collapsed ? 'none' : 'block'};" id="detailsContent">
-            ${renderConfiguredDetailSections(objectName, record, fields, displayFields)}
-          </div>
-        </div>
-      `;
-    } else if (comp.name === 'related-lists') {
-      return `
-        <div class="card record-related-card" style="background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-md); box-shadow: var(--shadow-sm); overflow: hidden; margin-bottom: 16px;">
-          <div style="padding: 12px 20px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; background: var(--surface-2);">
-            <h3 style="margin: 0; font-size: 14px; font-weight: 600; color: var(--text-1);">${escapeHtml(compTitle)}</h3>
-            <button class="btn btn-ghost btn-sm" onclick="toggleCardCollapse(this)" style="padding: 4px; display: flex; align-items: center; justify-content: center; border: none; background: transparent; cursor: pointer; transform: ${comp.collapsed ? 'rotate(-90deg)' : 'none'}; transition: transform 0.2s;">
-              ${utilityIconSvg("chevronDown")}
-            </button>
-          </div>
-          <div class="card-body" style="display: ${comp.collapsed ? 'none' : 'block'};">
-            <div class="record-related-card-container">
-              ${renderRelatedPanel(objectName, comp)}
-            </div>
-          </div>
-        </div>
-      `;
-    } else if (comp.name === 'activity') {
-      return `
-        <div class="card record-activity-card" style="background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-md); box-shadow: var(--shadow-sm); overflow: hidden; margin-bottom: 16px;">
-          <div style="padding: 12px 20px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; background: var(--surface-2);">
-            <h3 style="margin: 0; font-size: 14px; font-weight: 600; color: var(--text-1);">${escapeHtml(compTitle)}</h3>
-            <div style="display: flex; align-items: center; gap: 12px;">
-              <button class="cell-button-link" onclick="loadRecordActivity('${objectName}', '${id}')" style="font-size: 12px; color: var(--accent); background: none; border: none; cursor: pointer; padding: 0;">Refresh</button>
-              <button class="btn btn-ghost btn-sm" onclick="toggleCardCollapse(this)" style="padding: 4px; display: flex; align-items: center; justify-content: center; border: none; background: transparent; cursor: pointer; transform: ${comp.collapsed ? 'rotate(-90deg)' : 'none'}; transition: transform 0.2s;">
-                ${utilityIconSvg("chevronDown")}
-              </button>
-            </div>
-          </div>
-          <div class="card-body" style="padding: 20px; display: ${comp.collapsed ? 'none' : 'block'};">
-            <div id="activityTimeline">
-              <div class="activity-empty"><p>Loading activities...</p></div>
-            </div>
-          </div>
-        </div>
-      `;
-    } else if (comp.name === 'chatter') {
-      return `
-        <div class="card record-chatter-card" style="background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-md); box-shadow: var(--shadow-sm); overflow: hidden; margin-bottom: 16px;">
-          <div style="padding: 12px 20px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; background: var(--surface-2);">
-            <h3 style="margin: 0; font-size: 14px; font-weight: 600; color: var(--text-1);">${escapeHtml(compTitle)}</h3>
-            <button class="btn btn-ghost btn-sm" onclick="toggleCardCollapse(this)" style="padding: 4px; display: flex; align-items: center; justify-content: center; border: none; background: transparent; cursor: pointer; transform: ${comp.collapsed ? 'rotate(-90deg)' : 'none'}; transition: transform 0.2s;">
-              ${utilityIconSvg("chevronDown")}
-            </button>
-          </div>
-          <div class="card-body" style="padding: 20px; display: ${comp.collapsed ? 'none' : 'block'};">
-            ${renderChatterPanel(objectName)}
-          </div>
-        </div>
-      `;
-    }
-    return '';
+    return `<div class="error-state"><p>Component ${comp.name} not found.</p></div>`;
   };
 
   const renderRegionComponents = (regionName) => {
@@ -4749,58 +4701,113 @@ function renderRecordDetailPage(
 
     if (resolved.length === 0) return '';
 
-    const isTabbed = (regionName === 'left' || regionName === 'right' || regionName === 'main' || regionName === 'bottom') && resolved.length > 1;
+    const hasRelatedLists = resolved.some(c => c.name === 'related-lists');
+    const hasDetails = resolved.some(c => c.name === 'details');
+    const groupLeftTabs = hasRelatedLists && hasDetails;
 
-    if (isTabbed) {
-      const headersHtml = resolved.map((comp, idx) => {
-        const compLabel = {
-          'compact-layout': 'Compact Layout',
-          'details': 'Details',
-          'related-lists': 'Related',
-          'activity': 'Activity',
-          'chatter': 'Chatter'
-        }[comp.name] || comp.name;
+    const hasActivity = resolved.some(c => c.name === 'activity');
+    const hasChatter = resolved.some(c => c.name === 'chatter');
+    const groupRightTabs = hasActivity && hasChatter;
 
-        const activeClass = idx === 0 ? 'active' : '';
-        const borderStyle = idx === 0 
-          ? 'border-bottom: 3px solid var(--accent); color: var(--accent); font-weight: 700;' 
-          : 'border-bottom: 3px solid transparent; color: var(--text-2);';
+    const itemsToRender = [];
+    let i = 0;
+    while (i < resolved.length) {
+      const comp = resolved[i];
+      if (groupLeftTabs && (comp.name === 'related-lists' || comp.name === 'details')) {
+        const otherName = comp.name === 'related-lists' ? 'details' : 'related-lists';
+        const otherIdx = resolved.findIndex((c, idx) => idx > i && c.name === otherName);
+        if (otherIdx !== -1) {
+          const otherComp = resolved[otherIdx];
+          itemsToRender.push({
+            type: 'tab-container',
+            components: [comp, otherComp],
+            originalIndices: [i, otherIdx]
+          });
+          resolved.splice(otherIdx, 1);
+          i++;
+          continue;
+        }
+      }
+      
+      if (groupRightTabs && (comp.name === 'activity' || comp.name === 'chatter')) {
+        const otherName = comp.name === 'activity' ? 'chatter' : 'activity';
+        const otherIdx = resolved.findIndex((c, idx) => idx > i && c.name === otherName);
+        if (otherIdx !== -1) {
+          const otherComp = resolved[otherIdx];
+          itemsToRender.push({
+            type: 'tab-container',
+            components: [comp, otherComp],
+            originalIndices: [i, otherIdx]
+          });
+          resolved.splice(otherIdx, 1);
+          i++;
+          continue;
+        }
+      }
 
-        return `
-          <li class="custom-tab-header ${activeClass}" 
-              data-region="${regionName}" 
-              data-index="${idx}" 
-              onclick="switchCustomTab('${regionName}', ${idx})" 
-              style="padding: 10px 4px; font-size: 13.5px; font-weight: 600; cursor: pointer; transition: all 0.2s; ${borderStyle}">
-            ${escapeHtml(compLabel)}
-          </li>
-        `;
-      }).join('');
-
-      const contentsHtml = resolved.map((comp, idx) => {
-        const displayStyle = idx === 0 ? 'display: block;' : 'display: none;';
-        const componentHtml = renderSingleComponent(comp, true);
-
-        return `
-          <div class="custom-tab-content-${regionName}" id="tab-content-${regionName}-${idx}" style="${displayStyle}">
-            ${componentHtml}
-          </div>
-        `;
-      }).join('');
-
-      return `
-        <div class="card custom-tab-container" style="background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-md); box-shadow: var(--shadow-sm); overflow: hidden; margin-bottom: 16px;">
-          <ul class="custom-tab-nav" style="display: flex; gap: 24px; border-bottom: 1px solid var(--border); margin: 0; padding: 0 20px; list-style: none; background: transparent;">
-            ${headersHtml}
-          </ul>
-          <div class="custom-tab-contents" style="padding: 20px;">
-            ${contentsHtml}
-          </div>
-        </div>
-      `;
-    } else {
-      return resolved.map(comp => renderSingleComponent(comp, false)).join('');
+      itemsToRender.push({
+        type: 'single',
+        component: comp,
+        index: i
+      });
+      i++;
     }
+
+    return itemsToRender.map((item, itemIdx) => {
+      if (item.type === 'tab-container') {
+        const headersHtml = item.components.map((comp, idx) => {
+          const compLabel = {
+            'related-lists': 'Related',
+            'details': 'Details',
+            'activity': 'Activity',
+            'chatter': 'Chatter'
+          }[comp.name] || comp.name;
+
+          const activeClass = idx === 0 ? 'active' : '';
+          const borderStyle = idx === 0 
+            ? 'border-bottom: 3px solid var(--accent); color: var(--accent); font-weight: 700;' 
+            : 'border-bottom: 3px solid transparent; color: var(--text-2);';
+
+          return `
+            <li class="custom-tab-header ${activeClass}" 
+                data-region="${regionName}" 
+                data-index="${itemIdx}-${idx}" 
+                onclick="switchCustomTab('${regionName}', '${itemIdx}-${idx}')" 
+                style="padding: 10px 4px; font-size: 13.5px; font-weight: 600; cursor: pointer; transition: all 0.2s; ${borderStyle}">
+              ${escapeHtml(compLabel)}
+            </li>
+          `;
+        }).join('');
+
+        const contentsHtml = item.components.map((comp, idx) => {
+          const displayStyle = idx === 0 ? 'display: block;' : 'display: none;';
+          const componentHtml = renderSingleComponent(comp, true);
+
+          return `
+            <div class="custom-tab-content-${regionName}-${itemIdx}" id="tab-content-${regionName}-${itemIdx}-${idx}" data-mount-id="comp-mount-${regionName}-${item.originalIndices[idx]}" style="${displayStyle}">
+              ${componentHtml}
+            </div>
+          `;
+        }).join('');
+
+        return `
+          <div class="card custom-tab-container" style="background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-md); box-shadow: var(--shadow-sm); overflow: hidden; margin-bottom: 16px;">
+            <ul class="custom-tab-nav" style="display: flex; gap: 24px; border-bottom: 1px solid var(--border); margin: 0; padding: 0 20px; list-style: none; background: transparent;">
+              ${headersHtml}
+            </ul>
+            <div class="custom-tab-contents" style="padding: 20px;">
+              ${contentsHtml}
+            </div>
+          </div>
+        `;
+      } else {
+        return `
+          <div id="comp-container-${regionName}-${item.index}" data-mount-id="comp-mount-${regionName}-${item.index}">
+            ${renderSingleComponent(item.component, false)}
+          </div>
+        `;
+      }
+    }).join('');
   };
 
   let layoutHtml = '';
@@ -4885,6 +4892,26 @@ function renderRecordDetailPage(
     </div>
   `;
   applyPermissionGuards(objectName);
+
+  // Trigger mount lifecycle on all preloaded components
+  if (pageConfig && pageConfig.regions) {
+    Object.keys(pageConfig.regions).forEach(r => {
+      const comps = pageConfig.regions[r] || [];
+      const resolvedCount = comps.map(c => typeof c === 'string' ? { name: c, visible: true } : c).filter(c => c.visible !== false).length;
+      const isTabbed = (r === 'left' || r === 'right' || r === 'main' || r === 'bottom') && resolvedCount > 1;
+      
+      comps.forEach((c, idx) => {
+        const comp = typeof c === 'string' ? { name: c } : c;
+        const compInstance = CRM_COMPONENT_CACHE.get(comp.name);
+        if (compInstance && typeof compInstance.mount === 'function') {
+          const container = document.querySelector(`[data-mount-id="comp-mount-${r}-${idx}"]`) || document.getElementById(isTabbed ? `tab-content-${r}-${idx}` : `comp-container-${r}-${idx}`);
+          if (container) {
+            compInstance.mount(container, comp, { objectName, id });
+          }
+        }
+      });
+    });
+  }
 }
 
 function toggleCardCollapse(btnEl) {
@@ -5118,19 +5145,42 @@ function relatedListSubtitle(objectName) {
 async function loadRelatedRecords(objectName, id) {
   const pageConfig = RECORD_PAGE_CACHE[objectName];
   let configs = [];
+  let hasRelatedListsComp = false;
   
   if (pageConfig && pageConfig.regions) {
     for (const r of Object.keys(pageConfig.regions)) {
       const list = pageConfig.regions[r] || [];
-      const found = list.find(c => c && typeof c === 'object' && c.name === 'related-lists');
-      if (found && found.relatedLists && found.relatedLists.length > 0) {
-        configs = found.relatedLists.filter(c => c && c.enabled);
-        break;
-      }
+      list.forEach(c => {
+        if (c && typeof c === 'object') {
+          if (c.name === 'related-lists') {
+            hasRelatedListsComp = true;
+            if (c.relatedLists && c.relatedLists.length > 0) {
+              configs.push(...c.relatedLists.filter(rl => rl && rl.enabled));
+            }
+          } else if (c.name === 'related-list-single' && c.config) {
+            const key = c.config.key || `${c.config.relationshipName.toLowerCase()}_single_${r}`;
+            configs.push({
+              key: key,
+              objectName: c.config.childObject,
+              relationshipName: c.config.relationshipName,
+              field: c.config.field,
+              title: c.config.title || c.title || c.config.relationshipName,
+              fields: c.config.fields || [],
+              limit: c.config.limit || 5,
+              sortBy: c.config.sortBy,
+              sortDir: c.config.sortDir || 'ASC',
+              showNew: c.config.showNew !== false,
+              showViewAll: c.config.showViewAll !== false,
+              showEdit: c.config.showEdit !== false,
+              showDelete: c.config.showDelete !== false
+            });
+          }
+        }
+      });
     }
   }
 
-  if (configs.length === 0) {
+  if (configs.length === 0 && !hasRelatedListsComp) {
     configs = getRelatedListConfigs(objectName);
   }
 
@@ -5174,7 +5224,68 @@ function renderRelatedList(config, list) {
   }
 
   const showViewAll = config.showViewAll !== false;
-  const hasMore = Number(list.totalSize || records.length) > records.length;
+  const isSingleCard = config.key.startsWith('rel_single_');
+  const totalCount = Number(list.totalSize || records.length);
+
+  if (isSingleCard) {
+    const maxDisplay = 3;
+    const displayRecords = records.slice(0, maxDisplay);
+
+    const cardsHtml = displayRecords.map(record => {
+      const primaryVal = getValue(record, "Name") || getValue(record, "CaseNumber") || "-";
+      const detailFields = (config.fields || ['Name']).filter(f => f !== 'Name' && f !== 'CaseNumber' && f !== 'Id');
+      
+      const fieldsHtml = detailFields.map(f => {
+        const label = labelFor(f);
+        const valHtml = renderRelatedCell(config.objectName, record, f);
+        return `
+          <div style="display: grid; grid-template-columns: 80px 1fr; gap: 8px; margin-bottom: 4px; font-size: 12px; line-height: 1.4;">
+            <span style="color: var(--text-secondary); font-weight: 500;">${escapeHtml(label)}:</span>
+            <span style="color: var(--text-primary); font-weight: 400; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${valHtml}</span>
+          </div>
+        `;
+      }).join('');
+
+      return `
+        <div class="related-card-item" style="padding: 12px 16px; border-bottom: 1px solid var(--border); transition: background-color 0.2s;" onmouseover="this.style.backgroundColor='var(--surface-2)'" onmouseout="this.style.backgroundColor='transparent'">
+          <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px;">
+            <div style="display: flex; align-items: center; gap: 8px;">
+              <div style="transform: scale(0.7); transform-origin: center; display: inline-flex; width: 24px; height: 24px; align-items: center; justify-content: center;">
+                ${objectIcon(config.objectName, record)}
+              </div>
+              <button class="cell-button-link" style="font-size: 13px; font-weight: 600;" onclick="openRecordDetail('${config.objectName}', '${escapeJs(record.Id)}')">
+                ${escapeHtml(primaryVal)}
+              </button>
+            </div>
+            <button class="btn btn-icon-only btn-ghost-link" style="padding: 2px; font-size: 12px; color: var(--text-muted);">
+              <svg class="slds-button__icon" viewBox="0 0 24 24" style="width: 14px; height: 14px; fill: var(--text-muted);"><path d="M12 15a1 1 0 01-.7-.3l-6-6a1 1 0 011.4-1.4l5.3 5.3 5.3-5.3a1 1 0 011.4 1.4l-6 6a1 1 0 01-.7.3z"/></svg>
+            </button>
+          </div>
+          <div style="padding-left: 32px;">
+            ${fieldsHtml}
+          </div>
+        </div>
+      `;
+    }).join('');
+
+    const showViewAllLink = showViewAll && (totalCount > maxDisplay);
+
+    body.innerHTML = `
+      <div class="related-cards-list-wrap" style="display: flex; flex-direction: column; background: var(--surface);">
+        ${cardsHtml}
+      </div>
+      ${showViewAllLink ? `
+        <div class="related-view-all" style="padding: 10px 16px; border-top: 1px solid var(--border); text-align: center; background: var(--surface-2);">
+          <button class="cell-button-link" style="font-weight: 600; font-size: 12px;" onclick="viewAllRelatedRecords('${escapeJs(config.key)}')">
+            View All
+          </button>
+        </div>
+      ` : ""}
+    `;
+    return;
+  }
+
+  const hasMore = totalCount > records.length;
 
   body.innerHTML = `
     <div class="mini-table-wrap related-table-wrap">
@@ -6161,6 +6272,27 @@ function openRelatedCreate(configKey) {
       if (found && found.relatedLists) {
         config = found.relatedLists.find(item => item.key === configKey);
         if (config) break;
+      }
+      
+      const foundSingle = list.find(c => c && typeof c === 'object' && c.name === 'related-list-single' && c.config && (c.config.key === configKey || `${c.config.relationshipName.toLowerCase()}_single_${r}` === configKey));
+      if (foundSingle) {
+        config = {
+          key: foundSingle.config.key || `${foundSingle.config.relationshipName.toLowerCase()}_single_${r}`,
+          objectName: foundSingle.config.childObject,
+          relationshipName: foundSingle.config.relationshipName,
+          parentLookup: foundSingle.config.field,
+          field: foundSingle.config.field,
+          title: foundSingle.config.title || foundSingle.title || foundSingle.config.relationshipName,
+          fields: foundSingle.config.fields || [],
+          limit: foundSingle.config.limit || 5,
+          sortBy: foundSingle.config.sortBy,
+          sortDir: foundSingle.config.sortDir || 'ASC',
+          showNew: foundSingle.config.showNew !== false,
+          showViewAll: foundSingle.config.showViewAll !== false,
+          showEdit: foundSingle.config.showEdit !== false,
+          showDelete: foundSingle.config.showDelete !== false
+        };
+        break;
       }
     }
   }
@@ -8813,6 +8945,10 @@ document.addEventListener("DOMContentLoaded", async () => {
 });
 
 function switchCustomTab(regionName, activeIdx) {
+  if (typeof activeIdx === 'string' && activeIdx.includes('-')) {
+    switchCustomTabNew(regionName, activeIdx);
+    return;
+  }
   const contents = document.querySelectorAll(`.custom-tab-content-${regionName}`);
   contents.forEach((el, idx) => {
     el.style.display = idx === activeIdx ? 'block' : 'none';
@@ -8831,6 +8967,34 @@ function switchCustomTab(regionName, activeIdx) {
       el.style.color = 'var(--text-2)';
       el.style.fontWeight = '600';
     }
+  });
+}
+
+function switchCustomTabNew(regionName, tabPath) {
+  const parts = tabPath.split('-');
+  const itemIdx = parts[0];
+  const activeSubIdx = parseInt(parts[1]);
+
+  const headers = document.querySelectorAll(`.custom-tab-header[data-region="${regionName}"][data-index^="${itemIdx}-"]`);
+  headers.forEach(h => {
+    const idx = parseInt(h.getAttribute('data-index').split('-')[1]);
+    if (idx === activeSubIdx) {
+      h.classList.add('active');
+      h.style.borderBottom = '3px solid var(--accent)';
+      h.style.color = 'var(--accent)';
+      h.style.fontWeight = '700';
+    } else {
+      h.classList.remove('active');
+      h.style.borderBottom = '3px solid transparent';
+      h.style.color = 'var(--text-2)';
+      h.style.fontWeight = '600';
+    }
+  });
+
+  const contents = document.querySelectorAll(`.custom-tab-content-${regionName}-${itemIdx}`);
+  contents.forEach(c => {
+    const subIdx = parseInt(c.id.split('-').pop());
+    c.style.display = subIdx === activeSubIdx ? 'block' : 'none';
   });
 }
 
