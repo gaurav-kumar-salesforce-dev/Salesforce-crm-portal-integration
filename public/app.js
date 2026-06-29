@@ -557,11 +557,26 @@ let sfListViews = [];
 let searchTimer = null;
 let globalTimer = null;
 let lookupTimer = null;
-const CLIENT_CACHE_TTL_MS = 30 * 1000;
+const CLIENT_CACHE_TTL_MS = 10 * 60 * 1000;
+const RECENT_RECORD_CACHE_TTL_MS = 10 * 60 * 1000;
+const RECENT_RECORD_CACHE_MAX = 100;
+const SPA_STATE_STORAGE_KEY = "saasrayCrmSpaState:v1";
+const LIST_VIEW_CACHE_TTL_MS = 10 * 60 * 1000;
 const crmListCache = new Map();
+const recentRecordCache = new Map();
+const recordDetailInflight = new Map();
 const apiInFlightRequests = new Map();
 const crmBackgroundRefreshes = new Map();
 const crmPageStates = new Map();
+const listViewCache = new Map();
+const spaCacheStats = {
+  listHits: 0,
+  listMisses: 0,
+  pageRestores: 0,
+  recordHits: 0,
+  recordMisses: 0,
+  automaticRefreshesRemoved: 0,
+};
 const objectFieldMetadataCache = new Map();
 const sharedPerformanceCache = window.SaaSRAYPerformance || null;
 let restoringCrmHistory = false;
@@ -576,6 +591,8 @@ let visibleRecordCount = RENDER_CHUNK_SIZE;
 let loadingMoreRecords = false;
 let lazyObserver = null;
 let lazyLoadQueued = false;
+let listStateVersion = 0;
+let listRestoreInProgress = false;
 const VIRTUAL_ROW_ESTIMATE_PX = 57;
 const VIRTUAL_MIN_BUFFER_ROWS = 8;
 const VIRTUAL_MAX_BUFFER_ROWS = 40;
@@ -1144,6 +1161,56 @@ function cloneCacheValue(value) {
   }
 }
 
+function recentRecordCacheKey(objectName, id) {
+  return `${orgSettings.activeOrgKey || "default"}:${objectName}:${id}`;
+}
+
+function getRecentRecordCache(objectName, id) {
+  const key = recentRecordCacheKey(objectName, id);
+  const entry = recentRecordCache.get(key);
+  if (!entry || Date.now() - entry.timestamp > RECENT_RECORD_CACHE_TTL_MS) {
+    if (entry) recentRecordCache.delete(key);
+    spaCacheStats.recordMisses += 1;
+    return null;
+  }
+  recentRecordCache.delete(key);
+  recentRecordCache.set(key, entry);
+  spaCacheStats.recordHits += 1;
+  return cloneCacheValue(entry.value);
+}
+
+function setRecentRecordCache(objectName, id, value) {
+  const key = recentRecordCacheKey(objectName, id);
+  if (recentRecordCache.has(key)) recentRecordCache.delete(key);
+  recentRecordCache.set(key, {
+    timestamp: Date.now(),
+    value: cloneCacheValue(value)
+  });
+  while (recentRecordCache.size > RECENT_RECORD_CACHE_MAX) {
+    recentRecordCache.delete(recentRecordCache.keys().next().value);
+  }
+}
+
+function invalidateRecentRecordCache(objectName, id = '') {
+  if (!id) {
+    const prefix = `${orgSettings.activeOrgKey || "default"}:${objectName}:`;
+    for (const key of [...recentRecordCache.keys()]) {
+      if (key.startsWith(prefix)) recentRecordCache.delete(key);
+    }
+    return;
+  }
+  recentRecordCache.delete(recentRecordCacheKey(objectName, id));
+}
+
+function applyCachedRecordLayouts(cached) {
+  if (!cached?.layouts) return;
+  const { objectName, layout, compactLayout, recordPage } = cached.layouts;
+  if (!objectName) return;
+  if (layout) DB_LAYOUT_CACHE[objectName] = layout;
+  if (compactLayout) COMPACT_LAYOUT_CACHE[objectName] = compactLayout;
+  if (recordPage) RECORD_PAGE_CACHE[objectName] = recordPage;
+}
+
 function currentScrollPosition() {
   return window.scrollY || document.documentElement.scrollTop || document.body.scrollTop || 0;
 }
@@ -1169,8 +1236,10 @@ function getCrmListCache(key) {
   const entry = crmListCache.get(key);
   if (!entry || Date.now() - entry.timestamp > CLIENT_CACHE_TTL_MS) {
     if (entry) crmListCache.delete(key);
+    spaCacheStats.listMisses += 1;
     return null;
   }
+  spaCacheStats.listHits += 1;
   return cloneCacheValue(entry);
 }
 
@@ -1182,6 +1251,113 @@ function peekCrmListCache(key) {
   const entry = crmListCache.get(key);
   return entry ? cloneCacheValue(entry) : null;
 }
+
+function pruneCrmSpaCaches(now = Date.now()) {
+  for (const [key, entry] of crmListCache.entries()) {
+    if (!entry?.timestamp || now - entry.timestamp > CLIENT_CACHE_TTL_MS) {
+      crmListCache.delete(key);
+    }
+  }
+  for (const [key, state] of crmPageStates.entries()) {
+    if (!state?.timestamp || now - state.timestamp > CLIENT_CACHE_TTL_MS) {
+      crmPageStates.delete(key);
+    }
+  }
+  for (const [key, entry] of listViewCache.entries()) {
+    if (!entry?.timestamp || now - entry.timestamp > LIST_VIEW_CACHE_TTL_MS) {
+      listViewCache.delete(key);
+    }
+  }
+  for (const [key, entry] of recentRecordCache.entries()) {
+    if (!entry?.timestamp || now - entry.timestamp > RECENT_RECORD_CACHE_TTL_MS) {
+      recentRecordCache.delete(key);
+    }
+  }
+}
+
+function serializeMapForStorage(map) {
+  return Array.from(map.entries()).map(([key, value]) => [key, value]);
+}
+
+function restoreMapFromStorage(map, entries = []) {
+  map.clear();
+  entries.forEach(([key, value]) => {
+    if (key) map.set(key, value);
+  });
+}
+
+function persistCrmSpaState() {
+  if (!$("content")) return;
+  try {
+    captureCrmPageState(currentObject);
+    pruneCrmSpaCaches();
+    sessionStorage.setItem(
+      SPA_STATE_STORAGE_KEY,
+      JSON.stringify({
+        timestamp: Date.now(),
+        orgKey: orgSettings.activeOrgKey || "default",
+        currentObject,
+        currentViewId,
+        currentViewMode,
+        sortState,
+        selectedListRecordId,
+        crmListCache: serializeMapForStorage(crmListCache),
+        crmPageStates: serializeMapForStorage(crmPageStates),
+        listViewCache: serializeMapForStorage(listViewCache),
+        recentRecordCache: serializeMapForStorage(recentRecordCache),
+      }),
+    );
+  } catch (err) {
+    console.warn("CRM state persistence skipped:", err.message || err);
+  }
+}
+
+function persistCrmStateBeforeExternalNavigation(event) {
+  const target = event.target?.closest?.('a[href], button');
+  if (!target) return;
+  const href = target.getAttribute?.("href") || "";
+  const isCrmModuleExit =
+    href === "/reports.html" ||
+    href === "/dashboards.html" ||
+    target.id === "adminPanelBtn";
+  if (isCrmModuleExit) persistCrmSpaState();
+}
+
+function restoreCrmSpaStateFromStorage() {
+  try {
+    const raw = sessionStorage.getItem(SPA_STATE_STORAGE_KEY);
+    if (!raw) return false;
+    const state = JSON.parse(raw);
+    if (!state || Date.now() - state.timestamp > CLIENT_CACHE_TTL_MS) return false;
+    const activeOrgKey = orgSettings.activeOrgKey || "default";
+    if (state.orgKey && state.orgKey !== activeOrgKey) return false;
+    restoreMapFromStorage(crmListCache, state.crmListCache || []);
+    restoreMapFromStorage(crmPageStates, state.crmPageStates || []);
+    restoreMapFromStorage(listViewCache, state.listViewCache || []);
+    restoreMapFromStorage(recentRecordCache, state.recentRecordCache || []);
+    pruneCrmSpaCaches();
+    return true;
+  } catch (err) {
+    console.warn("CRM state restore skipped:", err.message || err);
+    return false;
+  }
+}
+
+function getSpaCacheStats() {
+  const listTotal = spaCacheStats.listHits + spaCacheStats.listMisses;
+  const recordTotal = spaCacheStats.recordHits + spaCacheStats.recordMisses;
+  return {
+    ...spaCacheStats,
+    listCacheSize: crmListCache.size,
+    pageStateSize: crmPageStates.size,
+    listViewCacheSize: listViewCache.size,
+    recordCacheSize: recentRecordCache.size,
+    listHitRatio: listTotal ? spaCacheStats.listHits / listTotal : 0,
+    recordHitRatio: recordTotal ? spaCacheStats.recordHits / recordTotal : 0,
+  };
+}
+
+window.getCrmSpaCacheStats = getSpaCacheStats;
 
 function normalizeCrmPayloadForCompare(payload = {}) {
   return {
@@ -1217,9 +1393,13 @@ function showBackgroundRefreshIndicator(show) {
 
 function refreshCrmCachePayload(entry) {
   if (!entry?.payload) return;
-  entry.payload.records = cloneCacheValue(currentRecords || []);
+  const nextRecords = Array.isArray(currentRecords) ? currentRecords : [];
+  const existingRecords = Array.isArray(entry.payload.records) ? entry.payload.records : [];
+  if (nextRecords.length || !existingRecords.length) {
+    entry.payload.records = cloneCacheValue(nextRecords);
+  }
   entry.payload.nextRecordsUrl = nextRecordsUrl || null;
-  entry.payload.totalSize = totalRecords || currentRecords.length;
+  entry.payload.totalSize = totalRecords || entry.payload.records.length;
   entry.payload.hiddenFields = Array.from(currentHiddenFields || []);
   entry.payload.columns = cloneCacheValue(currentColumns || []);
 }
@@ -1243,6 +1423,47 @@ function markCachedSelectedRecord(recordId) {
   entry.visibleRecordCount = visibleRecordCount;
 }
 
+function nextListStateVersion() {
+  listStateVersion += 1;
+  return listStateVersion;
+}
+
+function activeListCacheEntry() {
+  return loadData.activeCacheKey ? peekCrmListCache(loadData.activeCacheKey) : null;
+}
+
+function bestCrmListCacheForObject(objectName) {
+  const prefix = crmListCachePrefix(objectName);
+  let best = null;
+  for (const [key, entry] of crmListCache.entries()) {
+    if (!key.startsWith(prefix)) continue;
+    if (!entry?.payload || !Array.isArray(entry.payload.records)) continue;
+    if (!best || (entry.timestamp || 0) > (best.entry.timestamp || 0)) {
+      best = { key, entry };
+    }
+  }
+  return best ? { key: best.key, entry: cloneCacheValue(best.entry) } : null;
+}
+
+function applyListCacheEntry(entry) {
+  if (!entry?.payload || !Array.isArray(entry.payload.records)) return false;
+  applyCrmListPayload(entry.payload);
+  visibleRecordCount = entry.visibleRecordCount || visibleRecordCount || RENDER_CHUNK_SIZE;
+  selectedListRecordId = entry.selectedRecord || selectedListRecordId || null;
+  return true;
+}
+
+function hasRenderableListRows() {
+  return Array.isArray(currentRecords) && currentRecords.length > 0;
+}
+
+function isCurrentListRequest(version, objectName, cacheKey = "") {
+  if (version !== listStateVersion) return false;
+  if (objectName !== currentObject) return false;
+  if (cacheKey && loadData.activeCacheKey && cacheKey !== loadData.activeCacheKey) return false;
+  return true;
+}
+
 function cloneSetValues(setValue) {
   return Array.from(setValue || []);
 }
@@ -1264,8 +1485,23 @@ function crmObjectFromLocation() {
   return objectName && OBJECT_META[objectName] ? objectName : null;
 }
 
+function crmRouteFromLocation() {
+  const hash = decodeURIComponent(window.location.hash || "");
+  const recordMatch = hash.match(/^#record=([A-Za-z]+)\/([^/]+)$/);
+  if (recordMatch && OBJECT_META[recordMatch[1]]) {
+    return {
+      view: "record",
+      objectName: recordMatch[1],
+      recordId: recordMatch[2],
+    };
+  }
+  const objectName = crmObjectFromLocation();
+  if (objectName) return { view: "object", objectName };
+  return null;
+}
+
 function initialReadableObject() {
-  const requested = crmObjectFromLocation();
+  const requested = crmRouteFromLocation()?.objectName || crmObjectFromLocation();
   if (requested && canReadObject(requested)) return requested;
   return firstReadableNavObject() || currentObject;
 }
@@ -1275,11 +1511,33 @@ function writeCrmHistory(objectName, replace = false) {
   const hash = `#object=${encodeURIComponent(objectName)}`;
   if (window.location.hash === hash && history.state?.crmObject === objectName) return;
   const method = replace ? "replaceState" : "pushState";
-  history[method]({ ...(history.state || {}), crmObject: objectName }, "", hash);
+  history[method]({ ...(history.state || {}), crmObject: objectName, crmView: "object" }, "", hash);
+}
+
+function writeRecordHistory(objectName, recordId, replace = false) {
+  if (!objectName || !recordId || !OBJECT_META[objectName]) return;
+  const hash = `#record=${encodeURIComponent(objectName)}/${encodeURIComponent(recordId)}`;
+  if (
+    window.location.hash === hash &&
+    history.state?.crmObject === objectName &&
+    history.state?.crmRecordId === recordId
+  ) return;
+  const method = replace ? "replaceState" : "pushState";
+  history[method](
+    {
+      ...(history.state || {}),
+      crmObject: objectName,
+      crmView: "record",
+      crmRecordId: recordId,
+    },
+    "",
+    hash,
+  );
 }
 
 function captureCrmPageState(objectName = currentObject) {
   if (!objectName || !OBJECT_META[objectName] || !$("content")) return;
+  if (viewingDetail) return;
   rememberCurrentListCacheState();
   crmPageStates.set(objectName, {
     timestamp: Date.now(),
@@ -1308,48 +1566,54 @@ function captureCrmPageState(objectName = currentObject) {
 
 function restoreCrmPageState(objectName) {
   const state = crmPageStates.get(objectName);
-  if (!state || Date.now() - state.timestamp > CLIENT_CACHE_TTL_MS) return false;
-  if (state.activeCacheKey && !getCrmListCache(state.activeCacheKey)) return false;
+  const stateIsFresh = state && Date.now() - state.timestamp <= CLIENT_CACHE_TTL_MS;
+  const fallbackCache = bestCrmListCacheForObject(objectName);
+  const activeKey = (stateIsFresh && state.activeCacheKey) || fallbackCache?.key || "";
+  const cachedEntry = activeKey ? getCrmListCache(activeKey) || fallbackCache?.entry || null : fallbackCache?.entry || null;
+  if (!stateIsFresh && !cachedEntry) return false;
+  if (stateIsFresh && state.activeCacheKey && !cachedEntry && !fallbackCache) return false;
+  const entryMeta = cachedEntry || {};
 
+  listRestoreInProgress = true;
+  nextListStateVersion();
   currentObject = objectName;
-  currentRecords = cloneCacheValue(state.currentRecords || []);
-  currentColumns = cloneCacheValue(state.currentColumns || []);
-  currentHiddenFields = new Set(state.currentHiddenFields || []);
-  currentViewId = state.currentViewId || "all";
-  sfListViews = cloneCacheValue(state.sfListViews || []);
-  sortState = cloneCacheValue(state.sortState || { field: null, direction: "asc" });
-  totalRecords = state.totalRecords || 0;
-  nextRecordsUrl = state.nextRecordsUrl || null;
-  visibleRecordCount = state.visibleRecordCount || RENDER_CHUNK_SIZE;
-  currentViewMode = state.currentViewMode || "table";
+  currentRecords = cloneCacheValue(stateIsFresh ? state.currentRecords || [] : []);
+  currentColumns = cloneCacheValue(stateIsFresh ? state.currentColumns || [] : []);
+  currentHiddenFields = new Set(stateIsFresh ? state.currentHiddenFields || [] : []);
+  currentViewId = (stateIsFresh ? state.currentViewId : entryMeta.filters?.viewId) || "all";
+  sfListViews = cloneCacheValue(stateIsFresh ? state.sfListViews || [] : sfListViews || []);
+  sortState = cloneCacheValue((stateIsFresh ? state.sortState : entryMeta.sort) || { field: null, direction: "asc" });
+  totalRecords = stateIsFresh ? state.totalRecords || 0 : entryMeta.payload?.totalSize || 0;
+  nextRecordsUrl = stateIsFresh ? state.nextRecordsUrl || null : entryMeta.payload?.nextRecordsUrl || null;
+  visibleRecordCount = (stateIsFresh ? state.visibleRecordCount : entryMeta.visibleRecordCount) || RENDER_CHUNK_SIZE;
+  currentViewMode = (stateIsFresh ? state.currentViewMode : "table") || "table";
   loadingMoreRecords = false;
-  listContentHtml = state.listContentHtml || listContentHtml;
-  viewingDetail = Boolean(state.viewingDetail);
-  detailRecordState = cloneCacheValue(state.detailRecordState || null);
-  selectedListRecordId = state.selectedRecord || null;
-  loadData.activeCacheKey = state.activeCacheKey || "";
+  listContentHtml = (stateIsFresh ? state.listContentHtml : listContentHtml) || listContentHtml;
+  viewingDetail = false;
+  detailRecordState = null;
+  selectedListRecordId = (stateIsFresh ? state.selectedRecord : entryMeta.selectedRecord) || null;
+  loadData.activeCacheKey = activeKey || "";
+  if (cachedEntry) applyListCacheEntry(cachedEntry);
 
-  $("content").innerHTML = state.contentHtml;
+  const cachedListHtml = String(stateIsFresh ? state.contentHtml || "" : "");
+  $("content").innerHTML = cachedListHtml.includes('id="tableCard"')
+    ? cachedListHtml
+    : listContentHtml;
   const searchInput = $("objSearch");
-  if (searchInput) searchInput.value = state.search || "";
+  if (searchInput) searchInput.value = (stateIsFresh ? state.search : entryMeta.search) || "";
   const select = $("listViewSelect");
   if (select) select.value = currentViewId;
   setActiveNavObject(objectName);
   applyObjectNavGuards();
   updateViewToggle();
-  showActiveView();
+  clearObjectListLoadingState();
   applyPermissionGuards(objectName);
   if (!viewingDetail && currentViewMode === "table") {
     renderTable();
   }
-  updatePagination();
-  updateRecordCounts();
-  observeLazySentinel();
-  requestAnimationFrame(() => {
-    window.scrollTo(0, state.scrollPosition || 0);
-    scheduleVirtualTableRender(true);
-  });
-  queueLazyLoadIfNeeded();
+  finalizeCachedObjectListRestore((stateIsFresh ? state.scrollPosition : entryMeta.scrollPosition) || 0);
+  spaCacheStats.pageRestores += 1;
+  listRestoreInProgress = false;
   return true;
 }
 
@@ -1363,11 +1627,27 @@ async function restoreCrmObjectFromHistory(objectName) {
   }
 }
 
+async function restoreCrmRecordFromHistory(objectName, recordId) {
+  if (!objectName || !recordId || !OBJECT_META[objectName] || !canReadObject(objectName)) return;
+  restoringCrmHistory = true;
+  try {
+    if (objectName !== currentObject) {
+      captureCrmPageState(currentObject);
+      currentObject = objectName;
+      setActiveNavObject(objectName);
+    }
+    await openRecordDetail(objectName, recordId, { preserveHistory: true });
+  } finally {
+    restoringCrmHistory = false;
+  }
+}
+
 function invalidateCrmObjectCache(objectName) {
   const prefix = crmListCachePrefix(objectName);
   for (const key of crmListCache.keys()) {
     if (key.startsWith(prefix)) crmListCache.delete(key);
   }
+  listViewCache.delete(`${orgSettings.activeOrgKey || "default"}:${objectName}`);
   crmPageStates.delete(objectName);
   for (const key of apiInFlightRequests.keys()) {
     if (key.includes(`/api/${objectName}`)) apiInFlightRequests.delete(key);
@@ -1378,7 +1658,8 @@ function invalidateCrmObjectCache(objectName) {
 }
 
 function applyCrmListPayload(payload) {
-  currentRecords = payload.records || [];
+  if (!payload || !Array.isArray(payload.records)) return false;
+  currentRecords = payload.records;
   nextRecordsUrl = payload.nextRecordsUrl || null;
   totalRecords = payload.totalSize || currentRecords.length;
   currentHiddenFields = new Set(payload.hiddenFields || []);
@@ -1388,6 +1669,7 @@ function applyCrmListPayload(payload) {
     applyLocalView();
   }
   currentColumns = currentColumns.filter((field) => !currentHiddenFields.has(field));
+  return true;
 }
 
 async function fetchCrmListPayload(path, cacheKey, cacheMeta, forceRefresh = false) {
@@ -1417,11 +1699,17 @@ async function fetchCrmListPayload(path, cacheKey, cacheMeta, forceRefresh = fal
 async function refreshCrmListInBackground(path, cacheKey, cacheMeta) {
   if (crmBackgroundRefreshes.has(cacheKey)) return crmBackgroundRefreshes.get(cacheKey);
   const previousEntry = peekCrmListCache(cacheKey);
+  const refreshObject = cacheMeta?.objectName || currentObject;
+  const refreshVersion = listStateVersion;
   const request = api(path)
     .then(async (payload) => {
-      if (!payload || payload.error) return;
+      if (!payload || payload.error || !Array.isArray(payload.records)) return;
       const previousPayload = previousEntry?.payload || null;
-      const activeView = loadData.activeCacheKey === cacheKey && !viewingDetail;
+      const activeView =
+        loadData.activeCacheKey === cacheKey &&
+        !viewingDetail &&
+        currentObject === refreshObject &&
+        listStateVersion === refreshVersion;
       const previousColumns = cloneCacheValue(currentColumns || []);
       const scrollPosition = activeView ? currentScrollPosition() : previousEntry?.scrollPosition || 0;
       const visibleCount = activeView ? visibleRecordCount : previousEntry?.visibleRecordCount || RENDER_CHUNK_SIZE;
@@ -1439,7 +1727,7 @@ async function refreshCrmListInBackground(path, cacheKey, cacheMeta) {
 
       if (!activeView || sameCrmPayload(previousPayload, payload)) return;
 
-      applyCrmListPayload(payload);
+      if (!applyCrmListPayload(payload)) return;
       visibleRecordCount = visibleCount;
       applySort();
       if (currentViewMode === "kanban") {
@@ -1458,10 +1746,8 @@ async function refreshCrmListInBackground(path, cacheKey, cacheMeta) {
     })
     .finally(() => {
       crmBackgroundRefreshes.delete(cacheKey);
-      showBackgroundRefreshIndicator(false);
     });
   crmBackgroundRefreshes.set(cacheKey, request);
-  showBackgroundRefreshIndicator(true);
   return request;
 }
 
@@ -1618,8 +1904,9 @@ async function completePortalLogin(data) {
   setStoredPerms(data.permissions || {});
   window.portalUser = data.user;
   applyAllPermissionGuards();
+  const route = crmRouteFromLocation();
   currentObject = initialReadableObject();
-  writeCrmHistory(currentObject, true);
+  if (route?.view !== "record") writeCrmHistory(currentObject, true);
 
   hideLoginPage();
 
@@ -1632,6 +1919,11 @@ async function completePortalLogin(data) {
 
   applyAllPermissionGuards();
   await checkConnection();
+  if (route?.view === "record" && route.recordId) {
+    loadListViews().catch((err) => console.warn("List views warmup failed:", err.message || err));
+    await openRecordDetail(route.objectName, route.recordId, { preserveHistory: true });
+    return;
+  }
   await loadListViews();
   await loadData();
 }
@@ -2010,7 +2302,7 @@ async function openUserProfile() {
 
         <!-- Header -->
         <div style="display:flex;align-items:center;gap:16px;margin-bottom:28px">
-          <button class="btn btn-ghost btn-sm" onclick="restoreListContent()">
+          <button class="btn btn-ghost btn-sm" onclick="backToCurrentList()">
             ← Back
           </button>
           <h1 style="font-size:20px;font-weight:800">My Profile</h1>
@@ -2468,9 +2760,20 @@ async function loadListViews() {
     renderListViewSelect();
     return;
   }
+  const cacheKey = `${orgSettings.activeOrgKey || "default"}:${currentObject}`;
+  const cached = listViewCache.get(cacheKey);
+  if (cached && Date.now() - cached.timestamp <= LIST_VIEW_CACHE_TTL_MS) {
+    sfListViews = cloneCacheValue(cached.listviews || []);
+    renderListViewSelect();
+    return;
+  }
   try {
     const data = await api(`/api/${currentObject}/listviews`);
     sfListViews = data.listviews || [];
+    listViewCache.set(cacheKey, {
+      timestamp: Date.now(),
+      listviews: cloneCacheValue(sfListViews),
+    });
   } catch (err) {
     sfListViews = [];
   }
@@ -2537,8 +2840,13 @@ async function handleListViewChange(value) {
 async function loadData(options = {}) {
   const loadToken = Symbol("loadData");
   loadData.latestToken = loadToken;
+  const requestObject = currentObject;
+  const requestVersion = nextListStateVersion();
   rememberCurrentListCacheState();
   const forceRefresh = Boolean(options.forceRefresh);
+  let showedFullPageLoading = false;
+  let restoredOrRendered = false;
+  let loadFailed = false;
   const search = $("objSearch")?.value || "";
   const meta = OBJECT_META[currentObject];
   if (!meta || !canReadObject(currentObject)) {
@@ -2554,6 +2862,7 @@ async function loadData(options = {}) {
   currentColumns = meta.columns.slice();
   currentHiddenFields = new Set();
   await loadObjectFields(currentObject);
+  if (!isCurrentListRequest(requestVersion, requestObject)) return;
 
   $("pageIcon").innerHTML = objectIcon(currentObject);
   $("pageTitle").textContent = getCurrentViewName();
@@ -2596,30 +2905,38 @@ async function loadData(options = {}) {
       $("pageSub").textContent =
         `Loading ${meta.title.toLowerCase()} from Salesforce...`;
       $("stateLoading").style.display = "flex";
+      showedFullPageLoading = true;
       $("stateError").style.display = "none";
       $("tableCard").style.display = "none";
       if ($("kanbanCard")) $("kanbanCard").style.display = "none";
       updateViewToggle();
+    } else {
+      clearObjectListLoadingState({ showList: false });
     }
     const result = cachedEntry
       ? { payload: cachedEntry.payload, fromCache: true, meta: cachedEntry }
       : await fetchCrmListPayload(path, cacheKey, cacheMeta, forceRefresh);
+    if (!isCurrentListRequest(requestVersion, requestObject)) return;
     loadData.activeCacheKey = cacheKey;
-    applyCrmListPayload(result.payload || {});
+    if (!applyCrmListPayload(result.payload || {})) return;
 
-    if (viewingDetail || loadData.latestToken !== loadToken) return;
+    if (viewingDetail || loadData.latestToken !== loadToken || !isCurrentListRequest(requestVersion, requestObject, cacheKey)) return;
 
     visibleRecordCount = result.fromCache && result.meta?.visibleRecordCount
       ? result.meta.visibleRecordCount
       : RENDER_CHUNK_SIZE;
+    selectedListRecordId = result.fromCache && result.meta?.selectedRecord
+      ? result.meta.selectedRecord
+      : selectedListRecordId;
     applySort();
     await renderCurrentView();
-    if (viewingDetail || loadData.latestToken !== loadToken) return;
+    if (viewingDetail || loadData.latestToken !== loadToken || !isCurrentListRequest(requestVersion, requestObject, cacheKey)) return;
+    restoredOrRendered = true;
     updatePagination();
     updateBadge(currentObject, totalRecords || currentRecords.length);
     updateRecordCounts();
     if (!result.fromCache) await verifyListCountWhenSmall();
-    $("stateLoading").style.display = "none";
+    clearObjectListLoadingState({ showList: false });
     applyPermissionGuards(currentObject);
     showActiveView();
     if (result.fromCache && result.meta?.scrollPosition) {
@@ -2627,11 +2944,9 @@ async function loadData(options = {}) {
     }
     queueLazyLoadIfNeeded();
     captureCrmPageState(currentObject);
-    if (cachedEntry) {
-      refreshCrmListInBackground(path, cacheKey, cacheMeta);
-    }
  } catch (err) {
-    $('stateLoading').style.display = 'none';
+    loadFailed = true;
+    clearObjectListLoadingState({ showList: false, hideError: false });
     $('stateError').style.display   = 'flex';
 
     const isAuth  = /auth|oauth|token|unknown_error/i.test(err.message);
@@ -2670,6 +2985,10 @@ async function loadData(options = {}) {
 
     // Also show toast for quick visibility
     toast(detail, 'err', 10000);
+  } finally {
+    if (loadData.latestToken === loadToken && !viewingDetail && isCurrentListRequest(requestVersion, requestObject) && (showedFullPageLoading || restoredOrRendered)) {
+      clearObjectListLoadingState({ showList: restoredOrRendered, hideError: !loadFailed });
+    }
   }
 }
 
@@ -3451,10 +3770,13 @@ function lazyEndpoint(cursor) {
 
 async function loadMoreRecords() {
   if (loadingMoreRecords || !nextRecordsUrl) return false;
+  const requestObject = currentObject;
+  const requestVersion = listStateVersion;
   loadingMoreRecords = true;
   updatePagination();
   try {
     const data = await api(lazyEndpoint(nextRecordsUrl));
+    if (!isCurrentListRequest(requestVersion, requestObject)) return false;
     appendUniqueRecords(data.records || []);
     nextRecordsUrl = data.nextRecordsUrl || null;
     totalRecords = data.totalSize || totalRecords || currentRecords.length;
@@ -3554,6 +3876,45 @@ function updateRecordCounts() {
       : `${shown} shown`;
 }
 
+function clearObjectListLoadingState({ showList = true, hideError = true } = {}) {
+  const loading = $("stateLoading");
+  const error = $("stateError");
+  if (loading) loading.style.display = "none";
+  if (hideError && error) error.style.display = "none";
+  if (showList && !viewingDetail) showActiveView();
+}
+
+function restoreWindowScrollPosition(targetY = 0, attempts = 8) {
+  const desired = Math.max(0, Number(targetY) || 0);
+  const tryScroll = (remaining) => {
+    const maxScroll = Math.max(0, document.documentElement.scrollHeight - window.innerHeight);
+    window.scrollTo(0, Math.min(desired, maxScroll));
+    scheduleVirtualTableRender(true);
+    if (remaining <= 0) return;
+    const current = currentScrollPosition();
+    if (Math.abs(current - desired) <= 2 || maxScroll >= desired) {
+      requestAnimationFrame(() => {
+        window.scrollTo(0, Math.min(desired, Math.max(0, document.documentElement.scrollHeight - window.innerHeight)));
+        scheduleVirtualTableRender(true);
+      });
+      return;
+    }
+    requestAnimationFrame(() => tryScroll(remaining - 1));
+  };
+  requestAnimationFrame(() => tryScroll(attempts));
+}
+
+function finalizeCachedObjectListRestore(scrollPosition = 0) {
+  showActiveView();
+  clearObjectListLoadingState();
+  updatePagination();
+  updateRecordCounts();
+  observeLazySentinel();
+  restoreWindowScrollPosition(scrollPosition || 0);
+  queueLazyLoadIfNeeded();
+  captureCrmPageState(currentObject);
+}
+
 async function verifyListCountWhenSmall() {
   if (totalRecords > 100 || nextRecordsUrl) return;
   try {
@@ -3620,6 +3981,7 @@ async function switchObject(objectName) {
     closeSidebar();
     return;
   }
+  nextListStateVersion();
   currentObject = objectName;
   currentRecords = [];
   totalRecords = 0;
@@ -3637,18 +3999,36 @@ async function switchObject(objectName) {
   await loadData();
 }
 
-function restoreListContent(shouldLoad = true) {
+function restoreListContent(shouldLoad = false, options = {}) {
   if (!listContentHtml) return;
+  listRestoreInProgress = true;
+  nextListStateVersion();
   $("content").innerHTML = listContentHtml;
   viewingDetail = false;
   detailRecordState = null;
   setActiveNavObject(currentObject);
+  clearObjectListLoadingState();
+  applyListCacheEntry(activeListCacheEntry());
+  if (!options.preserveHistory && !restoringCrmHistory) {
+    writeCrmHistory(currentObject, true);
+  }
   if (shouldLoad) {
     renderListViewSelect();
+    listRestoreInProgress = false;
     loadData();
   } else {
-    captureCrmPageState(currentObject);
+    renderCurrentView()
+      .catch((err) => console.warn("List restore render failed:", err.message || err))
+      .finally(() => {
+        const entry = activeListCacheEntry();
+        finalizeCachedObjectListRestore(entry?.scrollPosition || 0);
+        listRestoreInProgress = false;
+      });
   }
+}
+
+function backToCurrentList() {
+  restoreListContent(false);
 }
 
 function updateBadge(objectName, count) {
@@ -3943,6 +4323,18 @@ const DB_LAYOUT_CACHE = {};
 
 const RECORD_PAGE_CACHE = {};
 
+function getDefaultRecordPageLayout() {
+  return {
+    layout: 'header-two-column',
+    regions: {
+      header: ['compact-layout'],
+      left: ['related-lists', 'details'],
+      right: ['activity', 'chatter'],
+      bottom: []
+    }
+  };
+}
+
 async function loadRecordPageForObject(objectName) {
   if (RECORD_PAGE_CACHE[objectName]) {
     return RECORD_PAGE_CACHE[objectName];
@@ -3957,15 +4349,7 @@ async function loadRecordPageForObject(objectName) {
     console.warn(`Failed to fetch record page layout for ${objectName}:`, err);
   }
 
-  const defaultPage = {
-    layout: 'header-two-column',
-    regions: {
-      header: ['compact-layout'],
-      left: ['related-lists', 'details'],
-      right: ['activity', 'chatter'],
-      bottom: []
-    }
-  };
+  const defaultPage = getDefaultRecordPageLayout();
   RECORD_PAGE_CACHE[objectName] = defaultPage;
   return defaultPage;
 }
@@ -4496,7 +4880,109 @@ async function preloadCrmComponent(name) {
   }
 }
 
-async function openRecordDetail(objectName, id) {
+function componentNamesForRecordPage(pageConfig) {
+  const names = new Set(['compact-layout', 'details']);
+  const regions = pageConfig?.regions || {};
+  Object.keys(regions).forEach((region) => {
+    (regions[region] || []).forEach((component) => {
+      if (typeof component === 'string') names.add(component);
+      else if (component?.name) names.add(component.name);
+    });
+  });
+  return names;
+}
+
+async function loadRecordDetailData(objectName, id) {
+  const cached = getRecentRecordCache(objectName, id);
+  if (cached?.data) {
+    applyCachedRecordLayouts(cached);
+    return cached.data;
+  }
+
+  const key = recentRecordCacheKey(objectName, id);
+  if (recordDetailInflight.has(key)) {
+    return cloneCacheValue(await recordDetailInflight.get(key));
+  }
+
+  const promise = api(`/api/${objectName}/${id}`)
+    .finally(() => recordDetailInflight.delete(key));
+  recordDetailInflight.set(key, promise);
+  return cloneCacheValue(await promise);
+}
+
+async function loadRecordLayoutBundle(objectName) {
+  const [layout, compactLayout, recordPage] = await Promise.all([
+    loadLayoutForObject(objectName),
+    loadCompactLayoutForObject(objectName),
+    loadRecordPageForObject(objectName)
+  ]);
+  return { objectName, layout, compactLayout, recordPage };
+}
+
+function buildRecordDetailViewModel(objectName, id, data) {
+  const record = data.record || {};
+  const fields = data.fields || [];
+  detailLookupLabels = data.lookupLabels || {};
+  const title = record.Name || record.Subject || record.CaseNumber || record.Email || id;
+  const displayFields = fields
+    .filter(
+      (field) =>
+        record[field.name] !== null &&
+        record[field.name] !== undefined &&
+        field.name !== "attributes",
+    )
+    .slice(0, 80);
+
+  return { record, fields, title, displayFields };
+}
+
+async function renderRecordDetailFromData(objectName, id, data) {
+  const { record, fields, title, displayFields } = buildRecordDetailViewModel(objectName, id, data);
+  const pageConfig = RECORD_PAGE_CACHE[objectName] || getDefaultRecordPageLayout();
+  await Promise.all(Array.from(componentNamesForRecordPage(pageConfig)).map(name => preloadCrmComponent(name)));
+
+  currentObject = objectName;
+  detailRecordState = {
+    objectName,
+    id,
+    record,
+    fields,
+    recordAccess: data.recordAccess || { allowed: true, accessLevel: "read" },
+  };
+  setActiveNavObject(objectName);
+  renderRecordDetailPage(objectName, record, fields, displayFields, title, id);
+  captureCrmPageState(objectName);
+  return { record, fields };
+}
+
+function loadRecordSecondaryComponents(objectName, id, record) {
+  if (detailRecordState?.objectName !== objectName || detailRecordState?.id !== id) return;
+  const hasRelated = document.querySelector('.record-related-card') ||
+    document.querySelector('.record-related-card-container') ||
+    document.querySelector('[id^="relatedList-"]');
+  const hasActivity = document.getElementById('activityTimeline');
+  const hasChatter = document.getElementById('chatterFeed');
+
+  if (hasRelated) {
+    loadRelatedRecords(objectName, id).catch((err) => console.warn("Related records load failed:", err.message || err));
+    if (objectName === "Campaign") {
+      activeCampaign = record;
+      loadCampaignMembers(id).catch((err) => console.warn("Campaign members load failed:", err.message || err));
+    }
+  }
+  if (hasActivity) {
+    loadRecordActivity(objectName, id).catch((err) => console.warn("Activity load failed:", err.message || err));
+  }
+  if (hasChatter) {
+    setTimeout(() => {
+      if (detailRecordState?.objectName === objectName && detailRecordState?.id === id) {
+        loadChatterFeed().catch((err) => console.warn("Chatter load failed:", err.message || err));
+      }
+    }, 0);
+  }
+}
+
+async function openRecordDetail(objectName, id, options = {}) {
   if (!id || !OBJECT_META[objectName]) return;
   markCachedSelectedRecord(id);
   if (!canReadObject(objectName)) {
@@ -4505,96 +4991,58 @@ async function openRecordDetail(objectName, id) {
   }
 
   try {
-    $("content").innerHTML = `
-      <div class="state-box">
-        <div class="spinner-ring"><div></div><div></div><div></div><div></div></div>
-        <p>Loading record detail...</p>
-      </div>
-    `;
+    captureCrmPageState(currentObject);
+    if (!options.preserveHistory && !restoringCrmHistory) {
+      writeRecordHistory(objectName, id);
+    }
     viewingDetail = true;
 
-    const [data] = await Promise.all([
-      api(`/api/${objectName}/${id}`),
-      loadLayoutForObject(objectName),
-      loadCompactLayoutForObject(objectName),
-      loadRecordPageForObject(objectName)
-    ]);
-
-    const pageConfig = RECORD_PAGE_CACHE[objectName] || getDeveloperDefaultLayout(objectName);
-    const componentNames = new Set(['compact-layout', 'details', 'activity', 'chatter', 'related-lists', 'related-list-single']);
-    if (pageConfig && pageConfig.regions) {
-      Object.keys(pageConfig.regions).forEach(r => {
-        (pageConfig.regions[r] || []).forEach(c => {
-          if (typeof c === 'string') componentNames.add(c);
-          else if (c && c.name) componentNames.add(c.name);
-        });
-      });
+    const cached = getRecentRecordCache(objectName, id);
+    if (!cached?.data) {
+      $("content").innerHTML = `
+        <div class="state-box">
+          <div class="spinner-ring"><div></div><div></div><div></div><div></div></div>
+          <p>Loading record detail...</p>
+        </div>
+      `;
     }
-    await Promise.all(Array.from(componentNames).map(name => preloadCrmComponent(name)));
+    if (cached) applyCachedRecordLayouts(cached);
+    const recordPromise = cached?.data
+      ? Promise.resolve(cached.data)
+      : loadRecordDetailData(objectName, id);
+    const layoutPromise = loadRecordLayoutBundle(objectName);
 
-    const record = data.record || {};
-    const fields = data.fields || [];
-    detailLookupLabels = data.lookupLabels || {};
-    const title =
-      record.Name || record.Subject || record.CaseNumber || record.Email || id;
-    const displayFields = fields
-      .filter(
-        (field) =>
-          record[field.name] !== null &&
-          record[field.name] !== undefined &&
-          field.name !== "attributes",
-      )
-      .slice(0, 80);
-
-    currentObject = objectName;
-    detailRecordState = {
-      objectName,
-      id,
-      record,
-      fields,
-      recordAccess: data.recordAccess || { allowed: true, accessLevel: "read" },
-    };
-    setActiveNavObject(objectName);
-    renderRecordDetailPage(
-      objectName,
-      record,
-      fields,
-      displayFields,
-      title,
-      id,
-    );
-
-    const promises = [];
-    const hasActivity = document.getElementById('activityTimeline');
-    const hasChatter = document.getElementById('chatterFeed');
-    
-    // Check if related list configs exist and we have the related card rendered
-    const hasRelated = document.querySelector('.record-related-card') || 
-                       document.querySelector('.record-related-card-container') || 
-                       document.querySelector('[id^="relatedList-"]');
-    
-    if (hasRelated) {
-      promises.push(loadRelatedRecords(objectName, id));
-      if (objectName === "Campaign") {
-        activeCampaign = record;
-        promises.push(loadCampaignMembers(id));
+    const data = await recordPromise;
+    const rendered = await renderRecordDetailFromData(objectName, id, data);
+    setRecentRecordCache(objectName, id, {
+      data,
+      layouts: {
+        objectName,
+        layout: DB_LAYOUT_CACHE[objectName] || LAYOUT_CACHE[objectName] || null,
+        compactLayout: COMPACT_LAYOUT_CACHE[objectName] || null,
+        recordPage: RECORD_PAGE_CACHE[objectName] || null
       }
-    }
-    if (hasActivity) {
-      promises.push(loadRecordActivity(objectName, id));
-    }
-    if (hasChatter) {
-      promises.push(loadChatterFeed());
-    }
-    await Promise.all(promises);
+    });
 
-    captureCrmPageState(objectName);
+    layoutPromise
+      .then(async (layouts) => {
+        if (detailRecordState?.objectName !== objectName || detailRecordState?.id !== id) return;
+        applyCachedRecordLayouts({ layouts });
+        setRecentRecordCache(objectName, id, { data, layouts });
+        await renderRecordDetailFromData(objectName, id, data);
+        loadRecordSecondaryComponents(objectName, id, rendered.record);
+      })
+      .catch((err) => {
+        console.warn("Record layout load failed:", err.message || err);
+        setRecentRecordCache(objectName, id, { data });
+        loadRecordSecondaryComponents(objectName, id, rendered.record);
+      });
   } catch (err) {
     $("content").innerHTML = `
       <div class="state-box error-state">
         <h3>Could not load record</h3>
         <p>${escapeHtml(err.message)}</p>
-        <button class="btn btn-ghost" onclick="restoreListContent()">Back to List</button>
+        <button class="btn btn-ghost" onclick="backToCurrentList()">Back to List</button>
       </div>
     `;
   }
@@ -4878,7 +5326,8 @@ function renderRecordDetailPage(
             </div>
           </div>
           <div class="page-actions" style="display: flex; gap: 8px; align-items: center;">
-            <button class="btn btn-ghost" onclick="restoreListContent()">Back</button>
+            <button class="btn btn-ghost" onclick="backToCurrentList()">Back</button>
+            <button class="btn btn-primary" onclick="editCurrentDetailRecord()">Edit</button>
           </div>
         </div>
       </div>
@@ -7986,6 +8435,7 @@ function setRecordSaveState(isSaving, objectName = currentObject) {
 
 async function refreshAfterSave(objectName, savedRecord, wasEditing) {
   const startedAt = performance.now();
+  if (savedRecord?.Id) invalidateRecentRecordCache(objectName, savedRecord.Id);
   if (viewingDetail && detailRecordState && wasEditing) {
     const mergedRecord = { ...detailRecordState.record, ...savedRecord };
     const fields = detailRecordState.fields || [];
@@ -8849,6 +9299,7 @@ document.addEventListener("click", (event) => {
   if (!event.target.closest(".profile-menu")) closeProfileMenu();
   if (!event.target.closest(".kanban-item")) closeKanbanMenus();
 });
+document.addEventListener("click", persistCrmStateBeforeExternalNavigation, true);
 
 document.addEventListener(
   "scroll",
@@ -8865,18 +9316,45 @@ window.addEventListener("resize", () => {
   queueLazyLoadIfNeeded();
 });
 window.addEventListener("scroll", handleLazyScroll, { passive: true });
-window.addEventListener("popstate", () => {
-  const objectName = history.state?.crmObject || crmObjectFromLocation();
-  if (objectName && objectName !== currentObject) {
-    restoreCrmObjectFromHistory(objectName);
+window.addEventListener("pagehide", persistCrmSpaState);
+window.addEventListener("beforeunload", persistCrmSpaState);
+window.addEventListener("pageshow", (event) => {
+  if (!event.persisted) return;
+  restoreCrmSpaStateFromStorage();
+  const route = crmRouteFromLocation();
+  const objectName = route?.objectName || crmObjectFromLocation() || currentObject;
+  if (route?.view === "object" && objectName) {
+    restoreCrmPageState(objectName);
   }
 });
-window.addEventListener("focus", () => {
-  if (viewingDetail || !loadData.activeCacheKey || !getCrmListCache(loadData.activeCacheKey)) return;
-  loadData({ forceRefresh: true }).catch((err) =>
-    console.warn("Background refresh failed:", err.message || err),
-  );
+window.addEventListener("popstate", () => {
+  const route = history.state?.crmView
+    ? {
+        view: history.state.crmView,
+        objectName: history.state.crmObject,
+        recordId: history.state.crmRecordId,
+      }
+    : crmRouteFromLocation();
+  if (route?.view === "record" && route.objectName && route.recordId) {
+    restoreCrmRecordFromHistory(route.objectName, route.recordId);
+    return;
+  }
+  const objectName = route?.objectName || crmObjectFromLocation();
+  if (objectName) {
+    if (viewingDetail && objectName === currentObject) {
+      restoringCrmHistory = true;
+      restoreListContent(false, { preserveHistory: true });
+      restoringCrmHistory = false;
+      return;
+    }
+    if (objectName !== currentObject) {
+      restoreCrmObjectFromHistory(objectName);
+    } else if (!viewingDetail && !hasRenderableListRows()) {
+      restoreCrmPageState(objectName);
+    }
+  }
 });
+spaCacheStats.automaticRefreshesRemoved += 1;
 
 document.addEventListener("DOMContentLoaded", async () => {
   sharedPerformanceCache?.markModuleInitialized?.("crm");
@@ -8909,8 +9387,9 @@ document.addEventListener("DOMContentLoaded", async () => {
   }
   // Token exists — load cached perms immediately (so UI guards work instantly)
   window.userPerms = getStoredPerms();
+  let route = crmRouteFromLocation();
   currentObject = initialReadableObject();
-  writeCrmHistory(currentObject, true);
+  if (route?.view !== "record") writeCrmHistory(currentObject, true);
   applyAllPermissionGuards();
 
   // Then boot the app normally
@@ -8918,21 +9397,31 @@ document.addEventListener("DOMContentLoaded", async () => {
     .then(() => checkConnection())
     .then(async (connection) => {
       if (connection?.success) {
+        restoreCrmSpaStateFromStorage();
         // Refresh permissions from server (in case they changed)
         try {
           const me = await api("/api/portal/me");
           if (me) {
             setStoredPerms(me.permissions || {});
             window.portalUser = me;
+            route = crmRouteFromLocation();
             currentObject = initialReadableObject();
-            writeCrmHistory(currentObject, true);
+            if (route?.view !== "record") writeCrmHistory(currentObject, true);
             applyAllPermissionGuards();
           }
         } catch {
           // If /portal/me fails, cached perms are still used
         }
-        await loadListViews();
-        await loadData();
+        if (route?.view === "record" && route.recordId) {
+          loadListViews().catch((err) => console.warn("List views warmup failed:", err.message || err));
+          await openRecordDetail(route.objectName, route.recordId, { preserveHistory: true });
+          return;
+        }
+        const restoredPage = route?.view === "object" && restoreCrmPageState(currentObject);
+        if (!restoredPage) {
+          await loadListViews();
+          await loadData();
+        }
       }
     });
 });

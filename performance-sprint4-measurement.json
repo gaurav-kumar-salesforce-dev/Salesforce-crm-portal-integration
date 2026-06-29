@@ -1,0 +1,569 @@
+{
+  "user": {
+    "id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+    "role": "system_administrator",
+    "isSystemAdmin": true
+  },
+  "record": {
+    "object": "Account",
+    "id": "001C100000R25I7IAJ",
+    "name": "Acme Consulting 1392"
+  },
+  "baselineFromAudit": {
+    "recordOpenMs": 1800,
+    "targetPerceivedMs": 700
+  },
+  "calls": [
+    {
+      "label": "reset perf audit",
+      "path": "/api/debug/performance-audit/reset",
+      "status": 200,
+      "ms": 974.8,
+      "perfRequestId": "05ccdf7b-49c0-4b0c-a979-2f7fda2b084c"
+    },
+    {
+      "label": "invalidate layout cache",
+      "path": "/api/debug/layout-cache/invalidate",
+      "status": 200,
+      "ms": 728.05,
+      "perfRequestId": "7b613341-b7d9-4672-be1f-55447f820930"
+    },
+    {
+      "label": "warm user context",
+      "path": "/api/portal/me",
+      "status": 200,
+      "ms": 1436.36,
+      "perfRequestId": "66a3b6c2-42cb-4e83-b876-c8707669b7cf"
+    },
+    {
+      "label": "warm Account metadata",
+      "path": "/api/Account/fields",
+      "status": 200,
+      "ms": 1835.67,
+      "perfRequestId": "974faf9f-9d46-4785-ba5f-5d7c8c87008d"
+    },
+    {
+      "label": "record cold",
+      "path": "/api/Account/001C100000R25I7IAJ",
+      "status": 200,
+      "ms": 1046.79,
+      "perfRequestId": "06cb2c65-0505-480e-9dc9-d8bc6b0d24f2"
+    },
+    {
+      "label": "layout cold",
+      "path": "/api/portal/layouts/Account",
+      "status": 200,
+      "ms": 1624.18,
+      "perfRequestId": "e7f5bc0c-7274-471f-a4a5-31e8054c41d1"
+    },
+    {
+      "label": "compact cold",
+      "path": "/api/portal/compact-layouts/Account",
+      "status": 200,
+      "ms": 1093.28,
+      "perfRequestId": "40d2858e-3f49-4952-aa57-ee3faa8071e5"
+    },
+    {
+      "label": "record page cold",
+      "path": "/api/portal/record-pages/Account",
+      "status": 200,
+      "ms": 1086.47,
+      "perfRequestId": "d954dc1a-cfc0-4f8d-b6c0-14d35627c468"
+    },
+    {
+      "label": "related async",
+      "path": "/api/Account/001C100000R25I7IAJ/related",
+      "status": 200,
+      "ms": 2382.58,
+      "perfRequestId": "1cb2919f-31e0-4de3-a52e-8ef5fc4a6262"
+    },
+    {
+      "label": "activity async",
+      "path": "/api/Account/001C100000R25I7IAJ/activity",
+      "status": 200,
+      "ms": 1085.25,
+      "perfRequestId": "0766dc15-b921-4ee5-afbb-af55ff8f6014"
+    },
+    {
+      "label": "chatter async",
+      "path": "/api/Account/001C100000R25I7IAJ/chatter",
+      "status": 200,
+      "ms": 1156.66,
+      "perfRequestId": "476c124a-c851-4bfd-9194-6d0bb10f88f7"
+    },
+    {
+      "label": "record warm",
+      "path": "/api/Account/001C100000R25I7IAJ",
+      "status": 200,
+      "ms": 735.9,
+      "perfRequestId": "fac21b53-9dcb-46f3-beed-34162bdf3d23"
+    },
+    {
+      "label": "layout warm",
+      "path": "/api/portal/layouts/Account",
+      "status": 200,
+      "ms": 714.48,
+      "perfRequestId": "e482af0f-2dfb-4294-9cda-fbd1985ca06d"
+    },
+    {
+      "label": "compact warm",
+      "path": "/api/portal/compact-layouts/Account",
+      "status": 200,
+      "ms": 731.23,
+      "perfRequestId": "3d387546-dfdc-4348-a4c4-ca79c695272b"
+    },
+    {
+      "label": "record page warm",
+      "path": "/api/portal/record-pages/Account",
+      "status": 200,
+      "ms": 718.19,
+      "perfRequestId": "2507ed1a-1a24-414e-a9e2-59bd250849f8"
+    },
+    {
+      "label": "duplicate record 1",
+      "path": "/api/Account/001C100000R25I7IAJ",
+      "status": 200,
+      "ms": 728.04,
+      "perfRequestId": "dec639f5-81c3-41f4-8307-ed992d22d58a"
+    },
+    {
+      "label": "duplicate record 2",
+      "path": "/api/Account/001C100000R25I7IAJ",
+      "status": 200,
+      "ms": 699.2,
+      "perfRequestId": "40db719c-065b-48af-9069-e3887c19138a"
+    },
+    {
+      "label": "duplicate record 3",
+      "path": "/api/Account/001C100000R25I7IAJ",
+      "status": 200,
+      "ms": 739.23,
+      "perfRequestId": "bdf9be08-a161-41e9-838f-12ad09b41420"
+    }
+  ],
+  "requestSummaries": [
+    {
+      "path": "/api/Account/001C100000R25I7IAJ",
+      "totalMs": 1043.26,
+      "counts": {
+        "supabase": 2,
+        "salesforce": 2,
+        "permission": 1,
+        "sharing": 0,
+        "layout": 0,
+        "metadata": 0,
+        "related": 0,
+        "activity": 0,
+        "chatter": 0
+      },
+      "totals": {
+        "node": 1043.26,
+        "supabase": 738.56,
+        "salesforce": 297.16,
+        "permission": 0.01,
+        "sharing": 0,
+        "layout": 0,
+        "metadata": 0,
+        "related": 0,
+        "activity": 0,
+        "chatter": 0
+      }
+    },
+    {
+      "path": "/api/portal/record-pages/Account",
+      "totalMs": 1073.93,
+      "counts": {
+        "supabase": 3,
+        "salesforce": 0,
+        "permission": 0,
+        "sharing": 0,
+        "layout": 0,
+        "metadata": 0,
+        "related": 0,
+        "activity": 0,
+        "chatter": 0
+      },
+      "totals": {
+        "node": 1073.93,
+        "supabase": 1070.79,
+        "salesforce": 0,
+        "permission": 0,
+        "sharing": 0,
+        "layout": 0,
+        "metadata": 0,
+        "related": 0,
+        "activity": 0,
+        "chatter": 0
+      }
+    },
+    {
+      "path": "/api/portal/compact-layouts/Account",
+      "totalMs": 1081.52,
+      "counts": {
+        "supabase": 3,
+        "salesforce": 0,
+        "permission": 0,
+        "sharing": 0,
+        "layout": 0,
+        "metadata": 0,
+        "related": 0,
+        "activity": 0,
+        "chatter": 0
+      },
+      "totals": {
+        "node": 1081.52,
+        "supabase": 1079.66,
+        "salesforce": 0,
+        "permission": 0,
+        "sharing": 0,
+        "layout": 0,
+        "metadata": 0,
+        "related": 0,
+        "activity": 0,
+        "chatter": 0
+      }
+    },
+    {
+      "path": "/api/portal/layouts/Account",
+      "totalMs": 1608.78,
+      "counts": {
+        "supabase": 3,
+        "salesforce": 0,
+        "permission": 0,
+        "sharing": 0,
+        "layout": 0,
+        "metadata": 0,
+        "related": 0,
+        "activity": 0,
+        "chatter": 0
+      },
+      "totals": {
+        "node": 1608.78,
+        "supabase": 1604.59,
+        "salesforce": 0,
+        "permission": 0,
+        "sharing": 0,
+        "layout": 0,
+        "metadata": 0,
+        "related": 0,
+        "activity": 0,
+        "chatter": 0
+      }
+    },
+    {
+      "path": "/api/Account/001C100000R25I7IAJ/activity",
+      "totalMs": 1081.78,
+      "counts": {
+        "supabase": 2,
+        "salesforce": 3,
+        "permission": 1,
+        "sharing": 0,
+        "layout": 0,
+        "metadata": 0,
+        "related": 0,
+        "activity": 0,
+        "chatter": 0
+      },
+      "totals": {
+        "node": 1081.78,
+        "supabase": 721.78,
+        "salesforce": 842.23,
+        "permission": 0.01,
+        "sharing": 0,
+        "layout": 0,
+        "metadata": 0,
+        "related": 0,
+        "activity": 0,
+        "chatter": 0
+      }
+    },
+    {
+      "path": "/api/Account/001C100000R25I7IAJ/chatter",
+      "totalMs": 1152.1,
+      "counts": {
+        "supabase": 2,
+        "salesforce": 0,
+        "permission": 0,
+        "sharing": 0,
+        "layout": 0,
+        "metadata": 0,
+        "related": 0,
+        "activity": 0,
+        "chatter": 1
+      },
+      "totals": {
+        "node": 1152.1,
+        "supabase": 736.56,
+        "salesforce": 0,
+        "permission": 0,
+        "sharing": 0,
+        "layout": 0,
+        "metadata": 0,
+        "related": 0,
+        "activity": 0,
+        "chatter": 412.67
+      }
+    },
+    {
+      "path": "/api/Account/001C100000R25I7IAJ/related",
+      "totalMs": 2378.75,
+      "counts": {
+        "supabase": 3,
+        "salesforce": 5,
+        "permission": 1,
+        "sharing": 0,
+        "layout": 0,
+        "metadata": 3,
+        "related": 0,
+        "activity": 0,
+        "chatter": 0
+      },
+      "totals": {
+        "node": 2378.75,
+        "supabase": 1134.21,
+        "salesforce": 780.82,
+        "permission": 0.01,
+        "sharing": 0,
+        "layout": 0,
+        "metadata": 1817.28,
+        "related": 0,
+        "activity": 0,
+        "chatter": 0
+      }
+    },
+    {
+      "path": "/api/portal/layouts/Account",
+      "totalMs": 709.7,
+      "counts": {
+        "supabase": 2,
+        "salesforce": 0,
+        "permission": 0,
+        "sharing": 0,
+        "layout": 0,
+        "metadata": 0,
+        "related": 0,
+        "activity": 0,
+        "chatter": 0
+      },
+      "totals": {
+        "node": 709.7,
+        "supabase": 707.77,
+        "salesforce": 0,
+        "permission": 0,
+        "sharing": 0,
+        "layout": 0,
+        "metadata": 0,
+        "related": 0,
+        "activity": 0,
+        "chatter": 0
+      }
+    },
+    {
+      "path": "/api/portal/record-pages/Account",
+      "totalMs": 711.73,
+      "counts": {
+        "supabase": 2,
+        "salesforce": 0,
+        "permission": 0,
+        "sharing": 0,
+        "layout": 0,
+        "metadata": 0,
+        "related": 0,
+        "activity": 0,
+        "chatter": 0
+      },
+      "totals": {
+        "node": 711.73,
+        "supabase": 709.75,
+        "salesforce": 0,
+        "permission": 0,
+        "sharing": 0,
+        "layout": 0,
+        "metadata": 0,
+        "related": 0,
+        "activity": 0,
+        "chatter": 0
+      }
+    },
+    {
+      "path": "/api/portal/compact-layouts/Account",
+      "totalMs": 725.78,
+      "counts": {
+        "supabase": 2,
+        "salesforce": 0,
+        "permission": 0,
+        "sharing": 0,
+        "layout": 0,
+        "metadata": 0,
+        "related": 0,
+        "activity": 0,
+        "chatter": 0
+      },
+      "totals": {
+        "node": 725.78,
+        "supabase": 723.84,
+        "salesforce": 0,
+        "permission": 0,
+        "sharing": 0,
+        "layout": 0,
+        "metadata": 0,
+        "related": 0,
+        "activity": 0,
+        "chatter": 0
+      }
+    },
+    {
+      "path": "/api/Account/001C100000R25I7IAJ",
+      "totalMs": 732.81,
+      "counts": {
+        "supabase": 2,
+        "salesforce": 0,
+        "permission": 1,
+        "sharing": 0,
+        "layout": 0,
+        "metadata": 0,
+        "related": 0,
+        "activity": 0,
+        "chatter": 0
+      },
+      "totals": {
+        "node": 732.81,
+        "supabase": 729.64,
+        "salesforce": 0,
+        "permission": 0.01,
+        "sharing": 0,
+        "layout": 0,
+        "metadata": 0,
+        "related": 0,
+        "activity": 0,
+        "chatter": 0
+      }
+    },
+    {
+      "path": "/api/Account/001C100000R25I7IAJ",
+      "totalMs": 693.68,
+      "counts": {
+        "supabase": 2,
+        "salesforce": 0,
+        "permission": 1,
+        "sharing": 0,
+        "layout": 0,
+        "metadata": 0,
+        "related": 0,
+        "activity": 0,
+        "chatter": 0
+      },
+      "totals": {
+        "node": 693.68,
+        "supabase": 690.95,
+        "salesforce": 0,
+        "permission": 0.01,
+        "sharing": 0,
+        "layout": 0,
+        "metadata": 0,
+        "related": 0,
+        "activity": 0,
+        "chatter": 0
+      }
+    },
+    {
+      "path": "/api/Account/001C100000R25I7IAJ",
+      "totalMs": 724.38,
+      "counts": {
+        "supabase": 2,
+        "salesforce": 0,
+        "permission": 1,
+        "sharing": 0,
+        "layout": 0,
+        "metadata": 0,
+        "related": 0,
+        "activity": 0,
+        "chatter": 0
+      },
+      "totals": {
+        "node": 724.38,
+        "supabase": 721.53,
+        "salesforce": 0,
+        "permission": 0.01,
+        "sharing": 0,
+        "layout": 0,
+        "metadata": 0,
+        "related": 0,
+        "activity": 0,
+        "chatter": 0
+      }
+    },
+    {
+      "path": "/api/Account/001C100000R25I7IAJ",
+      "totalMs": 732.76,
+      "counts": {
+        "supabase": 2,
+        "salesforce": 0,
+        "permission": 1,
+        "sharing": 0,
+        "layout": 0,
+        "metadata": 0,
+        "related": 0,
+        "activity": 0,
+        "chatter": 0
+      },
+      "totals": {
+        "node": 732.76,
+        "supabase": 730.24,
+        "salesforce": 0,
+        "permission": 0.01,
+        "sharing": 0,
+        "layout": 0,
+        "metadata": 0,
+        "related": 0,
+        "activity": 0,
+        "chatter": 0
+      }
+    }
+  ],
+  "layoutCacheStats": {
+    "hits": 3,
+    "misses": 3,
+    "rebuilds": 3,
+    "deduped": 0,
+    "invalidations": 0,
+    "size": 3,
+    "inflight": 0,
+    "ttlMs": 3600000,
+    "hitRatio": 0.5,
+    "keys": [
+      "sandbox-saasray:record-page:*:Account",
+      "sandbox-saasray:compact-layout:aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa:Account",
+      "sandbox-saasray:layout:aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa:Account"
+    ]
+  },
+  "metadataCacheStats": {
+    "hits": 2,
+    "misses": 4,
+    "rebuilds": 4,
+    "deduped": 1,
+    "invalidations": 0,
+    "size": 4,
+    "inflight": 0,
+    "ttlMs": 3600000,
+    "hitRatio": 0.3333,
+    "keys": [
+      "sandbox-saasray:Account",
+      "sandbox-saasray:Contact",
+      "sandbox-saasray:Case",
+      "sandbox-saasray:Opportunity"
+    ]
+  },
+  "recordDetailCacheStats": {
+    "hits": 4,
+    "misses": 1,
+    "rebuilds": 1,
+    "deduped": 0,
+    "invalidations": 0,
+    "size": 1,
+    "inflight": 0,
+    "max": 100,
+    "ttlMs": 600000,
+    "hitRatio": 0.8
+  }
+}

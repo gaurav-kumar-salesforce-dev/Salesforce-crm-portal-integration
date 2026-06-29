@@ -1,0 +1,39 @@
+{
+  "sprint": "final-spa-ux-optimization",
+  "scope": "frontend state management, SPA navigation, cache preservation, and unnecessary refresh removal",
+  "filesModified": [
+    "public/app.js"
+  ],
+  "before": {
+    "objectCacheTtlMs": 30000,
+    "recordBackBehavior": "restore list shell then call loadData(), causing a network reload and scroll reset risk",
+    "cachedListBehavior": "cache hit rendered quickly but also triggered background refresh",
+    "windowFocusBehavior": "focus event called loadData({ forceRefresh: true }) for cached lists",
+    "listViews": "fetched again when object page was rebuilt",
+    "recordHistory": "record detail did not have record-aware browser history state",
+    "crossPageReturn": "CRM state was memory-only and could be lost after visiting separate HTML pages"
+  },
+  "after": {
+    "objectCacheTtlMs": 600000,
+    "recordCacheTtlMs": 600000,
+    "recordCacheMax": 100,
+    "listViewCacheTtlMs": 600000,
+    "recordBackBehavior": "restores from in-memory records/cache and scroll state without a network reload",
+    "cachedListBehavior": "cache hit restores immediately without automatic background refresh",
+    "windowFocusBehavior": "no focus-triggered CRM reload",
+    "listViews": "cached per org and object",
+    "recordHistory": "hash/history state supports object and record routes",
+    "crossPageReturn": "CRM list/page/record caches are persisted to sessionStorage and restored on return"
+  },
+  "validation": {
+    "syntax": "node --check public/app.js passed",
+    "diffCheck": "git diff --check -- public/app.js passed",
+    "authenticatedBrowserTiming": "not run in this session because credentials/live user flow were not available"
+  },
+  "expectedTimings": {
+    "cachedObjectReturn": "memory render only; no list API request",
+    "cachedRecordOpen": "memory render only; no record API request",
+    "manualRefresh": "still calls loadData({ forceRefresh: true }) by explicit user action",
+    "createEditDelete": "still invalidates relevant object/record caches before refresh"
+  }
+}

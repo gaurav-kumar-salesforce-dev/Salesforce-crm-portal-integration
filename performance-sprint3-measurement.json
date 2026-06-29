@@ -1,0 +1,314 @@
+{
+  "user": {
+    "id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+    "role": "system_administrator",
+    "isSystemAdmin": true
+  },
+  "baselineFromAudit": {
+    "accountListMs": 2500,
+    "contactListMs": 2100
+  },
+  "calls": [
+    {
+      "label": "reset performance audit",
+      "path": "/api/debug/performance-audit/reset",
+      "status": 200,
+      "ms": 970.2,
+      "perfRequestId": "edca6bdd-2912-4638-b963-33b3ad1d9b27"
+    },
+    {
+      "label": "warm user context",
+      "path": "/api/portal/me",
+      "status": 200,
+      "ms": 1602.79,
+      "perfRequestId": "f5d5db32-27b1-483d-a95a-b2ca73eb13f7"
+    },
+    {
+      "label": "warm Account metadata",
+      "path": "/api/Account/fields",
+      "status": 200,
+      "ms": 2284.22,
+      "perfRequestId": "6556546d-4efc-4ccd-81e6-41fe5689c8da"
+    },
+    {
+      "label": "warm Contact metadata",
+      "path": "/api/Contact/fields",
+      "status": 200,
+      "ms": 2069.38,
+      "perfRequestId": "af4371d6-6a54-42a4-9f10-782de35e484b"
+    },
+    {
+      "label": "Account list warm 1",
+      "path": "/api/Account",
+      "status": 200,
+      "ms": 1372.09,
+      "perfRequestId": "6e79cd31-7701-409a-b31b-dc764832ce5c"
+    },
+    {
+      "label": "Account list warm 2",
+      "path": "/api/Account",
+      "status": 200,
+      "ms": 1224.23,
+      "perfRequestId": "a66a82a6-14c4-4697-b00c-f0572e6a0564"
+    },
+    {
+      "label": "Contact list warm 1",
+      "path": "/api/Contact",
+      "status": 200,
+      "ms": 1246.93,
+      "perfRequestId": "371c1038-09fc-4dbf-80d2-ef09dca41acc"
+    },
+    {
+      "label": "Contact list warm 2",
+      "path": "/api/Contact",
+      "status": 200,
+      "ms": 1261.69,
+      "perfRequestId": "4c137ece-8e6b-4ce3-b9f5-4627df8dc226"
+    }
+  ],
+  "listRequests": [
+    {
+      "path": "/api/Account",
+      "totalMs": 1359.62,
+      "counts": {
+        "supabase": 2,
+        "salesforce": 1,
+        "permission": 1,
+        "sharing": 1,
+        "layout": 0,
+        "metadata": 0,
+        "related": 0,
+        "activity": 0,
+        "chatter": 0
+      },
+      "totals": {
+        "node": 1359.62,
+        "supabase": 698.03,
+        "salesforce": 645.08,
+        "permission": 0.05,
+        "sharing": 0.01,
+        "layout": 0,
+        "metadata": 0,
+        "related": 0,
+        "activity": 0,
+        "chatter": 0
+      },
+      "events": [
+        {
+          "category": "supabase",
+          "label": "from:users.select(id, email, name, role, is_active).eq(id,aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa).eq(is_active,true).single",
+          "ms": 363.12
+        },
+        {
+          "category": "supabase",
+          "label": "from:user_profile_assignments.select(profiles(is_system_admin)).eq(user_id,aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa).maybeSingle",
+          "ms": 334.91
+        },
+        {
+          "category": "permission",
+          "label": "Account.can_read.admin-bypass",
+          "ms": 0.05
+        },
+        {
+          "category": "sharing",
+          "label": "Account.scopeFilter.admin",
+          "ms": 0.01
+        },
+        {
+          "category": "salesforce",
+          "label": "GET /query",
+          "ms": 645.08,
+          "endpoint": "/query"
+        }
+      ]
+    },
+    {
+      "path": "/api/Account",
+      "totalMs": 1214.44,
+      "counts": {
+        "supabase": 2,
+        "salesforce": 1,
+        "permission": 1,
+        "sharing": 1,
+        "layout": 0,
+        "metadata": 0,
+        "related": 0,
+        "activity": 0,
+        "chatter": 0
+      },
+      "totals": {
+        "node": 1214.44,
+        "supabase": 686.17,
+        "salesforce": 518.04,
+        "permission": 0.01,
+        "sharing": 0,
+        "layout": 0,
+        "metadata": 0,
+        "related": 0,
+        "activity": 0,
+        "chatter": 0
+      },
+      "events": [
+        {
+          "category": "supabase",
+          "label": "from:users.select(id, email, name, role, is_active).eq(id,aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa).eq(is_active,true).single",
+          "ms": 342.39
+        },
+        {
+          "category": "supabase",
+          "label": "from:user_profile_assignments.select(profiles(is_system_admin)).eq(user_id,aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa).maybeSingle",
+          "ms": 343.78
+        },
+        {
+          "category": "permission",
+          "label": "Account.can_read.admin-bypass",
+          "ms": 0.01
+        },
+        {
+          "category": "sharing",
+          "label": "Account.scopeFilter.admin",
+          "ms": 0
+        },
+        {
+          "category": "salesforce",
+          "label": "GET /query",
+          "ms": 518.04,
+          "endpoint": "/query"
+        }
+      ]
+    },
+    {
+      "path": "/api/Contact",
+      "totalMs": 1233.28,
+      "counts": {
+        "supabase": 2,
+        "salesforce": 1,
+        "permission": 1,
+        "sharing": 1,
+        "layout": 0,
+        "metadata": 0,
+        "related": 0,
+        "activity": 0,
+        "chatter": 0
+      },
+      "totals": {
+        "node": 1233.28,
+        "supabase": 658.14,
+        "salesforce": 556.58,
+        "permission": 0.01,
+        "sharing": 0.01,
+        "layout": 0,
+        "metadata": 0,
+        "related": 0,
+        "activity": 0,
+        "chatter": 0
+      },
+      "events": [
+        {
+          "category": "supabase",
+          "label": "from:users.select(id, email, name, role, is_active).eq(id,aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa).eq(is_active,true).single",
+          "ms": 329.16
+        },
+        {
+          "category": "supabase",
+          "label": "from:user_profile_assignments.select(profiles(is_system_admin)).eq(user_id,aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa).maybeSingle",
+          "ms": 328.98
+        },
+        {
+          "category": "permission",
+          "label": "Contact.can_read.admin-bypass",
+          "ms": 0.01
+        },
+        {
+          "category": "sharing",
+          "label": "Contact.scopeFilter.admin",
+          "ms": 0.01
+        },
+        {
+          "category": "salesforce",
+          "label": "GET /query",
+          "ms": 556.58,
+          "endpoint": "/query"
+        }
+      ]
+    },
+    {
+      "path": "/api/Contact",
+      "totalMs": 1250.29,
+      "counts": {
+        "supabase": 2,
+        "salesforce": 1,
+        "permission": 1,
+        "sharing": 1,
+        "layout": 0,
+        "metadata": 0,
+        "related": 0,
+        "activity": 0,
+        "chatter": 0
+      },
+      "totals": {
+        "node": 1250.29,
+        "supabase": 676.93,
+        "salesforce": 564.07,
+        "permission": 0.01,
+        "sharing": 0,
+        "layout": 0,
+        "metadata": 0,
+        "related": 0,
+        "activity": 0,
+        "chatter": 0
+      },
+      "events": [
+        {
+          "category": "supabase",
+          "label": "from:users.select(id, email, name, role, is_active).eq(id,aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa).eq(is_active,true).single",
+          "ms": 341.06
+        },
+        {
+          "category": "supabase",
+          "label": "from:user_profile_assignments.select(profiles(is_system_admin)).eq(user_id,aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa).maybeSingle",
+          "ms": 335.87
+        },
+        {
+          "category": "permission",
+          "label": "Contact.can_read.admin-bypass",
+          "ms": 0.01
+        },
+        {
+          "category": "sharing",
+          "label": "Contact.scopeFilter.admin",
+          "ms": 0
+        },
+        {
+          "category": "salesforce",
+          "label": "GET /query",
+          "ms": 564.07,
+          "endpoint": "/query"
+        }
+      ]
+    }
+  ],
+  "metadataStats": {
+    "hits": 2,
+    "misses": 2,
+    "rebuilds": 2,
+    "deduped": 0,
+    "invalidations": 0,
+    "size": 2,
+    "inflight": 0,
+    "ttlMs": 3600000,
+    "hitRatio": 0.5,
+    "keys": [
+      "sandbox-saasray:Account",
+      "sandbox-saasray:Contact"
+    ]
+  },
+  "userContextStats": {
+    "hits": 0,
+    "misses": 1,
+    "builds": 1,
+    "invalidations": 0,
+    "size": 1,
+    "hitRatio": 0
+  }
+}
