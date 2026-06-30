@@ -569,6 +569,7 @@ const apiInFlightRequests = new Map();
 const crmBackgroundRefreshes = new Map();
 const crmPageStates = new Map();
 const listViewCache = new Map();
+const objectTotalCountCache = new Map();
 const spaCacheStats = {
   listHits: 0,
   listMisses: 0,
@@ -1245,11 +1246,56 @@ function getCrmListCache(key) {
 
 function setCrmListCache(key, entry) {
   crmListCache.set(key, cloneCacheValue({ ...entry, timestamp: Date.now() }));
+  syncSidebarBadgeFromListCache(entry);
 }
 
 function peekCrmListCache(key) {
   const entry = crmListCache.get(key);
   return entry ? cloneCacheValue(entry) : null;
+}
+
+function cachedListCount(entry) {
+  const total = Number(entry?.payload?.totalSize ?? entry?.totalRecords);
+  const records = entry?.payload?.records || entry?.currentRecords;
+  const loaded = Array.isArray(records) ? records.length : 0;
+  if (Number.isFinite(total) && total > 0 && !(entry?.payload?.nextRecordsUrl && total <= loaded)) {
+    return total;
+  }
+  const objectName = entry?.objectName;
+  const cachedTotal = objectName ? objectTotalCountCache.get(objectName) : null;
+  if (Number.isFinite(cachedTotal) && cachedTotal > 0) return cachedTotal;
+  return loaded || null;
+}
+
+function rememberObjectTotalCount(objectName, count) {
+  const numeric = Number(count);
+  if (!objectName || !OBJECT_META[objectName] || !Number.isFinite(numeric) || numeric <= 0) return;
+  const previous = Number(objectTotalCountCache.get(objectName) || 0);
+  if (numeric >= previous) {
+    objectTotalCountCache.set(objectName, numeric);
+    updateBadge(objectName, numeric);
+  }
+}
+
+function knownObjectTotalCount(objectName, fallback = 0) {
+  const known = Number(objectTotalCountCache.get(objectName) || 0);
+  const fb = Number(fallback || 0);
+  return known > fb ? known : fb;
+}
+
+function syncSidebarBadgeFromListCache(entry) {
+  const objectName = entry?.objectName;
+  if (!objectName || !OBJECT_META[objectName]) return;
+  const count = cachedListCount(entry);
+  if (count !== null) updateBadge(objectName, count);
+}
+
+function syncSidebarBadgesFromCache() {
+  for (const entry of crmListCache.values()) syncSidebarBadgeFromListCache(entry);
+  for (const state of crmPageStates.values()) syncSidebarBadgeFromListCache(state);
+  for (const [objectName, count] of objectTotalCountCache.entries()) {
+    updateBadge(objectName, count);
+  }
 }
 
 function pruneCrmSpaCaches(now = Date.now()) {
@@ -1286,6 +1332,22 @@ function restoreMapFromStorage(map, entries = []) {
   });
 }
 
+function restoreCrmListCacheFromStorage(entries = []) {
+  crmListCache.clear();
+  entries.forEach(([key, value]) => {
+    const objectName = value?.objectName;
+    if (!key || !objectName || !OBJECT_META[objectName]) return;
+    if (!key.startsWith(crmListCachePrefix(objectName))) return;
+    if (!hasUsableCrmListCacheEntry(value, objectName)) return;
+    crmListCache.set(key, value);
+  });
+}
+
+function restoreObjectTotalCountsFromStorage(entries = []) {
+  objectTotalCountCache.clear();
+  entries.forEach(([objectName, count]) => rememberObjectTotalCount(objectName, count));
+}
+
 function persistCrmSpaState() {
   if (!$("content")) return;
   try {
@@ -1305,6 +1367,7 @@ function persistCrmSpaState() {
         crmPageStates: serializeMapForStorage(crmPageStates),
         listViewCache: serializeMapForStorage(listViewCache),
         recentRecordCache: serializeMapForStorage(recentRecordCache),
+        objectTotalCountCache: serializeMapForStorage(objectTotalCountCache),
       }),
     );
   } catch (err) {
@@ -1331,10 +1394,11 @@ function restoreCrmSpaStateFromStorage() {
     if (!state || Date.now() - state.timestamp > CLIENT_CACHE_TTL_MS) return false;
     const activeOrgKey = orgSettings.activeOrgKey || "default";
     if (state.orgKey && state.orgKey !== activeOrgKey) return false;
-    restoreMapFromStorage(crmListCache, state.crmListCache || []);
+    restoreCrmListCacheFromStorage(state.crmListCache || []);
     restoreMapFromStorage(crmPageStates, state.crmPageStates || []);
     restoreMapFromStorage(listViewCache, state.listViewCache || []);
     restoreMapFromStorage(recentRecordCache, state.recentRecordCache || []);
+    restoreObjectTotalCountsFromStorage(state.objectTotalCountCache || []);
     pruneCrmSpaCaches();
     return true;
   } catch (err) {
@@ -1399,7 +1463,13 @@ function refreshCrmCachePayload(entry) {
     entry.payload.records = cloneCacheValue(nextRecords);
   }
   entry.payload.nextRecordsUrl = nextRecordsUrl || null;
-  entry.payload.totalSize = totalRecords || entry.payload.records.length;
+  const preservedTotal = Math.max(
+    Number(entry.payload.totalSize || 0),
+    Number(totalRecords || 0),
+    Number(objectTotalCountCache.get(entry.objectName) || 0),
+  );
+  entry.payload.totalSize = preservedTotal || entry.payload.records.length;
+  rememberObjectTotalCount(entry.objectName, entry.payload.totalSize);
   entry.payload.hiddenFields = Array.from(currentHiddenFields || []);
   entry.payload.columns = cloneCacheValue(currentColumns || []);
 }
@@ -1437,7 +1507,7 @@ function bestCrmListCacheForObject(objectName) {
   let best = null;
   for (const [key, entry] of crmListCache.entries()) {
     if (!key.startsWith(prefix)) continue;
-    if (!entry?.payload || !Array.isArray(entry.payload.records)) continue;
+    if (!hasUsableCrmListCacheEntry(entry, objectName)) continue;
     if (!best || (entry.timestamp || 0) > (best.entry.timestamp || 0)) {
       best = { key, entry };
     }
@@ -1445,8 +1515,37 @@ function bestCrmListCacheForObject(objectName) {
   return best ? { key: best.key, entry: cloneCacheValue(best.entry) } : null;
 }
 
-function applyListCacheEntry(entry) {
-  if (!entry?.payload || !Array.isArray(entry.payload.records)) return false;
+function isCrmListCacheEntryForObject(entry, objectName) {
+  return Boolean(
+    entry?.objectName === objectName &&
+      entry?.payload &&
+      Array.isArray(entry.payload.records),
+  );
+}
+
+function hasUsableCrmListCacheEntry(entry, objectName) {
+  if (!isCrmListCacheEntryForObject(entry, objectName)) return false;
+  const records = entry.payload.records || [];
+  const total = Number(entry.payload.totalSize || 0);
+  if (entry.payload.nextRecordsUrl && total <= records.length) return false;
+  if (!records.length && total === 0) return false;
+  return true;
+}
+
+function isCrmPageStateForObject(state, objectName) {
+  if (!state || state.objectName !== objectName) return false;
+  const html = String(state.contentHtml || "");
+  if (html && html.includes('data-object=') && !html.includes(`data-object="${objectName}"`)) {
+    return false;
+  }
+  if (state.activeCacheKey && !state.activeCacheKey.startsWith(crmListCachePrefix(objectName))) {
+    return false;
+  }
+  return true;
+}
+
+function applyListCacheEntry(entry, objectName = currentObject) {
+  if (!isCrmListCacheEntryForObject(entry, objectName)) return false;
   applyCrmListPayload(entry.payload);
   visibleRecordCount = entry.visibleRecordCount || visibleRecordCount || RENDER_CHUNK_SIZE;
   selectedListRecordId = entry.selectedRecord || selectedListRecordId || null;
@@ -1538,6 +1637,8 @@ function writeRecordHistory(objectName, recordId, replace = false) {
 function captureCrmPageState(objectName = currentObject) {
   if (!objectName || !OBJECT_META[objectName] || !$("content")) return;
   if (viewingDetail) return;
+  const tableObject = $("tableCard")?.dataset?.object;
+  if (tableObject && tableObject !== objectName) return;
   rememberCurrentListCacheState();
   crmPageStates.set(objectName, {
     timestamp: Date.now(),
@@ -1550,7 +1651,7 @@ function captureCrmPageState(objectName = currentObject) {
     currentViewId,
     sfListViews: cloneCacheValue(sfListViews || []),
     sortState: cloneCacheValue(sortState || { field: null, direction: "asc" }),
-    totalRecords,
+    totalRecords: knownObjectTotalCount(objectName, totalRecords || currentRecords.length),
     nextRecordsUrl,
     visibleRecordCount,
     currentViewMode,
@@ -1562,14 +1663,23 @@ function captureCrmPageState(objectName = currentObject) {
     viewingDetail,
     detailRecordState: cloneCacheValue(detailRecordState || null),
   });
+  syncSidebarBadgesFromCache();
 }
 
 function restoreCrmPageState(objectName) {
   const state = crmPageStates.get(objectName);
-  const stateIsFresh = state && Date.now() - state.timestamp <= CLIENT_CACHE_TTL_MS;
+  if (state && !isCrmPageStateForObject(state, objectName)) {
+    crmPageStates.delete(objectName);
+  }
+  const stateIsFresh =
+    isCrmPageStateForObject(state, objectName) &&
+    Date.now() - state.timestamp <= CLIENT_CACHE_TTL_MS;
   const fallbackCache = bestCrmListCacheForObject(objectName);
   const activeKey = (stateIsFresh && state.activeCacheKey) || fallbackCache?.key || "";
-  const cachedEntry = activeKey ? getCrmListCache(activeKey) || fallbackCache?.entry || null : fallbackCache?.entry || null;
+  const activeEntry = activeKey ? getCrmListCache(activeKey) : null;
+  const cachedEntry = hasUsableCrmListCacheEntry(activeEntry, objectName)
+    ? activeEntry
+    : fallbackCache?.entry || null;
   if (!stateIsFresh && !cachedEntry) return false;
   if (stateIsFresh && state.activeCacheKey && !cachedEntry && !fallbackCache) return false;
   const entryMeta = cachedEntry || {};
@@ -1583,7 +1693,10 @@ function restoreCrmPageState(objectName) {
   currentViewId = (stateIsFresh ? state.currentViewId : entryMeta.filters?.viewId) || "all";
   sfListViews = cloneCacheValue(stateIsFresh ? state.sfListViews || [] : sfListViews || []);
   sortState = cloneCacheValue((stateIsFresh ? state.sortState : entryMeta.sort) || { field: null, direction: "asc" });
-  totalRecords = stateIsFresh ? state.totalRecords || 0 : entryMeta.payload?.totalSize || 0;
+  totalRecords = knownObjectTotalCount(
+    objectName,
+    stateIsFresh ? state.totalRecords || entryMeta.payload?.totalSize || 0 : entryMeta.payload?.totalSize || 0,
+  );
   nextRecordsUrl = stateIsFresh ? state.nextRecordsUrl || null : entryMeta.payload?.nextRecordsUrl || null;
   visibleRecordCount = (stateIsFresh ? state.visibleRecordCount : entryMeta.visibleRecordCount) || RENDER_CHUNK_SIZE;
   currentViewMode = (stateIsFresh ? state.currentViewMode : "table") || "table";
@@ -1603,7 +1716,10 @@ function restoreCrmPageState(objectName) {
   if (searchInput) searchInput.value = (stateIsFresh ? state.search : entryMeta.search) || "";
   const select = $("listViewSelect");
   if (select) select.value = currentViewId;
+  $("pageIcon").innerHTML = objectIcon(objectName);
+  $("pageTitle").textContent = getCurrentViewName();
   setActiveNavObject(objectName);
+  syncSidebarBadgesFromCache();
   applyObjectNavGuards();
   updateViewToggle();
   clearObjectListLoadingState();
@@ -1661,7 +1777,8 @@ function applyCrmListPayload(payload) {
   if (!payload || !Array.isArray(payload.records)) return false;
   currentRecords = payload.records;
   nextRecordsUrl = payload.nextRecordsUrl || null;
-  totalRecords = payload.totalSize || currentRecords.length;
+  totalRecords = knownObjectTotalCount(currentObject, payload.totalSize || currentRecords.length);
+  rememberObjectTotalCount(currentObject, totalRecords);
   currentHiddenFields = new Set(payload.hiddenFields || []);
   if (payload.columns) {
     currentColumns = normalizeListViewColumns(payload.columns);
@@ -1736,7 +1853,7 @@ async function refreshCrmListInBackground(path, cacheKey, cacheMeta) {
         patchRenderedTableRows(previousColumns);
       }
       updatePagination();
-      updateBadge(currentObject, totalRecords || currentRecords.length);
+      updateBadge(currentObject, knownObjectTotalCount(currentObject, totalRecords || currentRecords.length));
       updateRecordCounts();
       applyPermissionGuards(currentObject);
       captureCrmPageState(currentObject);
@@ -2898,9 +3015,12 @@ async function loadData(options = {}) {
       viewSignature,
       pageSize: localView?.pageSize || RENDER_CHUNK_SIZE,
     });
-    const cachedEntry = forceRefresh
+    const cacheCandidate = forceRefresh
       ? null
       : getCrmListCache(cacheKey);
+    const cachedEntry = hasUsableCrmListCacheEntry(cacheCandidate, currentObject)
+      ? cacheCandidate
+      : null;
     if (!cachedEntry) {
       $("pageSub").textContent =
         `Loading ${meta.title.toLowerCase()} from Salesforce...`;
@@ -2933,7 +3053,7 @@ async function loadData(options = {}) {
     if (viewingDetail || loadData.latestToken !== loadToken || !isCurrentListRequest(requestVersion, requestObject, cacheKey)) return;
     restoredOrRendered = true;
     updatePagination();
-    updateBadge(currentObject, totalRecords || currentRecords.length);
+    updateBadge(currentObject, knownObjectTotalCount(currentObject, totalRecords || currentRecords.length));
     updateRecordCounts();
     if (!result.fromCache) await verifyListCountWhenSmall();
     clearObjectListLoadingState({ showList: false });
@@ -3779,12 +3899,13 @@ async function loadMoreRecords() {
     if (!isCurrentListRequest(requestVersion, requestObject)) return false;
     appendUniqueRecords(data.records || []);
     nextRecordsUrl = data.nextRecordsUrl || null;
-    totalRecords = data.totalSize || totalRecords || currentRecords.length;
+    totalRecords = knownObjectTotalCount(currentObject, data.totalSize || totalRecords || currentRecords.length);
+    rememberObjectTotalCount(currentObject, totalRecords);
     applyLocalView();
     applySort();
     await renderCurrentView();
     updatePagination();
-    updateBadge(currentObject, totalRecords || currentRecords.length);
+    updateBadge(currentObject, knownObjectTotalCount(currentObject, totalRecords || currentRecords.length));
     updateRecordCounts();
     rememberCurrentListCacheState();
     return true;
@@ -3865,7 +3986,7 @@ function updateRecordCounts() {
     currentViewMode === "table"
       ? currentRecords.length
       : Math.min(visibleRecordCount, currentRecords.length);
-  const totalLabel = totalRecords || currentRecords.length;
+  const totalLabel = knownObjectTotalCount(currentObject, totalRecords || currentRecords.length);
   const pageSub = $("pageSub");
   const recCount = $("recCount");
   if (!pageSub || !recCount) return;
@@ -3886,16 +4007,25 @@ function clearObjectListLoadingState({ showList = true, hideError = true } = {})
 
 function restoreWindowScrollPosition(targetY = 0, attempts = 8) {
   const desired = Math.max(0, Number(targetY) || 0);
+  let lastApplied = -1;
   const tryScroll = (remaining) => {
     const maxScroll = Math.max(0, document.documentElement.scrollHeight - window.innerHeight);
-    window.scrollTo(0, Math.min(desired, maxScroll));
+    const nextScroll = Math.min(desired, maxScroll);
+    window.scrollTo(0, nextScroll);
     scheduleVirtualTableRender(true);
+    renderVirtualTableWindow(true);
+    lastApplied = nextScroll;
     if (remaining <= 0) return;
     const current = currentScrollPosition();
     if (Math.abs(current - desired) <= 2 || maxScroll >= desired) {
       requestAnimationFrame(() => {
-        window.scrollTo(0, Math.min(desired, Math.max(0, document.documentElement.scrollHeight - window.innerHeight)));
+        const finalScroll = Math.min(desired, Math.max(0, document.documentElement.scrollHeight - window.innerHeight));
+        window.scrollTo(0, finalScroll);
         scheduleVirtualTableRender(true);
+        renderVirtualTableWindow(true);
+        if (Math.abs(finalScroll - lastApplied) > 2) {
+          requestAnimationFrame(() => renderVirtualTableWindow(true));
+        }
       });
       return;
     }
@@ -3910,6 +4040,9 @@ function finalizeCachedObjectListRestore(scrollPosition = 0) {
   updatePagination();
   updateRecordCounts();
   observeLazySentinel();
+  if (currentViewMode === "table") {
+    renderVirtualTableWindow(true);
+  }
   restoreWindowScrollPosition(scrollPosition || 0);
   queueLazyLoadIfNeeded();
   captureCrmPageState(currentObject);
@@ -3927,8 +4060,9 @@ async function verifyListCountWhenSmall() {
     const count = Number(data.totalSize || 0);
     if (count !== totalRecords) {
       totalRecords = count;
+      rememberObjectTotalCount(currentObject, count);
       updateRecordCounts();
-      updateBadge(currentObject, totalRecords || currentRecords.length);
+      updateBadge(currentObject, knownObjectTotalCount(currentObject, totalRecords || currentRecords.length));
     }
     if (count <= currentRecords.length && count <= 100) {
       const orgLabel = data.org?.label ? ` in ${data.org.label}` : "";
@@ -9398,6 +9532,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     .then(async (connection) => {
       if (connection?.success) {
         restoreCrmSpaStateFromStorage();
+        syncSidebarBadgesFromCache();
         // Refresh permissions from server (in case they changed)
         try {
           const me = await api("/api/portal/me");
