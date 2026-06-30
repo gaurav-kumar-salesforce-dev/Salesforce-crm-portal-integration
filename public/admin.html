@@ -3347,7 +3347,7 @@
     let confirmCallback = null;
     let confirmLoadingLabel = 'Working...';
 
-    const SF_OBJECTS = ['Account', 'Contact', 'Opportunity', 'Lead', 'Case', 'Campaign', 'Task', 'Event'];
+    const SF_OBJECTS = ['Account', 'Contact', 'Opportunity', 'Lead', 'Case', 'Campaign', 'Quote', 'Product2', 'OpportunityLineItem', 'QuoteLineItem', 'Task', 'Event'];
 
     function getToken() { return localStorage.getItem('saasray_token'); }
 
@@ -6434,6 +6434,10 @@ function deletePublicGroup(id, name) {
       Lead: 'Prospects, marketing contacts, and targets.',
       Case: 'Customer support cases, issues, and tickets.',
       Campaign: 'Marketing campaigns, events, and initiatives.',
+      Quote: 'Sales quotes, pricing, and proposal records.',
+      Product2: 'Products and services available for sales.',
+      OpportunityLineItem: 'Products, quantities, and pricing lines on opportunities.',
+      QuoteLineItem: 'Products, quantities, and pricing lines on quotes.',
       Task: 'To-do items and action items.',
       Event: 'Calendar events, meetings, and schedules.'
     };
@@ -7877,7 +7881,11 @@ function deletePublicGroup(id, name) {
                 const standardFields = {
                   Contact: ["Name", "Title", "Email", "Phone"],
                   Opportunity: ["Name", "StageName", "Amount", "CloseDate"],
-                  Case: ["CaseNumber", "Subject", "Status", "Priority"]
+                  Case: ["CaseNumber", "Subject", "Status", "Priority"],
+                  Quote: ["Name", "QuoteNumber", "Status", "GrandTotal"],
+                  Product2: ["Name", "ProductCode", "Family", "IsActive"],
+                  OpportunityLineItem: ["Product2.Name", "Quantity", "UnitPrice", "TotalPrice"],
+                  QuoteLineItem: ["LineNumber", "Product2.Name", "Quantity", "TotalPrice"]
                 }[rel.childSObject] || ["Name"];
                 
                 return {
@@ -7886,7 +7894,7 @@ function deletePublicGroup(id, name) {
                   relationshipName: rel.relationshipName,
                   field: rel.field,
                   title: rel.relationshipName,
-                  enabled: ["Contacts", "Opportunities", "Cases"].includes(rel.relationshipName),
+                  enabled: ["Contacts", "Opportunities", "Cases", "Quotes", "Products", "OpportunityLineItems", "QuoteLineItems"].includes(rel.relationshipName),
                   fields: standardFields,
                   limit: 5,
                   sortBy: 'CreatedDate',
@@ -7951,14 +7959,19 @@ function deletePublicGroup(id, name) {
         Account: [
           { key: "contacts", objectName: "Contact", title: "Contacts", fields: ["Name", "Title", "Email", "Phone"] },
           { key: "opportunities", objectName: "Opportunity", title: "Opportunities", fields: ["Name", "StageName", "Amount", "CloseDate"] },
-          { key: "cases", objectName: "Case", title: "Cases", fields: ["CaseNumber", "Subject", "Status", "Priority"] }
+          { key: "cases", objectName: "Case", title: "Cases", fields: ["CaseNumber", "Subject", "Status", "Priority"] },
+          { key: "quotes", objectName: "Quote", title: "Quotes", fields: ["Name", "QuoteNumber", "Status", "GrandTotal"] }
         ],
         Contact: [
           { key: "cases", objectName: "Case", title: "Cases", fields: ["CaseNumber", "Subject", "Status", "Priority"] }
         ],
         Lead: [],
         Opportunity: [
-          { key: "quotes", objectName: "Quote", title: "Quotes", fields: ["Name", "QuoteNumber", "Status", "TotalPrice"] }
+          { key: "quotes", objectName: "Quote", title: "Quotes", fields: ["Name", "QuoteNumber", "Status", "GrandTotal"] },
+          { key: "opportunityProducts", objectName: "OpportunityLineItem", title: "Products", fields: ["Product2.Name", "Quantity", "UnitPrice", "TotalPrice", "ServiceDate"] }
+        ],
+        Quote: [
+          { key: "quoteLineItems", objectName: "QuoteLineItem", title: "Quote Line Items", fields: ["LineNumber", "Product2.Name", "Quantity", "UnitPrice", "TotalPrice"] }
         ],
         Case: [],
         Campaign: [
@@ -7980,6 +7993,10 @@ function deletePublicGroup(id, name) {
           Opportunity: ["StageName", "Amount", "CloseDate", "Probability"],
           Case: ["Status", "Priority", "Type", "CreatedDate"],
           Campaign: ["Type", "Status", "StartDate", "EndDate"],
+          Quote: ["QuoteNumber", "Status", "ExpirationDate", "GrandTotal"],
+          Product2: ["ProductCode", "Family", "IsActive"],
+          OpportunityLineItem: ["Opportunity.Name", "Product2.Name", "Quantity", "TotalPrice"],
+          QuoteLineItem: ["Quote.Name", "Product2.Name", "Quantity", "TotalPrice"],
           User: ["Email", "Username", "Title"]
         }[objectName] || [];
 
@@ -9263,7 +9280,11 @@ function deletePublicGroup(id, name) {
           const standardFields = {
             Contact: ["Name", "Title", "Email", "Phone"],
             Opportunity: ["Name", "StageName", "Amount", "CloseDate"],
-            Case: ["CaseNumber", "Subject", "Status", "Priority"]
+            Case: ["CaseNumber", "Subject", "Status", "Priority"],
+            Quote: ["Name", "QuoteNumber", "Status", "GrandTotal"],
+            Product2: ["Name", "ProductCode", "Family", "IsActive"],
+            OpportunityLineItem: ["Product2.Name", "Quantity", "UnitPrice", "TotalPrice"],
+            QuoteLineItem: ["LineNumber", "Product2.Name", "Quantity", "TotalPrice"]
           }[rel.childSObject] || ["Name"];
           
           compData.config.fields = standardFields;
@@ -9651,7 +9672,11 @@ function deletePublicGroup(id, name) {
               const standardFields = {
                 Contact: ["Name", "Title", "Email", "Phone"],
                 Opportunity: ["Name", "StageName", "Amount", "CloseDate"],
-                Case: ["CaseNumber", "Subject", "Status", "Priority"]
+                Case: ["CaseNumber", "Subject", "Status", "Priority"],
+                Quote: ["Name", "QuoteNumber", "Status", "GrandTotal"],
+                Product2: ["Name", "ProductCode", "Family", "IsActive"],
+                OpportunityLineItem: ["Product2.Name", "Quantity", "UnitPrice", "TotalPrice"],
+                QuoteLineItem: ["LineNumber", "Product2.Name", "Quantity", "TotalPrice"]
               }[rel.childSObject] || ["Name"];
               
               return {
@@ -9660,7 +9685,7 @@ function deletePublicGroup(id, name) {
                 relationshipName: rel.relationshipName,
                 field: rel.field,
                 title: rel.relationshipName,
-                enabled: ["Contacts", "Opportunities", "Cases"].includes(rel.relationshipName),
+                enabled: ["Contacts", "Opportunities", "Cases", "Quotes", "Products", "OpportunityLineItems", "QuoteLineItems"].includes(rel.relationshipName),
                 fields: standardFields,
                 limit: 5,
                 sortBy: 'CreatedDate',

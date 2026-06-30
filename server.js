@@ -1216,7 +1216,7 @@ app.get('/api/portal/owd', checkAuth, checkRole('admin'), async (req, res) => {
     if (error) throw error;
     const existingByObject = new Map((data || []).map(row => [row.sf_object, row]));
     const defaults = Object.keys(OBJECTS)
-      .filter(objectName => !['Task', 'Event', 'EmailMessage', 'Pricebook2', 'User'].includes(objectName))
+      .filter(objectName => !INTERNAL_OBJECTS.includes(objectName))
       .map(objectName => existingByObject.get(objectName) || {
         sf_object: objectName,
         access_level: 'private',
@@ -2978,6 +2978,26 @@ const OBJECTS = {
     orderBy: 'CreatedDate DESC',
     searchFields: ['Name', 'Type', 'Status']
   },
+  Quote: {
+    fields: 'Id, Name, QuoteNumber, Status, ExpirationDate, GrandTotal, Subtotal, OpportunityId, Opportunity.Name, AccountId, Account.Name',
+    orderBy: 'CreatedDate DESC',
+    searchFields: ['Name', 'QuoteNumber', 'Status']
+  },
+  Product2: {
+    fields: 'Id, Name, ProductCode, Family, IsActive, Description, CreatedDate',
+    orderBy: 'Name',
+    searchFields: ['Name', 'ProductCode', 'Family', 'Description']
+  },
+  OpportunityLineItem: {
+    fields: 'Id, OpportunityId, Opportunity.Name, Product2Id, Product2.Name, PricebookEntryId, Quantity, UnitPrice, TotalPrice, ListPrice, ServiceDate, Description, SortOrder',
+    orderBy: 'SortOrder, ServiceDate',
+    searchFields: ['Description']
+  },
+  QuoteLineItem: {
+    fields: 'Id, LineNumber, QuoteId, Quote.Name, Product2Id, Product2.Name, PricebookEntryId, Quantity, UnitPrice, TotalPrice, ListPrice, Discount, Description, SortOrder',
+    orderBy: 'SortOrder, LineNumber',
+    searchFields: ['Description']
+  },
   Task: {
     fields: 'Id, Subject, Status, Priority, ActivityDate, TaskSubtype, WhoId, Who.Name, WhatId, What.Name, OwnerId, Owner.Name, Description, CreatedDate',
     orderBy: 'CreatedDate DESC',
@@ -3004,6 +3024,53 @@ const OBJECTS = {
     searchFields: ['Name', 'Email', 'Username']
   }
 };
+
+const PRIMARY_CRM_OBJECTS = ['Account', 'Contact', 'Opportunity', 'Case', 'Lead', 'Campaign', 'Quote', 'Product2', 'OpportunityLineItem', 'QuoteLineItem'];
+const INTERNAL_OBJECTS = ['Task', 'Event', 'EmailMessage', 'Pricebook2', 'User'];
+
+async function ensurePrimaryCrmObjectsRegistered() {
+  const rows = PRIMARY_CRM_OBJECTS.map((apiName, index) => ({
+    api_name: apiName,
+    label: apiName === 'Product2' ? 'Product' : apiName === 'OpportunityLineItem' ? 'Opportunity Product' : apiName === 'QuoteLineItem' ? 'Quote Line Item' : apiName,
+    is_active: true,
+    sort_order: (index + 1) * 10
+  }));
+
+  const { data: existingRows, error: existingError } = await supabase
+    .from('sf_objects')
+    .select('api_name')
+    .in('api_name', PRIMARY_CRM_OBJECTS);
+
+  if (existingError) {
+    console.error('[sf_objects] Could not load registered CRM objects:', existingError.message);
+    return;
+  }
+
+  const existing = new Set((existingRows || []).map(row => row.api_name));
+  const inserts = rows.filter(row => !existing.has(row.api_name));
+  const updates = rows.filter(row => existing.has(row.api_name));
+
+  const operations = [
+    ...updates.map(row => supabase
+      .from('sf_objects')
+      .update({
+        label: row.label,
+        is_active: row.is_active,
+        sort_order: row.sort_order
+      })
+      .eq('api_name', row.api_name)),
+    ...(inserts.length ? [supabase.from('sf_objects').insert(inserts)] : [])
+  ];
+
+  const results = await Promise.all(operations);
+  const failed = results.find(result => result.error);
+  if (failed?.error) {
+    console.error('[sf_objects] Could not register CRM objects:', failed.error.message);
+    return;
+  }
+
+  invalidateAllUserContextCache();
+}
 
 const BULK_AUTO_THRESHOLD = Math.max(parseInt(process.env.BULK_AUTO_THRESHOLD, 10) || 200, 1);
 const BULK_MAX_POLL_MS = Math.max(parseInt(process.env.BULK_MAX_POLL_MS, 10) || 120000, 5000);
@@ -3232,6 +3299,10 @@ async function getRelatedListsForRecord(objectName, id) {
       safeRelatedList(
         () => buildRelatedList('cases', 'Case', 'Cases', 'Id, CaseNumber, Subject, Status, Priority, Type, AccountId, Account.Name, CreatedDate', `AccountId = '${safeId}'`),
         { key: 'cases', objectName: 'Case', title: 'Cases' }
+      ),
+      safeRelatedList(
+        () => buildRelatedList('quotes', 'Quote', 'Quotes', 'Id, Name, QuoteNumber, Status, ExpirationDate, GrandTotal, OpportunityId, Opportunity.Name, AccountId, Account.Name', `AccountId = '${safeId}'`),
+        { key: 'quotes', objectName: 'Quote', title: 'Quotes' }
       )
     ]);
   }
@@ -3248,10 +3319,28 @@ async function getRelatedListsForRecord(objectName, id) {
     ]);
   }
   if (objectName === 'Opportunity') {
-    return [await safeRelatedList(
-      () => getOpportunityCaseRelated(id),
-      { key: 'cases', objectName: 'Case', title: 'Cases' }
-    )];
+    return Promise.all([
+      safeRelatedList(
+        () => buildRelatedList('quotes', 'Quote', 'Quotes', 'Id, Name, QuoteNumber, Status, ExpirationDate, GrandTotal, OpportunityId, Opportunity.Name, AccountId, Account.Name', `OpportunityId = '${safeId}'`),
+        { key: 'quotes', objectName: 'Quote', title: 'Quotes' }
+      ),
+      safeRelatedList(
+        () => buildRelatedList('opportunityProducts', 'OpportunityLineItem', 'Products', 'Id, OpportunityId, Product2Id, Product2.Name, Quantity, UnitPrice, TotalPrice, ServiceDate, SortOrder', `OpportunityId = '${safeId}'`, 10, 'SortOrder', 'ASC'),
+        { key: 'opportunityProducts', objectName: 'OpportunityLineItem', title: 'Products' }
+      ),
+      safeRelatedList(
+        () => getOpportunityCaseRelated(id),
+        { key: 'cases', objectName: 'Case', title: 'Cases' }
+      )
+    ]);
+  }
+  if (objectName === 'Quote') {
+    return [
+      await safeRelatedList(
+        () => buildRelatedList('quoteLineItems', 'QuoteLineItem', 'Quote Line Items', 'Id, LineNumber, QuoteId, Product2Id, Product2.Name, Quantity, UnitPrice, TotalPrice, Discount, Description, SortOrder', `QuoteId = '${safeId}'`, 10, 'SortOrder', 'ASC'),
+        { key: 'quoteLineItems', objectName: 'QuoteLineItem', title: 'Quote Line Items' }
+      )
+    ];
   }
   if (objectName === 'Campaign') {
     return [
@@ -3308,6 +3397,43 @@ async function getCustomRelatedListForRecord(objectName, id, listConfigs) {
     );
   });
   return Promise.all(promises);
+}
+
+function ensureRequiredRelatedListConfigs(objectName, configs = []) {
+  const merged = Array.isArray(configs) ? [...configs] : [];
+  const hasList = (childObject, key) => merged.some(config =>
+    config?.objectName === childObject || config?.key === key
+  );
+
+  if (objectName === 'Opportunity' && !hasList('Quote', 'quotes')) {
+    merged.unshift({
+      key: 'quotes',
+      objectName: 'Quote',
+      title: 'Quotes',
+      field: 'OpportunityId',
+      fields: ['Id', 'Name', 'QuoteNumber', 'Status', 'GrandTotal'],
+      limit: 5,
+      sortBy: 'CreatedDate',
+      sortDir: 'DESC'
+    });
+  }
+  if (objectName === 'Opportunity' && !hasList('OpportunityLineItem', 'opportunityProducts')) {
+    const insertAt = merged.findIndex(config => config?.key === 'cases' || config?.objectName === 'Case');
+    const productConfig = {
+      key: 'opportunityProducts',
+      objectName: 'OpportunityLineItem',
+      title: 'Products',
+      field: 'OpportunityId',
+      fields: ['Id', 'Product2.Name', 'Quantity', 'UnitPrice', 'TotalPrice', 'ServiceDate'],
+      limit: 10,
+      sortBy: 'SortOrder',
+      sortDir: 'ASC'
+    };
+    if (insertAt >= 0) merged.splice(insertAt, 0, productConfig);
+    else merged.push(productConfig);
+  }
+
+  return merged;
 }
 
 function queryMoreEndpoint(nextRecordsUrl = '') {
@@ -3576,6 +3702,10 @@ function objectFromId(id) {
     '500': 'Case',
     '00Q': 'Lead',
     '701': 'Campaign',
+    '0Q0': 'Quote',
+    '01t': 'Product2',
+    '00k': 'OpportunityLineItem',
+    '0QL': 'QuoteLineItem',
     '00T': 'Task',
     '00U': 'Event',
     '02s': 'EmailMessage',
@@ -5905,7 +6035,11 @@ app.get('/api/lookup/:object', checkAuth, async (req, res) => {
       Contact: 'Id, Name, Email, AccountId, Account.Name',
       Lead: 'Id, Name, Email, Company',
       User: 'Id, Name, Email, Username',
-      Opportunity: 'Id, Name, AccountId, Account.Name'
+      Opportunity: 'Id, Name, AccountId, Account.Name',
+      Quote: 'Id, Name, QuoteNumber, Status, AccountId, Account.Name, OpportunityId, Opportunity.Name',
+      Product2: 'Id, Name, ProductCode, Family, IsActive',
+      OpportunityLineItem: 'Id, OpportunityId, Opportunity.Name, Product2Id, Product2.Name, Quantity, TotalPrice',
+      QuoteLineItem: 'Id, LineNumber, QuoteId, Quote.Name, Product2Id, Product2.Name, Quantity, TotalPrice'
     }[object] || OBJECTS[object].fields;
     const selectFields = await fieldsCsvForObject(object, fields);
     const sfStartedAt = performance.now();
@@ -6182,7 +6316,7 @@ app.get('/api/:object/count', checkAuth, async (req, res, next) => {
 app.get('/api/debug/data-source', checkAuth, requireAdminPanel, async (req, res) => {
   try {
     const results = {};
-    for (const objectName of ['Account', 'Contact', 'Opportunity', 'Case', 'Lead', 'Campaign']) {
+    for (const objectName of PRIMARY_CRM_OBJECTS) {
       const soql = await buildCountSOQL(objectName);
       const data = await sfGet('/query', { q: soql });
       results[objectName] = Number(data.records?.[0]?.expr0 ?? data.totalSize ?? 0);
@@ -6665,7 +6799,10 @@ app.get('/api/search/global', checkAuth, async (req, res) => {
     `Opportunity(Id, Name, StageName, Amount),`,
     `Case(Id, CaseNumber, Subject, Status),`,
     `Lead(Id, Name, Email, Company),`,
-    `Campaign(Id, Name, Status, Type)`,
+    `Campaign(Id, Name, Status, Type),`,
+    `Quote(Id, Name, QuoteNumber, Status),`,
+    `Product2(Id, Name, ProductCode, Family),`,
+    `OpportunityLineItem(Id, Quantity, TotalPrice)`,
     `LIMIT 40`
   ].join(' ');
 
@@ -6921,6 +7058,7 @@ app.get('/api/:object/:id/related', checkAuth, async (req, res, next) => {
 
     let lists;
     if (hasCustom) {
+      customRelatedLists = ensureRequiredRelatedListConfigs(object, customRelatedLists);
       lists = await getCustomRelatedListForRecord(object, id, customRelatedLists);
     } else {
       lists = await getRelatedListsForRecord(object, id);
@@ -8250,7 +8388,10 @@ app.get('/api/search/global', checkAuth, async (req, res) => {
     `Opportunity(Id, Name, StageName, Amount),`,
     `Case(Id, CaseNumber, Subject, Status),`,
     `Lead(Id, Name, Email, Company),`,
-    `Campaign(Id, Name, Status, Type)`,
+    `Campaign(Id, Name, Status, Type),`,
+    `Quote(Id, Name, QuoteNumber, Status),`,
+    `Product2(Id, Name, ProductCode, Family),`,
+    `OpportunityLineItem(Id, Quantity, TotalPrice)`,
     `LIMIT 40`
   ].join(' ');
 
@@ -8298,6 +8439,7 @@ app.use((req, res) => {
 app.listen(PORT, async () => {
   console.log(`SaaSRAY CRM server running at http://localhost:${PORT}`);
   try {
+    await ensurePrimaryCrmObjectsRegistered();
     await getAccessToken();
   } catch (e) {
     console.error(`❌ Auth failed: ${e.message}\n`);

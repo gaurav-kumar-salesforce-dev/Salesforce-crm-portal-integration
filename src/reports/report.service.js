@@ -417,7 +417,7 @@ async function metadata(user, deps) {
     const perms = await deps.getEffectivePermissions(user.id, objectName);
     if (user.isSystemAdmin || perms?.can_read) readable.push({
       apiName: objectName,
-      label: objectName
+      label: objectName === 'Product2' ? 'Product' : objectName === 'OpportunityLineItem' ? 'Opportunity Product' : objectName === 'QuoteLineItem' ? 'Quote Line Item' : objectName
     });
   }));
   return readable.sort((a, b) => a.label.localeCompare(b.label));

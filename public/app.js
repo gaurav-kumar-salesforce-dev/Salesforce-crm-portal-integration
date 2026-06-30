@@ -178,6 +178,97 @@ const OBJECT_META = {
       "Description",
     ],
   },
+  Quote: {
+    title: "Quotes",
+    icon: "quote",
+    columns: [
+      "Name",
+      "QuoteNumber",
+      "Status",
+      "ExpirationDate",
+      "GrandTotal",
+      "Opportunity.Name",
+      "Account.Name",
+    ],
+    editable: [
+      "Name",
+      "Status",
+      "ExpirationDate",
+      "OpportunityId",
+      "AccountId",
+      "Description",
+    ],
+    lookups: {
+      OpportunityId: { object: "Opportunity", label: "Opportunity" },
+      AccountId: { object: "Account", label: "Account" },
+    },
+  },
+  Product2: {
+    title: "Products",
+    icon: "product",
+    columns: [
+      "Name",
+      "ProductCode",
+      "Family",
+      "IsActive",
+      "Description",
+    ],
+    editable: [
+      "Name",
+      "ProductCode",
+      "Family",
+      "IsActive",
+      "Description",
+    ],
+  },
+  OpportunityLineItem: {
+    title: "Opportunity Products",
+    icon: "opportunityProduct",
+    columns: [
+      "Product2.Name",
+      "Quantity",
+      "UnitPrice",
+      "TotalPrice",
+      "ServiceDate",
+    ],
+    editable: [
+      "OpportunityId",
+      "PricebookEntryId",
+      "Quantity",
+      "UnitPrice",
+      "ServiceDate",
+      "Description",
+    ],
+    lookups: {
+      OpportunityId: { object: "Opportunity", label: "Opportunity" },
+      Product2Id: { object: "Product2", label: "Product" },
+    },
+  },
+  QuoteLineItem: {
+    title: "Quote Line Items",
+    icon: "quoteLineItem",
+    columns: [
+      "LineNumber",
+      "Quote.Name",
+      "Product2.Name",
+      "Quantity",
+      "UnitPrice",
+      "TotalPrice",
+      "Discount",
+    ],
+    editable: [
+      "QuoteId",
+      "PricebookEntryId",
+      "Quantity",
+      "UnitPrice",
+      "Discount",
+      "Description",
+    ],
+    lookups: {
+      QuoteId: { object: "Quote", label: "Quote" },
+      Product2Id: { object: "Product2", label: "Product" },
+    },
+  },
   Task: {
     title: "Tasks",
     icon: "task",
@@ -811,6 +902,10 @@ function scheduleObjectMetadataPrefetch(objectName = currentObject) {
     Case: ["Account", "Contact"],
     Lead: ["Campaign"],
     Campaign: ["Lead"],
+    Quote: ["Account", "Opportunity"],
+    Product2: [],
+    OpportunityLineItem: ["Opportunity", "Product2"],
+    QuoteLineItem: ["Quote", "Product2"],
   };
   const targets = relatedObjectsByObject[objectName] || [];
   targets.forEach((target) => {
@@ -960,6 +1055,10 @@ function standardIconImage(key) {
     event: "event_120.png",
     email: "email_120.png",
     call: "log_a_call_120.png",
+    quote: "quote_glyph_icon_cropped.png",
+    quoteLineItem: "quote_glyph_icon_cropped.png",
+    product: "product_glyph_icon_cropped.png",
+    opportunityProduct: "product_glyph_icon_cropped.png",
   };
   const file = images[key];
   if (!file) return standardIconSvg(key);
@@ -978,6 +1077,12 @@ function standardIconSvg(key) {
     lead: '<svg viewBox="0 0 24 24"><path d="M12 3a3 3 0 110 6 3 3 0 010-6zM5 12a4 4 0 014-4h6a4 4 0 014 4v1h-4l-3 7-3-7H5v-1zm6.2 1l.8 2 .8-2h-1.6z"/></svg>',
     campaign:
       '<svg viewBox="0 0 24 24"><path d="M12 3a9 9 0 109 9 9 9 0 00-9-9zm0 3a6 6 0 11-6 6 6 6 0 016-6zm0 2.5a3.5 3.5 0 103.5 3.5A3.5 3.5 0 0012 8.5z"/></svg>',
+    quote:
+      '<svg viewBox="0 0 24 24"><path d="M6 3h12a2 2 0 012 2v16l-3-1.5-3 1.5-3-1.5L8 21l-4-2V5a2 2 0 012-2zm2 5h8V6H8v2zm0 4h8v-2H8v2zm0 4h5v-2H8v2z"/></svg>',
+    product:
+      '<svg viewBox="0 0 24 24"><path d="M12 2l8 4v12l-8 4-8-4V6l8-4zm0 2.2L7.1 6.6 12 9l4.9-2.4L12 4.2zM6 8.2v8.6l5 2.5v-8.6L6 8.2zm12 0l-5 2.5v8.6l5-2.5V8.2z"/></svg>',
+    quoteLineItem:
+      '<svg viewBox="0 0 24 24"><path d="M5 3h14a2 2 0 012 2v14a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2zm2 4v3h3V7H7zm5 0v3h5V7h-5zm-5 5v3h3v-3H7zm5 0v3h5v-3h-5z"/></svg>',
     user: '<svg viewBox="0 0 24 24"><path d="M12 12a4 4 0 100-8 4 4 0 000 8zm-6 8a6 6 0 0112 0H6z"/></svg>',
   };
   return (
@@ -1061,6 +1166,10 @@ function objectFromId(id) {
       500: "Case",
       "00Q": "Lead",
       701: "Campaign",
+      "0Q0": "Quote",
+      "01t": "Product2",
+      "00k": "OpportunityLineItem",
+      "0QL": "QuoteLineItem",
       "00T": "Task",
       "00U": "Event",
       "02s": "EmailMessage",
@@ -4416,6 +4525,10 @@ function getCustomCompactFields(objectName) {
       Opportunity: ["StageName", "Amount", "CloseDate", "Probability"],
       Case: ["Status", "Priority", "Type", "CreatedDate"],
       Campaign: ["Type", "Status", "StartDate", "EndDate"],
+      Quote: ["QuoteNumber", "Status", "ExpirationDate", "GrandTotal"],
+      Product2: ["ProductCode", "Family", "IsActive"],
+      OpportunityLineItem: ["Opportunity.Name", "Product2.Name", "Quantity", "TotalPrice"],
+      QuoteLineItem: ["Quote.Name", "Product2.Name", "Quantity", "TotalPrice"],
       User: ["Email", "Username", "Title"],
     }[objectName] ||
     OBJECT_META[objectName]?.columns ||
@@ -5582,6 +5695,10 @@ function getSummaryFields(objectName) {
       Opportunity: ["StageName", "Amount", "CloseDate", "Probability"],
       Case: ["Status", "Priority", "Type", "CreatedDate"],
       Campaign: ["Type", "Status", "StartDate", "EndDate"],
+      Quote: ["QuoteNumber", "Status", "ExpirationDate", "GrandTotal"],
+      Product2: ["ProductCode", "Family", "IsActive"],
+      OpportunityLineItem: ["Opportunity.Name", "Product2.Name", "Quantity", "TotalPrice"],
+      QuoteLineItem: ["Quote.Name", "Product2.Name", "Quantity", "TotalPrice"],
       User: ["Email", "Username", "Title"],
     }[objectName] ||
     OBJECT_META[objectName]?.columns ||
@@ -5596,6 +5713,7 @@ function renderRelatedPanel(objectName, comp = null) {
   } else {
     configs = getRelatedListConfigs(objectName);
   }
+  configs = ensureRequiredRelatedListConfigs(objectName, configs);
 
   const canShowCampaignMembers = objectName === "Campaign" && canReadObject("Campaign");
   if (!configs.length && !canShowCampaignMembers) {
@@ -5645,6 +5763,13 @@ function getRelatedListConfigs(objectName) {
           fields: ["CaseNumber", "Subject", "Status", "Priority"],
           parentLookup: "AccountId",
         },
+        {
+          key: "quotes",
+          objectName: "Quote",
+          title: "Quotes",
+          fields: ["Name", "QuoteNumber", "Status", "GrandTotal"],
+          parentLookup: "AccountId",
+        },
       ],
       Contact: [
         {
@@ -5666,6 +5791,20 @@ function getRelatedListConfigs(objectName) {
       ],
       Opportunity: [
         {
+          key: "quotes",
+          objectName: "Quote",
+          title: "Quotes",
+          fields: ["Name", "QuoteNumber", "Status", "GrandTotal"],
+          parentLookup: "OpportunityId",
+        },
+        {
+          key: "opportunityProducts",
+          objectName: "OpportunityLineItem",
+          title: "Products",
+          fields: ["Product2.Name", "Quantity", "UnitPrice", "TotalPrice", "ServiceDate"],
+          parentLookup: "OpportunityId",
+        },
+        {
           key: "cases",
           objectName: "Case",
           title: "Cases",
@@ -5673,6 +5812,15 @@ function getRelatedListConfigs(objectName) {
           parentLookup: "AccountId",
           sourceField: "AccountId",
           sourceNameField: "Account.Name",
+        },
+      ],
+      Quote: [
+        {
+          key: "quoteLineItems",
+          objectName: "QuoteLineItem",
+          title: "Quote Line Items",
+          fields: ["LineNumber", "Product2.Name", "Quantity", "UnitPrice", "TotalPrice"],
+          parentLookup: "QuoteId",
         },
       ],
       Campaign: [
@@ -5686,6 +5834,37 @@ function getRelatedListConfigs(objectName) {
       ],
     }[objectName] || [];
   return configs.filter((config) => canReadObject(config.objectName));
+}
+
+function ensureRequiredRelatedListConfigs(objectName, configs = []) {
+  const merged = Array.isArray(configs) ? [...configs] : [];
+  const hasList = (childObject, key) => merged.some((config) =>
+    config?.objectName === childObject || config?.key === key
+  );
+
+  if (objectName === "Opportunity" && !hasList("Quote", "quotes") && canReadObject("Quote")) {
+    merged.unshift({
+      key: "quotes",
+      objectName: "Quote",
+      title: "Quotes",
+      fields: ["Name", "QuoteNumber", "Status", "GrandTotal"],
+      parentLookup: "OpportunityId",
+    });
+  }
+  if (objectName === "Opportunity" && !hasList("OpportunityLineItem", "opportunityProducts") && canReadObject("OpportunityLineItem")) {
+    const productConfig = {
+      key: "opportunityProducts",
+      objectName: "OpportunityLineItem",
+      title: "Products",
+      fields: ["Product2.Name", "Quantity", "UnitPrice", "TotalPrice", "ServiceDate"],
+      parentLookup: "OpportunityId",
+    };
+    const insertAt = merged.findIndex((config) => config?.key === "cases" || config?.objectName === "Case");
+    if (insertAt >= 0) merged.splice(insertAt, 0, productConfig);
+    else merged.push(productConfig);
+  }
+
+  return merged;
 }
 
 function renderRelatedListShell(config, noMargin = false) {
@@ -5718,6 +5897,7 @@ function relatedListSubtitle(objectName) {
     {
       Contact: "Contacts associated with this account.",
       Opportunity: "Opportunities associated with this record.",
+      OpportunityLineItem: "Products associated with this opportunity.",
       Case: "Cases associated with this record.",
     }[objectName] || "Related records associated with this record."
   );
@@ -5770,6 +5950,7 @@ async function loadRelatedRecords(objectName, id) {
   if (configs.length === 0 && !hasRelatedListsComp) {
     configs = getRelatedListConfigs(objectName);
   }
+  configs = ensureRequiredRelatedListConfigs(objectName, configs);
 
   if (!configs.length) return;
 
