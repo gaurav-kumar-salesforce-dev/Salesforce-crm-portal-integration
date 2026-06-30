@@ -410,6 +410,8 @@ function reRenderIfPossible() {
 }
 
 async function api(path, options = {}) {
+  window.SaaSRAYSession?.markActivity?.();
+  await window.SaaSRAYSession?.refreshSession?.().catch(() => null);
   const token = localStorage.getItem('saasray_token');
   if (!token) {
     window.location.href = '/';
@@ -441,7 +443,8 @@ async function api(path, options = {}) {
       return sharedRequest;
     }
   }
-  const request = fetch(path, {
+  const fetcher = window.SaaSRAYSession?.authorizedFetch || fetch;
+  const request = fetcher(path, {
     ...options,
     headers: {
       'Content-Type': 'application/json',
@@ -1345,8 +1348,10 @@ async function exportReport(format = 'csv') {
   if (format && typeof format !== 'string') format = 'csv';
   format = format === 'xlsx' ? 'xlsx' : 'csv';
   if (!state.activeReport) return toast('Save the report before exporting', 'info');
+  await window.SaaSRAYSession?.refreshSession?.().catch(() => null);
   const token = localStorage.getItem('saasray_token');
-  const res = await fetch(`/api/reports/${state.activeReport.id}/export.${format}`, {
+  const fetcher = window.SaaSRAYSession?.authorizedFetch || fetch;
+  const res = await fetcher(`/api/reports/${state.activeReport.id}/export.${format}`, {
     headers: { Authorization: `Bearer ${token}` }
   });
   if (!res.ok) {
@@ -1564,8 +1569,10 @@ async function pollExportJob(jobId, tries = 0) {
 }
 
 async function downloadExportJob(jobId, job) {
+  await window.SaaSRAYSession?.refreshSession?.().catch(() => null);
   const token = localStorage.getItem('saasray_token');
-  const res = await fetch(`/api/reports/export-jobs/${jobId}/download`, {
+  const fetcher = window.SaaSRAYSession?.authorizedFetch || fetch;
+  const res = await fetcher(`/api/reports/export-jobs/${jobId}/download`, {
     headers: { Authorization: `Bearer ${token}` }
   });
   if (!res.ok) return toast('Could not download export job', 'err');

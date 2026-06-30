@@ -739,6 +739,7 @@ function getAuthToken() {
 
 function setAuthToken(token) {
   localStorage.setItem("saasray_token", token);
+  window.SaaSRAYSession?.markActivity?.(true);
 }
 
 function clearAuthToken() {
@@ -1216,11 +1217,14 @@ async function api(path, options = {}) {
 
    let response;
   try {
-    response = await fetch(path, {
+    const requestOptions = {
       headers,
       ...options,
       headers: { ...headers, ...(options.headers || {}) }
-    });
+    };
+    response = window.SaaSRAYSession?.authorizedFetch
+      ? await window.SaaSRAYSession.authorizedFetch(path, requestOptions)
+      : await fetch(path, requestOptions);
   } catch (networkErr) {
     // Pure network failure — no response at all
     toast('Network error — check your connection and try again.', 'err', 8000);
@@ -2902,14 +2906,16 @@ async function saveOrgAndConnect() {
 
 function connectSalesforce() {
   const activeKey = orgSettings.activeOrgKey || getActiveOrg()?.key;
+  const returnTo = encodeURIComponent(`${window.location.pathname}${window.location.search}${window.location.hash}`);
   window.location.href = activeKey
-    ? `/auth/salesforce?org=${encodeURIComponent(activeKey)}`
-    : "/auth/salesforce";
+    ? `/auth/salesforce?org=${encodeURIComponent(activeKey)}&returnTo=${returnTo}`
+    : `/auth/salesforce?returnTo=${returnTo}`;
 }
 
 async function logoutSalesforce() {
   // This is now PORTAL logout only
-  await fetch("/api/auth/logout", {
+  const fetcher = window.SaaSRAYSession?.authorizedFetch || fetch;
+  await fetcher("/api/auth/logout", {
     method: "POST",
     headers: { Authorization: `Bearer ${getAuthToken()}` },
   }).catch(() => null);
