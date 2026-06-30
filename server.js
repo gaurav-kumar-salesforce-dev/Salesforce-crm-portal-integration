@@ -4878,6 +4878,7 @@ app.post('/api/portal/users', checkAuth, checkRole('admin'), async (req, res) =>
       );
     }
 
+    invalidateAdminStaticCache('permissionSets');
     invalidateUserContextCache(newUser.id);
     roleVisibilityCache.clear();
 
@@ -5068,6 +5069,7 @@ app.patch('/api/portal/users/:id', checkAuth, checkRole('admin'), async (req, re
     }
 
     // Clear field perm cache
+    if (Array.isArray(permissionSetIds)) invalidateAdminStaticCache('permissionSets');
     clearFieldPermCache(id);
     invalidateUserContextCache(id);
 
@@ -5169,6 +5171,7 @@ app.delete('/api/portal/users/:id', checkAuth, checkRole('admin'), async (req, r
     });
 
     clearFieldPermCache(id);
+    invalidateAdminStaticCache('permissionSets');
     invalidateUserContextCache(id);
     res.json({ success: true });
   } catch (err) {
@@ -5205,6 +5208,7 @@ app.post('/api/portal/profiles', checkAuth, checkRole('admin'), async (req, res)
       );
     }
     await writeAuditLog({ userId: req.user.id, userEmail: req.user.email, userRole: req.user.role, action: 'create_profile', payload: { name }, ipAddress: req.ip });
+    invalidateAdminStaticCache('profiles');
     invalidateAllUserContextCache();
     res.status(201).json({ success: true, id: profile.id });
   } catch (e) { res.status(500).json({ error: e.message }); }
@@ -5222,6 +5226,7 @@ app.patch('/api/portal/profiles/:id', checkAuth, checkRole('admin'), async (req,
       );
     }
     await writeAuditLog({ userId: req.user.id, userEmail: req.user.email, userRole: req.user.role, action: 'update_profile', payload: { id: req.params.id, name }, ipAddress: req.ip });
+    invalidateAdminStaticCache('profiles');
     invalidateAllUserContextCache();
     res.json({ success: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
@@ -5234,6 +5239,7 @@ app.delete('/api/portal/profiles/:id', checkAuth, checkRole('admin'), async (req
     if (count > 0) return res.status(409).json({ error: 'Cannot delete a profile that is assigned to users' });
     await supabase.from('profile_object_permissions').delete().eq('profile_id', req.params.id);
     await supabase.from('profiles').delete().eq('id', req.params.id);
+    invalidateAdminStaticCache('profiles');
     invalidateAllUserContextCache();
     res.json({ success: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
@@ -5255,6 +5261,7 @@ app.post('/api/portal/permission-sets', checkAuth, checkRole('admin'), async (re
       );
     }
     await writeAuditLog({ userId: req.user.id, userEmail: req.user.email, userRole: req.user.role, action: 'create_perm_set', payload: { name }, ipAddress: req.ip });
+    invalidateAdminStaticCache('permissionSets');
     invalidateAllUserContextCache();
     res.status(201).json({ success: true, id: ps.id });
   } catch (e) { res.status(500).json({ error: e.message }); }
@@ -5274,6 +5281,7 @@ app.patch('/api/portal/permission-sets/:id', checkAuth, checkRole('admin'), asyn
       }
     }
     await writeAuditLog({ userId: req.user.id, userEmail: req.user.email, userRole: req.user.role, action: 'update_perm_set', payload: { id: req.params.id }, ipAddress: req.ip });
+    invalidateAdminStaticCache('permissionSets');
     clearAllFieldPermCache();
     invalidateAllUserContextCache();
     res.json({ success: true });
@@ -5287,6 +5295,7 @@ app.delete('/api/portal/permission-sets/:id', checkAuth, checkRole('admin'), asy
     await supabase.from('permission_set_group_members').delete().eq('perm_set_id', req.params.id);
     await supabase.from('permission_set_object_perms').delete().eq('perm_set_id', req.params.id);
     await supabase.from('permission_sets').delete().eq('id', req.params.id);
+    invalidateAdminStaticCache('permissionSets');
     clearAllFieldPermCache();
     invalidateAllUserContextCache();
     res.json({ success: true });
@@ -5537,18 +5546,196 @@ app.post('/api/portal/field-security/permissions', checkAuth, checkRole('admin')
 
 
 // GET /api/portal/profiles — list all profiles (admin+ only)
+const ADMIN_STATIC_CACHE_TTL_MS = 5 * 60 * 1000;
+const adminStaticCache = {
+  profiles: { expiresAt: 0, value: null, promise: null },
+  permissionSets: { expiresAt: 0, value: null, promise: null }
+};
+
+function invalidateAdminStaticCache(type = 'all') {
+  if (type === 'all' || type === 'profiles') {
+    adminStaticCache.profiles = { expiresAt: 0, value: null, promise: null };
+  }
+  if (type === 'all' || type === 'permissionSets') {
+    adminStaticCache.permissionSets = { expiresAt: 0, value: null, promise: null };
+  }
+}
+
+async function getAdminProfilesMetadata() {
+  const cache = adminStaticCache.profiles;
+  if (cache.value && cache.expiresAt > Date.now()) return cache.value;
+  if (cache.promise) return cache.promise;
+  cache.promise = supabase
+    .from('profiles')
+    .select(`
+      id, name, description, is_active, created_at,
+      profile_object_permissions ( sf_object, can_read, can_create, can_edit, can_delete )
+    `)
+    .order('name')
+    .then(({ data, error }) => {
+      if (error) throw error;
+      cache.value = data || [];
+      cache.expiresAt = Date.now() + ADMIN_STATIC_CACHE_TTL_MS;
+      return cache.value;
+    })
+    .finally(() => {
+      cache.promise = null;
+    });
+  return cache.promise;
+}
+
+async function getAdminPermissionSetsMetadata() {
+  const cache = adminStaticCache.permissionSets;
+  if (cache.value && cache.expiresAt > Date.now()) return cache.value;
+  if (cache.promise) return cache.promise;
+  cache.promise = supabase
+    .from('permission_sets')
+    .select('id, name, description, is_active, created_at')
+    .order('name')
+    .then(async ({ data: permissionSets, error }) => {
+      if (error) throw error;
+      const ids = (permissionSets || []).map((ps) => ps.id);
+      let permissionsBySetId = {};
+      let assignedUserCountBySetId = {};
+
+      if (ids.length) {
+        const [
+          { data: permissions, error: permissionsError },
+          { data: assignments, error: assignmentsError }
+        ] = await Promise.all([
+          supabase
+            .from('permission_set_object_perms')
+            .select('perm_set_id, sf_object, can_read, can_create, can_edit, can_delete')
+            .in('perm_set_id', ids),
+          supabase
+            .from('user_permission_set_assignments')
+            .select('perm_set_id, user_id')
+            .in('perm_set_id', ids)
+        ]);
+
+        if (permissionsError) throw permissionsError;
+        if (assignmentsError) throw assignmentsError;
+
+        permissionsBySetId = (permissions || []).reduce((acc, permission) => {
+          const { perm_set_id, ...rest } = permission;
+          if (!acc[perm_set_id]) acc[perm_set_id] = [];
+          acc[perm_set_id].push(rest);
+          return acc;
+        }, {});
+
+        assignedUserCountBySetId = (assignments || []).reduce((acc, assignment) => {
+          acc[assignment.perm_set_id] = (acc[assignment.perm_set_id] || 0) + 1;
+          return acc;
+        }, {});
+      }
+
+      cache.value = (permissionSets || []).map((ps) => ({
+        ...ps,
+        assignedUserCount: assignedUserCountBySetId[ps.id] || 0,
+        permission_set_object_perms: permissionsBySetId[ps.id] || []
+      }));
+      cache.expiresAt = Date.now() + ADMIN_STATIC_CACHE_TTL_MS;
+      return cache.value;
+    })
+    .finally(() => {
+      cache.promise = null;
+    });
+  return cache.promise;
+}
+
+function mapPortalUsers(users = [], imageRows = [], assignments = [], permissionSets = []) {
+  const profileImagesByUserId = Object.fromEntries((imageRows || []).map((row) => [row.id, row.profile_image || null]));
+  const invitationStateByUserId = Object.fromEntries((imageRows || []).map((row) => [row.id, {
+    mustChangePw: row.must_change_pw,
+    invitationSentAt: row.invitation_sent_at,
+    invitationExpiresAt: row.invitation_expires_at,
+    invitationCancelledAt: row.invitation_cancelled_at,
+    emailVerifiedAt: row.email_verified_at,
+    passwordCreatedAt: row.password_created_at,
+    setupCompletedAt: row.setup_completed_at
+  }]));
+  const permissionSetById = Object.fromEntries((permissionSets || []).map((ps) => [ps.id, ps]));
+  const permissionSetsByUserId = (assignments || []).reduce((acc, row) => {
+    const permissionSet = permissionSetById[row.perm_set_id];
+    if (!permissionSet) return acc;
+    if (!acc[row.user_id]) acc[row.user_id] = [];
+    acc[row.user_id].push({
+      id: permissionSet.id,
+      name: permissionSet.name,
+      description: permissionSet.description
+    });
+    return acc;
+  }, {});
+
+  return users.map(u => ({
+    id: u.id,
+    email: u.email,
+    name: u.name,
+    role: u.role,
+    isSystemAdmin: u.is_system_admin || false,
+    profileImage: profileImagesByUserId[u.id] || u.profile_image || null,
+    isActive: u.is_active,
+    mustChangePw: invitationStateByUserId[u.id]?.mustChangePw ?? u.must_change_pw,
+    invitationSentAt: invitationStateByUserId[u.id]?.invitationSentAt || null,
+    invitationExpiresAt: invitationStateByUserId[u.id]?.invitationExpiresAt || null,
+    invitationCancelledAt: invitationStateByUserId[u.id]?.invitationCancelledAt || null,
+    emailVerifiedAt: invitationStateByUserId[u.id]?.emailVerifiedAt || null,
+    passwordCreatedAt: invitationStateByUserId[u.id]?.passwordCreatedAt || null,
+    setupCompletedAt: invitationStateByUserId[u.id]?.setupCompletedAt || null,
+    needsInvitation: needsInvitation({
+      must_change_pw: invitationStateByUserId[u.id]?.mustChangePw ?? u.must_change_pw,
+      invitation_expires_at: invitationStateByUserId[u.id]?.invitationExpiresAt,
+      invitation_cancelled_at: invitationStateByUserId[u.id]?.invitationCancelledAt,
+      email_verified_at: invitationStateByUserId[u.id]?.emailVerifiedAt,
+      password_created_at: invitationStateByUserId[u.id]?.passwordCreatedAt,
+      setup_completed_at: invitationStateByUserId[u.id]?.setupCompletedAt
+    }),
+    createdAt: u.created_at,
+    lastLoginAt: u.last_login_at,
+    org_role_id: u.org_role_id || null,
+    orgRoleId: u.org_role_id || null,
+    org_role_name: u.org_role_name || null,
+    orgRoleName: u.org_role_name || null,
+    orgRoleLevel: u.org_role_level || null,
+    profile: u.profile_id ? {
+      id: u.profile_id,
+      name: u.profile_name,
+      isSystemAdmin: u.is_system_admin || false
+    } : null,
+    permissionSets: permissionSetsByUserId[u.id] || []
+  }));
+}
+
+async function getAdminUsersPayload() {
+  const { data: users, error } = await supabase.rpc('get_portal_users');
+  if (error) throw error;
+  const userRows = users || [];
+  const userIds = userRows.map((u) => u.id);
+  const [permissionSets, imageResult, assignmentResult] = await Promise.all([
+    getAdminPermissionSetsMetadata(),
+    userIds.length
+      ? supabase
+        .from('users')
+        .select('id, profile_image, must_change_pw, invitation_sent_at, invitation_expires_at, invitation_cancelled_at, email_verified_at, password_created_at, setup_completed_at')
+        .in('id', userIds)
+      : Promise.resolve({ data: [], error: null }),
+    userIds.length
+      ? supabase
+        .from('user_permission_set_assignments')
+        .select('user_id, perm_set_id')
+        .in('user_id', userIds)
+      : Promise.resolve({ data: [], error: null })
+  ]);
+  if (imageResult.error) throw imageResult.error;
+  if (assignmentResult.error) throw assignmentResult.error;
+  return {
+    users: mapPortalUsers(userRows, imageResult.data || [], assignmentResult.data || [], permissionSets)
+  };
+}
+
 app.get('/api/portal/profiles', checkAuth, checkRole('admin'), async (req, res) => {
   try {
-    const { data, error } = await supabase
-      .from('profiles')
-      .select(`
-        id, name, description, is_active, created_at,
-        profile_object_permissions ( sf_object, can_read, can_create, can_edit, can_delete )
-      `)
-      .order('name');
-
-    if (error) throw error;
-    res.json({ profiles: data || [] });
+    res.json({ profiles: await getAdminProfilesMetadata() });
   } catch (err) {
     console.error('GET /api/portal/profiles error:', err.message);
     res.status(500).json({ error: 'Could not load profiles' });
@@ -5559,101 +5746,27 @@ app.get('/api/portal/profiles', checkAuth, checkRole('admin'), async (req, res) 
 // GET /api/portal/users — list all portal users (admin+ only)
 app.get('/api/portal/users', checkAuth, checkRole('admin'), async (req, res) => {
   try {
-    const { data, error } = await supabase.rpc('get_portal_users');
-    if (error) throw error;
-
-    const users = data || [];
-    const userIds = users.map((u) => u.id);
-    let permissionSetsByUserId = {};
-    let profileImagesByUserId = {};
-    let invitationStateByUserId = {};
-
-    if (userIds.length) {
-      const { data: imageRows, error: imageError } = await supabase
-        .from('users')
-        .select('id, profile_image, must_change_pw, invitation_sent_at, invitation_expires_at, invitation_cancelled_at, email_verified_at, password_created_at, setup_completed_at')
-        .in('id', userIds);
-      if (imageError) throw imageError;
-      profileImagesByUserId = Object.fromEntries((imageRows || []).map((row) => [row.id, row.profile_image || null]));
-      invitationStateByUserId = Object.fromEntries((imageRows || []).map((row) => [row.id, {
-        mustChangePw: row.must_change_pw,
-        invitationSentAt: row.invitation_sent_at,
-        invitationExpiresAt: row.invitation_expires_at,
-        invitationCancelledAt: row.invitation_cancelled_at,
-        emailVerifiedAt: row.email_verified_at,
-        passwordCreatedAt: row.password_created_at,
-        setupCompletedAt: row.setup_completed_at
-      }]));
-
-      const { data: assignments, error: assignmentsError } = await supabase
-        .from('user_permission_set_assignments')
-        .select('user_id, perm_set_id')
-        .in('user_id', userIds);
-
-      if (assignmentsError) throw assignmentsError;
-
-      const permissionSetIds = [...new Set((assignments || []).map((row) => row.perm_set_id))];
-      let permissionSetById = {};
-
-      if (permissionSetIds.length) {
-        const { data: permissionSets, error: permissionSetsError } = await supabase
-          .from('permission_sets')
-          .select('id, name, description')
-          .in('id', permissionSetIds);
-
-        if (permissionSetsError) throw permissionSetsError;
-        permissionSetById = Object.fromEntries((permissionSets || []).map((ps) => [ps.id, ps]));
-      }
-
-      permissionSetsByUserId = (assignments || []).reduce((acc, row) => {
-        const permissionSet = permissionSetById[row.perm_set_id];
-        if (!permissionSet) return acc;
-        if (!acc[row.user_id]) acc[row.user_id] = [];
-        acc[row.user_id].push(permissionSet);
-        return acc;
-      }, {});
-    }
-    res.json({
-      users: users.map(u => ({
-        id: u.id,
-        email: u.email,
-        name: u.name,
-        role: u.role,
-        isSystemAdmin: u.is_system_admin || false,
-        profileImage: profileImagesByUserId[u.id] || u.profile_image || null,
-        isActive: u.is_active,
-        mustChangePw: invitationStateByUserId[u.id]?.mustChangePw ?? u.must_change_pw,
-        invitationSentAt: invitationStateByUserId[u.id]?.invitationSentAt || null,
-        invitationExpiresAt: invitationStateByUserId[u.id]?.invitationExpiresAt || null,
-        invitationCancelledAt: invitationStateByUserId[u.id]?.invitationCancelledAt || null,
-        emailVerifiedAt: invitationStateByUserId[u.id]?.emailVerifiedAt || null,
-        passwordCreatedAt: invitationStateByUserId[u.id]?.passwordCreatedAt || null,
-        setupCompletedAt: invitationStateByUserId[u.id]?.setupCompletedAt || null,
-        needsInvitation: needsInvitation({
-          must_change_pw: invitationStateByUserId[u.id]?.mustChangePw ?? u.must_change_pw,
-          invitation_expires_at: invitationStateByUserId[u.id]?.invitationExpiresAt,
-          invitation_cancelled_at: invitationStateByUserId[u.id]?.invitationCancelledAt,
-          email_verified_at: invitationStateByUserId[u.id]?.emailVerifiedAt,
-          password_created_at: invitationStateByUserId[u.id]?.passwordCreatedAt,
-          setup_completed_at: invitationStateByUserId[u.id]?.setupCompletedAt
-        }),
-        createdAt: u.created_at,
-        lastLoginAt: u.last_login_at,
-        org_role_id: u.org_role_id || null,
-        orgRoleId: u.org_role_id || null,
-        org_role_name: u.org_role_name || null,
-        orgRoleName: u.org_role_name || null,
-        orgRoleLevel: u.org_role_level || null,
-        profile: u.profile_id ? {
-          id: u.profile_id,
-          name: u.profile_name,
-          isSystemAdmin: u.is_system_admin || false
-        } : null,
-        permissionSets: permissionSetsByUserId[u.id] || []
-      }))
-    });
+    res.json(await getAdminUsersPayload());
   } catch (err) {
     console.error('GET /api/portal/users error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/portal/admin/users-bootstrap', checkAuth, checkRole('admin'), async (req, res) => {
+  try {
+    const [usersPayload, profiles, permissionSets] = await Promise.all([
+      getAdminUsersPayload(),
+      getAdminProfilesMetadata(),
+      getAdminPermissionSetsMetadata()
+    ]);
+    res.json({
+      users: usersPayload.users,
+      profiles,
+      permissionSets
+    });
+  } catch (err) {
+    console.error('GET /api/portal/admin/users-bootstrap error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
@@ -5662,55 +5775,7 @@ app.get('/api/portal/users', checkAuth, checkRole('admin'), async (req, res) => 
 // THIS WAS MISSING — it was accidentally replaced by a duplicate users route
 app.get('/api/portal/permission-sets', checkAuth, checkRole('admin'), async (req, res) => {
   try {
-    const { data: permissionSets, error } = await supabase
-      .from('permission_sets')
-      .select('id, name, description, is_active, created_at')
-      .order('name');
-
-    if (error) throw error;
-
-    const ids = (permissionSets || []).map((ps) => ps.id);
-    let permissionsBySetId = {};
-    let assignedUserCountBySetId = {};
-
-    if (ids.length) {
-      const [
-        { data: permissions, error: permissionsError },
-        { data: assignments, error: assignmentsError }
-      ] = await Promise.all([
-        supabase
-          .from('permission_set_object_perms')
-          .select('perm_set_id, sf_object, can_read, can_create, can_edit, can_delete')
-          .in('perm_set_id', ids),
-        supabase
-          .from('user_permission_set_assignments')
-          .select('perm_set_id, user_id')
-          .in('perm_set_id', ids)
-      ]);
-
-      if (permissionsError) throw permissionsError;
-      if (assignmentsError) throw assignmentsError;
-
-      permissionsBySetId = (permissions || []).reduce((acc, permission) => {
-        const { perm_set_id, ...rest } = permission;
-        if (!acc[perm_set_id]) acc[perm_set_id] = [];
-        acc[perm_set_id].push(rest);
-        return acc;
-      }, {});
-
-      assignedUserCountBySetId = (assignments || []).reduce((acc, assignment) => {
-        acc[assignment.perm_set_id] = (acc[assignment.perm_set_id] || 0) + 1;
-        return acc;
-      }, {});
-    }
-
-    res.json({
-      permissionSets: (permissionSets || []).map((ps) => ({
-        ...ps,
-        assignedUserCount: assignedUserCountBySetId[ps.id] || 0,
-        permission_set_object_perms: permissionsBySetId[ps.id] || []
-      }))
-    });
+    res.json({ permissionSets: await getAdminPermissionSetsMetadata() });
   } catch (err) {
     console.error('GET /api/portal/permission-sets error:', err.message);
     res.status(500).json({ error: err.message });
