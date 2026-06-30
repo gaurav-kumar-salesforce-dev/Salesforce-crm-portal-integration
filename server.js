@@ -12,8 +12,12 @@ const {
   getEffectivePermissions,
   getEffectivePermissionSetIds,
   getUserWithPermissions,
+  invalidateUserContextCache,
+  invalidateAllUserContextCache,
+  getUserContextCacheStats,
   writeAuditLog
 } = require('./db');
+const perfAudit = require('./src/perf-audit');
 const { createReportsRouter } = require('./src/reports/report.routes');
 const { createDashboardsRouter } = require('./src/dashboards/dashboard.routes');
 const { sendWelcomeUserInvitation } = require('./src/email/email.service');
@@ -32,6 +36,8 @@ const app = express();
 app.set('trust proxy', true);
 app.use(express.json({ limit: process.env.JSON_BODY_LIMIT || '25mb' }));
 app.use(express.static(path.join(__dirname, 'public')));
+perfAudit.instrumentSupabase(supabase);
+app.use('/api', perfAudit.middleware);
 
 function normalizeAppUrl(req) {
   const configured = process.env.APP_URL || `${req.protocol}://${req.get('host')}`;
@@ -152,6 +158,7 @@ async function sendPortalUserInvitation({ userId, adminUser, req, auditAction })
       updated_at: nowIso
     })
     .eq('id', user.id);
+  invalidateUserContextCache(user.id);
 
   await writeAuditLog({
     userId: adminUser?.id || user.id,
@@ -170,7 +177,96 @@ async function sendPortalUserInvitation({ userId, adminUser, req, auditAction })
   return { expiresAt, messageId: sendResult?.id || null };
 }
 
-// Verifies JWT on every request. Attaches req.user = { id, email, role, name }
+const requestContextStats = {
+  hits: 0,
+  misses: 0,
+  duplicatePermissionPrevented: 0
+};
+
+function requestContextLog(...args) {
+  if (process.env.NODE_ENV !== 'production') {
+    console.log('[request-context]', ...args);
+  }
+}
+
+function deepFreeze(value) {
+  if (!value || typeof value !== 'object' || Object.isFrozen(value)) return value;
+  Object.freeze(value);
+  Object.values(value).forEach(deepFreeze);
+  return value;
+}
+
+function buildRequestUser(context, decoded = {}) {
+  return {
+    ...decoded,
+    id: context.id,
+    email: context.email,
+    name: context.name,
+    role: context.role,
+    isSystemAdmin: Boolean(context.profile?.is_system_admin)
+  };
+}
+
+async function resolveRequestContext(req, decoded) {
+  if (req.userContext) return req.userContext;
+  if (req.userContextPromise) return req.userContextPromise;
+
+  req.userContextPromise = getUserWithPermissions(decoded.id)
+    .then((context) => {
+      if (!context?.id) return null;
+      const requestContext = deepFreeze({
+        user: {
+          id: context.id,
+          email: context.email,
+          name: context.name,
+          role: context.role,
+          profile_image: context.profile_image || null,
+          is_active: context.is_active,
+          must_change_pw: context.must_change_pw,
+          last_login_at: context.last_login_at
+        },
+        profile: context.profile || null,
+        role: context.role,
+        permissions: context.permissions || {},
+        effectivePermissionSetIds: context.effectivePermissionSetIds || [],
+        directPermissionSetIds: context.directPermissionSetIds || [],
+        permissionGroups: context.permissionGroups || [],
+        profileAssignment: context.profileAssignment || null,
+        sfObjects: context.sfObjects || [],
+        profilePermissions: context.profilePermissions || [],
+        permissionSetPermissions: context.permissionSetPermissions || [],
+        isSystemAdmin: Boolean(context.profile?.is_system_admin),
+        organizationId: orgStore.activeOrgKey || activeOrg()?.key || DEFAULT_ORG_KEY,
+        raw: context
+      });
+      req.userContext = requestContext;
+      req.user = buildRequestUser(context, decoded);
+      return requestContext;
+    })
+    .finally(() => {
+      req.userContextPromise = null;
+    });
+
+  return req.userContextPromise;
+}
+
+function permissionsFromRequestContext(req, sfObject) {
+  const perms = req.userContext?.permissions?.[sfObject];
+  if (!perms) return null;
+  requestContextStats.duplicatePermissionPrevented += 1;
+  requestContextLog('Duplicate Permission Prevented', sfObject);
+  return { ...perms };
+}
+
+function getRequestContextStats() {
+  const userStats = getUserContextCacheStats();
+  return {
+    ...requestContextStats,
+    userContextCache: userStats
+  };
+}
+
+// Verifies JWT on every request. Attaches req.user and req.userContext.
 async function checkAuth(req, res, next) {
   const header = req.headers.authorization || '';
   const token  = header.startsWith('Bearer ') ? header.slice(7) : null;
@@ -178,31 +274,21 @@ async function checkAuth(req, res, next) {
   try {
     const decoded = jwt.verify(token, JWT_SECRET);
 
-    const { data: activeUser, error: activeUserError } = await supabase
-      .from('users')
-      .select('id, email, name, role, is_active')
-      .eq('id', decoded.id)
-      .eq('is_active', true)
-      .single();
+    const before = getUserContextCacheStats();
+    const context = await resolveRequestContext(req, decoded);
+    const after = getUserContextCacheStats();
+    if (after.hits > before.hits) {
+      requestContextStats.hits += 1;
+      requestContextLog('Request Context Cache Hit', decoded.id);
+    } else if (after.misses > before.misses) {
+      requestContextStats.misses += 1;
+      requestContextLog('Request Context Cache Miss', decoded.id);
+    }
 
-    if (activeUserError || !activeUser) {
+    if (!context?.user?.is_active) {
       return res.status(401).json({ error: 'Session expired. Please log in again.', code: 'USER_INACTIVE' });
     }
 
-    const { data: profileAssignment } = await supabase
-      .from('user_profile_assignments')
-      .select('profiles(is_system_admin)')
-      .eq('user_id', activeUser.id)
-      .maybeSingle();
-
-    req.user = {
-      ...decoded,
-      id: activeUser.id,
-      email: activeUser.email,
-      name: activeUser.name,
-      role: activeUser.role,
-      isSystemAdmin: Boolean(profileAssignment?.profiles?.is_system_admin)
-    };
     next();
   } catch (err) {
     const code = err.name === 'TokenExpiredError' ? 'TOKEN_EXPIRED' : 'TOKEN_INVALID';
@@ -279,32 +365,39 @@ function bulkOperationAction(operation) {
 // Checks user's effective permissions for a SF object before allowing the action
 function checkPermission(sfObject, action) {
   return async (req, res, next) => {
+    const startedAt = performance.now();
     try {
       const role = req.user.role;
 
       // System Administrator profile, system_administrator role, and admin role bypass object permission checks
       if (isFullAccessUser(req.user)) {
+        perfAudit.recordEvent('permission', `${sfObject}.${action}.admin-bypass`, performance.now() - startedAt);
         return next();
       }
 
       // readonly role can NEVER write
       if (role === 'readonly' && action !== 'can_read') {
+        perfAudit.recordEvent('permission', `${sfObject}.${action}.readonly-deny`, performance.now() - startedAt);
         return res.status(403).json({
           error: permissionDeniedMessage(),
           code: 'PERMISSION_DENIED'
         });
       }
 
-      const perms = await getEffectivePermissions(req.user.id, sfObject);
+      const perms = permissionsFromRequestContext(req, sfObject) ||
+        await getEffectivePermissions(req.user.id, sfObject);
       if (!perms || !perms[action]) {
+        perfAudit.recordEvent('permission', `${sfObject}.${action}.deny`, performance.now() - startedAt);
         return res.status(403).json({
           error: permissionDeniedMessage(),
           code: 'PERMISSION_DENIED'
         });
       }
 
+      perfAudit.recordEvent('permission', `${sfObject}.${action}.allow`, performance.now() - startedAt);
       next();
     } catch (err) {
+      perfAudit.recordEvent('permission', `${sfObject}.${action}.error`, performance.now() - startedAt, { error: err.message });
       console.error('Permission check error:', err.message);
       res.status(500).json({ error: 'Could not verify permissions' });
     }
@@ -319,7 +412,7 @@ function fieldPermCacheKey(userId, sfObject) {
   return `${userId}:${sfObject}`;
 }
 
-async function getEffectiveFieldPerms(userId, sfObject, userRole, isSystemAdmin = false) {
+async function getEffectiveFieldPerms(userId, sfObject, userRole, isSystemAdmin = false, userContext = null) {
   const cacheKey = fieldPermCacheKey(userId, sfObject);
   if (fieldPermCache.has(cacheKey)) return fieldPermCache.get(cacheKey);
 
@@ -335,13 +428,16 @@ async function getEffectiveFieldPerms(userId, sfObject, userRole, isSystemAdmin 
     return null;
   }
 
-  const { data: profileAssignment, error: profileError } = await supabase
-    .from('user_profile_assignments')
-    .select('profile_id')
-    .eq('user_id', userId)
-    .maybeSingle();
-
-  if (profileError) throw profileError;
+  let profileAssignment = userContext?.profileAssignment;
+  if (!profileAssignment) {
+    const { data, error: profileError } = await supabase
+      .from('user_profile_assignments')
+      .select('profile_id')
+      .eq('user_id', userId)
+      .maybeSingle();
+    if (profileError) throw profileError;
+    profileAssignment = data;
+  }
 
   let profilePerms = [];
   if (profileAssignment?.profile_id) {
@@ -354,7 +450,9 @@ async function getEffectiveFieldPerms(userId, sfObject, userRole, isSystemAdmin 
     profilePerms = data || [];
   }
 
-  const permSetIds = await getEffectivePermissionSetIds(userId);
+  const permSetIds = userContext?.effectivePermissionSetIds
+    ? [...userContext.effectivePermissionSetIds]
+    : await getEffectivePermissionSetIds(userId);
   let permSetPerms = [];
   if (permSetIds.length) {
     const { data, error } = await supabase
@@ -424,7 +522,8 @@ function attachFieldPerms(sfObject) {
         req.user.id,
         sfObject,
         req.user.role,
-        req.user.isSystemAdmin
+        req.user.isSystemAdmin,
+        req.userContext
       );
       next();
     } catch (err) {
@@ -830,14 +929,21 @@ async function getViewerRecordShareIds(sfObject, userId, viewerGroupIds) {
   return recordIds;
 }
 
-async function buildReadableRecordScopeFilter(sfObject, user, requestId = 'n/a') {
+async function buildReadableRecordScopeFilter(sfObject, user, requestId = 'n/a', availableFields = null) {
   const startedAt = performance.now();
-  if (!user || isFullAccessUser(user)) return { clause: '', reason: 'admin' };
-  const availableFields = await getObjectFieldSet(sfObject);
-  if (!availableFields.has(PORTAL_OWNER_FIELD)) return { clause: '', reason: 'no_owner_field' };
+  if (!user || isFullAccessUser(user)) {
+    perfAudit.recordEvent('sharing', `${sfObject}.scopeFilter.admin`, performance.now() - startedAt);
+    return { clause: '', reason: 'admin' };
+  }
+  const resolvedAvailableFields = availableFields || await getObjectFieldSet(sfObject);
+  if (!resolvedAvailableFields.has(PORTAL_OWNER_FIELD)) {
+    perfAudit.recordEvent('sharing', `${sfObject}.scopeFilter.no_owner_field`, performance.now() - startedAt);
+    return { clause: '', reason: 'no_owner_field' };
+  }
 
   const owdAccess = await getOrgWideDefaultAccess(sfObject);
   if (['public_read', 'public_read_write'].includes(owdAccess)) {
+    perfAudit.recordEvent('sharing', `${sfObject}.scopeFilter.${owdAccess}`, performance.now() - startedAt);
     return { clause: '', reason: owdAccess };
   }
 
@@ -862,6 +968,7 @@ async function buildReadableRecordScopeFilter(sfObject, user, requestId = 'n/a')
 
   if (unrestrictedBySharingRule) {
     securityPerfLog(requestId, 'scopeFilter', { object: sfObject, reason: 'sharing_any_owner', ms: msSince(startedAt) });
+    perfAudit.recordEvent('sharing', `${sfObject}.scopeFilter.sharing_any_owner`, performance.now() - startedAt);
     return { clause: '', reason: 'sharing_any_owner' };
   }
 
@@ -875,6 +982,10 @@ async function buildReadableRecordScopeFilter(sfObject, user, requestId = 'n/a')
       owners: ownerIds.size,
       shares: sharedRecordIds.size,
       ms: msSince(startedAt)
+    });
+    perfAudit.recordEvent('sharing', `${sfObject}.scopeFilter.too_many_ids`, performance.now() - startedAt, {
+      owners: ownerIds.size,
+      shares: sharedRecordIds.size
     });
     return { clause: '', reason: 'too_many_ids' };
   }
@@ -894,6 +1005,10 @@ async function buildReadableRecordScopeFilter(sfObject, user, requestId = 'n/a')
     owners: ownerIds.size,
     shares: sharedRecordIds.size,
     ms: msSince(startedAt)
+  });
+  perfAudit.recordEvent('sharing', `${sfObject}.scopeFilter.owner_scope`, performance.now() - startedAt, {
+    owners: ownerIds.size,
+    shares: sharedRecordIds.size
   });
   return { clause, reason: 'owner_scope' };
 }
@@ -986,7 +1101,10 @@ async function canSeeRecord(record, userId, userRole, sfObject, isSystemAdmin = 
 
 async function applyRecordVisibility(records, userId, userRole, sfObject, isSystemAdmin = false, requestId = 'n/a') {
   const startedAt = performance.now();
-  if (isSystemAdmin) return records;
+  if (isSystemAdmin) {
+    perfAudit.recordEvent('sharing', `${sfObject}.applyRecordVisibility.admin`, performance.now() - startedAt);
+    return records;
+  }
   const rows = records || [];
   const context = await buildVisibilityContext(userId, userRole, sfObject);
   const ownerIds = [...new Set(rows.map(getRecordOwnerId).filter(Boolean))];
@@ -1017,6 +1135,13 @@ async function applyRecordVisibility(records, userId, userRole, sfObject, isSyst
     rules: context.rules.length,
     ms: msSince(startedAt)
   });
+  perfAudit.recordEvent('sharing', `${sfObject}.applyRecordVisibility`, performance.now() - startedAt, {
+    evaluated: rows.length,
+    visible: visible.length,
+    owners: ownerIds.length,
+    groups: context.viewerGroupIds.size,
+    rules: context.rules.length
+  });
   return visible;
 }
 
@@ -1038,7 +1163,8 @@ async function filterSearchRecordsByVisibility(searchRecords = [], req) {
 
   const allowedByKey = new Set();
   await Promise.all(Object.entries(grouped).map(async ([objectName, records]) => {
-    const perms = await getEffectivePermissions(req.user.id, objectName);
+    const perms = permissionsFromRequestContext(req, objectName) ||
+      await getEffectivePermissions(req.user.id, objectName);
     if (!perms?.can_read) return;
 
     const ownedRecords = await hydrateRecordOwners(records, objectName);
@@ -1061,7 +1187,8 @@ async function filterRelatedListsByVisibility(lists = [], req, requestId = 'rela
   return Promise.all((lists || []).map(async (list) => {
     if (!OBJECTS[list.objectName]) return list;
 
-    const perms = await getEffectivePermissions(req.user.id, list.objectName);
+    const perms = permissionsFromRequestContext(req, list.objectName) ||
+      await getEffectivePermissions(req.user.id, list.objectName);
     if (!perms?.can_read) {
       return { ...list, records: [], totalSize: 0 };
     }
@@ -1089,7 +1216,7 @@ app.get('/api/portal/owd', checkAuth, checkRole('admin'), async (req, res) => {
     if (error) throw error;
     const existingByObject = new Map((data || []).map(row => [row.sf_object, row]));
     const defaults = Object.keys(OBJECTS)
-      .filter(objectName => !['Task', 'Event', 'EmailMessage', 'Pricebook2', 'User'].includes(objectName))
+      .filter(objectName => !INTERNAL_OBJECTS.includes(objectName))
       .map(objectName => existingByObject.get(objectName) || {
         sf_object: objectName,
         access_level: 'private',
@@ -1414,6 +1541,7 @@ app.post('/api/portal/permission-set-groups', checkAuth, checkRole('admin'), asy
     });
 
     clearAllFieldPermCache();
+    invalidateAllUserContextCache();
     res.status(201).json({ success: true, id: group.id });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -1457,6 +1585,7 @@ app.patch('/api/portal/permission-set-groups/:id', checkAuth, checkRole('admin')
     }
 
     clearAllFieldPermCache();
+    invalidateAllUserContextCache();
     res.json({ success: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -1469,6 +1598,7 @@ app.delete('/api/portal/permission-set-groups/:id', checkAuth, checkRole('admin'
     await supabase.from('permission_set_group_muting').delete().eq('group_id', req.params.id);
     await supabase.from('permission_set_groups').delete().eq('id', req.params.id);
     clearAllFieldPermCache();
+    invalidateAllUserContextCache();
     res.json({ success: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -1484,6 +1614,7 @@ app.post('/api/portal/users/:id/permission-set-groups', checkAuth, checkRole('ad
       assigned_by: req.user.id
     }, { onConflict: 'user_id,group_id' });
     clearFieldPermCache(req.params.id);
+    invalidateUserContextCache(req.params.id);
     res.json({ success: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -1497,6 +1628,7 @@ app.delete('/api/portal/users/:id/permission-set-groups/:groupId', checkAuth, ch
       .eq('user_id', req.params.id)
       .eq('group_id', req.params.groupId);
     clearFieldPermCache(req.params.id);
+    invalidateUserContextCache(req.params.id);
     res.json({ success: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -1737,6 +1869,7 @@ app.patch('/api/portal/users/:id/org-role', checkAuth, checkRole('admin'), async
     if (error) throw error;
 
     roleVisibilityCache.clear();
+    invalidateUserContextCache(req.params.id);
 
     await writeAuditLog({
       userId:    req.user.id,
@@ -2028,7 +2161,7 @@ function switchActiveOrg(key) {
   applyActiveOrg();
   _cachedToken = null;
   _tokenExpires = 0;
-  describeFieldCache.clear();
+  invalidateAllMetadata();
   saveOrgStore();
   return activeOrg();
 }
@@ -2134,6 +2267,255 @@ let _cachedToken = null;
 let _tokenExpires = 0;
 const oauthStates = new Map();
 const describeFieldCache = new Map();
+const describeChildRelsCache = new Map();
+const describeMetadataCache = new Map();
+const describeMetadataInflight = new Map();
+const describeMetadataStats = {
+  hits: 0,
+  misses: 0,
+  rebuilds: 0,
+  deduped: 0,
+  invalidations: 0
+};
+const DESCRIBE_METADATA_TTL_MS = 60 * 60 * 1000;
+
+function metadataLog(...args) {
+  if (process.env.NODE_ENV !== 'production') {
+    console.log('[metadata-cache]', ...args);
+  }
+}
+
+function describeCacheKey(objectName) {
+  return `${orgStore.activeOrgKey || activeOrg()?.key || DEFAULT_ORG_KEY}:${String(objectName || '').trim()}`;
+}
+
+function cloneMetadata(value) {
+  return value == null ? value : JSON.parse(JSON.stringify(value));
+}
+
+function clearDerivedMetadataCaches(objectName = '') {
+  if (!objectName) {
+    describeFieldCache.clear();
+    describeChildRelsCache.clear();
+    objectFieldDetailsCache.clear();
+    return;
+  }
+  const key = describeCacheKey(objectName);
+  describeFieldCache.delete(key);
+  describeChildRelsCache.delete(key);
+  objectFieldDetailsCache.delete(key);
+}
+
+async function getObjectDescribe(objectName) {
+  const key = describeCacheKey(objectName);
+  const cached = describeMetadataCache.get(key);
+  if (cached && cached.expiresAt > Date.now()) {
+    describeMetadataStats.hits += 1;
+    metadataLog('hit', key);
+    return cloneMetadata(cached.data);
+  }
+  if (cached) describeMetadataCache.delete(key);
+
+  if (describeMetadataInflight.has(key)) {
+    describeMetadataStats.deduped += 1;
+    metadataLog('dedupe', key);
+    return cloneMetadata(await describeMetadataInflight.get(key));
+  }
+
+  describeMetadataStats.misses += 1;
+  describeMetadataStats.rebuilds += 1;
+  metadataLog('miss/rebuild', key);
+  const promise = sfGet(`/sobjects/${objectName}/describe`)
+    .then((data) => {
+      describeMetadataCache.set(key, {
+        data,
+        expiresAt: Date.now() + DESCRIBE_METADATA_TTL_MS,
+        loadedAt: Date.now()
+      });
+      return data;
+    })
+    .finally(() => describeMetadataInflight.delete(key));
+
+  describeMetadataInflight.set(key, promise);
+  return cloneMetadata(await promise);
+}
+
+function invalidateMetadata(objectName) {
+  if (!objectName) return;
+  const key = describeCacheKey(objectName);
+  if (describeMetadataCache.delete(key)) describeMetadataStats.invalidations += 1;
+  describeMetadataInflight.delete(key);
+  clearDerivedMetadataCaches(objectName);
+}
+
+function invalidateAllMetadata() {
+  if (describeMetadataCache.size) describeMetadataStats.invalidations += describeMetadataCache.size;
+  describeMetadataCache.clear();
+  describeMetadataInflight.clear();
+  clearDerivedMetadataCaches();
+}
+
+function getMetadataCacheStats() {
+  const total = describeMetadataStats.hits + describeMetadataStats.misses;
+  return {
+    ...describeMetadataStats,
+    size: describeMetadataCache.size,
+    inflight: describeMetadataInflight.size,
+    ttlMs: DESCRIBE_METADATA_TTL_MS,
+    hitRatio: total ? Number((describeMetadataStats.hits / total).toFixed(4)) : 0,
+    keys: [...describeMetadataCache.keys()]
+  };
+}
+
+const layoutJsonCache = new Map();
+const layoutJsonInflight = new Map();
+const layoutJsonStats = {
+  hits: 0,
+  misses: 0,
+  rebuilds: 0,
+  deduped: 0,
+  invalidations: 0
+};
+const LAYOUT_JSON_TTL_MS = 60 * 60 * 1000;
+const RECENT_RECORD_DETAIL_TTL_MS = 10 * 60 * 1000;
+const RECENT_RECORD_DETAIL_MAX = 100;
+const recentRecordDetailCache = new Map();
+const recentRecordDetailInflight = new Map();
+const recentRecordDetailStats = {
+  hits: 0,
+  misses: 0,
+  rebuilds: 0,
+  deduped: 0,
+  invalidations: 0
+};
+
+function layoutJsonCacheKey(type, objectName, userId = '') {
+  const orgKey = orgStore.activeOrgKey || activeOrg()?.key || DEFAULT_ORG_KEY;
+  return `${orgKey}:${type}:${userId || '*'}:${String(objectName || '').trim()}`;
+}
+
+async function getCachedLayoutJson(type, objectName, userId, loader) {
+  const key = layoutJsonCacheKey(type, objectName, userId);
+  const cached = layoutJsonCache.get(key);
+  if (cached && cached.expiresAt > Date.now()) {
+    layoutJsonStats.hits += 1;
+    return cloneMetadata(cached.data);
+  }
+  if (cached) layoutJsonCache.delete(key);
+
+  if (layoutJsonInflight.has(key)) {
+    layoutJsonStats.deduped += 1;
+    return cloneMetadata(await layoutJsonInflight.get(key));
+  }
+
+  layoutJsonStats.misses += 1;
+  layoutJsonStats.rebuilds += 1;
+  const promise = Promise.resolve()
+    .then(loader)
+    .then((data) => {
+      layoutJsonCache.set(key, {
+        data,
+        expiresAt: Date.now() + LAYOUT_JSON_TTL_MS,
+        loadedAt: Date.now()
+      });
+      return data;
+    })
+    .finally(() => layoutJsonInflight.delete(key));
+
+  layoutJsonInflight.set(key, promise);
+  return cloneMetadata(await promise);
+}
+
+function invalidateLayoutJson(type = '', objectName = '', userId = '') {
+  const expected = type ? layoutJsonCacheKey(type, objectName, userId) : '';
+  for (const key of [...layoutJsonCache.keys()]) {
+    const match = type
+      ? key === expected
+      : (!objectName || key.endsWith(`:${String(objectName).trim()}`));
+    if (match && layoutJsonCache.delete(key)) layoutJsonStats.invalidations += 1;
+  }
+  for (const key of [...layoutJsonInflight.keys()]) {
+    const match = type
+      ? key === expected
+      : (!objectName || key.endsWith(`:${String(objectName).trim()}`));
+    if (match) layoutJsonInflight.delete(key);
+  }
+}
+
+function invalidateAllLayoutJson() {
+  if (layoutJsonCache.size) layoutJsonStats.invalidations += layoutJsonCache.size;
+  layoutJsonCache.clear();
+  layoutJsonInflight.clear();
+}
+
+function getLayoutJsonCacheStats() {
+  const total = layoutJsonStats.hits + layoutJsonStats.misses;
+  return {
+    ...layoutJsonStats,
+    size: layoutJsonCache.size,
+    inflight: layoutJsonInflight.size,
+    ttlMs: LAYOUT_JSON_TTL_MS,
+    hitRatio: total ? Number((layoutJsonStats.hits / total).toFixed(4)) : 0,
+    keys: [...layoutJsonCache.keys()]
+  };
+}
+
+function recordDetailCacheKey(objectName, recordId, userId) {
+  const orgKey = orgStore.activeOrgKey || activeOrg()?.key || DEFAULT_ORG_KEY;
+  return `${orgKey}:${userId}:${objectName}:${recordId}`;
+}
+
+function getRecentRecordDetail(objectName, recordId, userId) {
+  const key = recordDetailCacheKey(objectName, recordId, userId);
+  const cached = recentRecordDetailCache.get(key);
+  if (!cached || cached.expiresAt <= Date.now()) {
+    if (cached) recentRecordDetailCache.delete(key);
+    recentRecordDetailStats.misses += 1;
+    return null;
+  }
+  recentRecordDetailCache.delete(key);
+  recentRecordDetailCache.set(key, cached);
+  recentRecordDetailStats.hits += 1;
+  return cloneMetadata(cached.data);
+}
+
+function setRecentRecordDetail(objectName, recordId, userId, data) {
+  const key = recordDetailCacheKey(objectName, recordId, userId);
+  if (recentRecordDetailCache.has(key)) recentRecordDetailCache.delete(key);
+  recentRecordDetailCache.set(key, {
+    data,
+    expiresAt: Date.now() + RECENT_RECORD_DETAIL_TTL_MS,
+    loadedAt: Date.now()
+  });
+  while (recentRecordDetailCache.size > RECENT_RECORD_DETAIL_MAX) {
+    recentRecordDetailCache.delete(recentRecordDetailCache.keys().next().value);
+  }
+}
+
+function invalidateRecentRecordDetail(objectName, recordId = '') {
+  const suffix = recordId ? `:${objectName}:${recordId}` : `:${objectName}:`;
+  for (const key of [...recentRecordDetailCache.keys()]) {
+    if (recordId ? key.endsWith(suffix) : key.includes(suffix)) {
+      recentRecordDetailCache.delete(key);
+      recentRecordDetailStats.invalidations += 1;
+    }
+  }
+  for (const key of [...recentRecordDetailInflight.keys()]) {
+    if (recordId ? key.endsWith(suffix) : key.includes(suffix)) recentRecordDetailInflight.delete(key);
+  }
+}
+
+function getRecentRecordDetailStats() {
+  const total = recentRecordDetailStats.hits + recentRecordDetailStats.misses;
+  return {
+    ...recentRecordDetailStats,
+    size: recentRecordDetailCache.size,
+    inflight: recentRecordDetailInflight.size,
+    max: RECENT_RECORD_DETAIL_MAX,
+    ttlMs: RECENT_RECORD_DETAIL_TTL_MS,
+    hitRatio: total ? Number((recentRecordDetailStats.hits / total).toFixed(4)) : 0
+  };
+}
 
 function base64Url(buffer) {
   return buffer
@@ -2190,29 +2572,31 @@ const uiApiListViewBaseUrl = () => {
 };
 
 async function sfGet(endpoint, params = {}, config = {}) {
-  const token = await getAccessToken();
-  const maxAttempts = config.retry === false ? 1 : 3;
-  let lastErr;
-  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
-    try {
-      const res = await axios.get(`${baseUrl()}${endpoint}`, {
-        timeout: config.timeout || 30000,
-        headers: { Authorization: `Bearer ${token}` },
-        params,
-        ...config,
-        headers: {
-          Authorization: `Bearer ${token}`,
-          ...(config.headers || {})
-        }
-      });
-      return res.data;
-    } catch (err) {
-      lastErr = err;
-      if (!isTransientSalesforceNetworkError(err) || attempt === maxAttempts) break;
-      await sleep(250 * attempt);
+  return perfAudit.timeAsync(perfAudit.classifySalesforce(endpoint), `GET ${endpoint}`, async () => {
+    const token = await getAccessToken();
+    const maxAttempts = config.retry === false ? 1 : 3;
+    let lastErr;
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+      try {
+        const res = await axios.get(`${baseUrl()}${endpoint}`, {
+          timeout: config.timeout || 30000,
+          headers: { Authorization: `Bearer ${token}` },
+          params,
+          ...config,
+          headers: {
+            Authorization: `Bearer ${token}`,
+            ...(config.headers || {})
+          }
+        });
+        return res.data;
+      } catch (err) {
+        lastErr = err;
+        if (!isTransientSalesforceNetworkError(err) || attempt === maxAttempts) break;
+        await sleep(250 * attempt);
+      }
     }
-  }
-  throw lastErr;
+    throw lastErr;
+  }, { endpoint });
 }
 
 function isTransientSalesforceNetworkError(err) {
@@ -2221,67 +2605,81 @@ function isTransientSalesforceNetworkError(err) {
 }
 
 async function sfPost(endpoint, body) {
-  const token = await getAccessToken();
-  const res = await axios.post(`${baseUrl()}${endpoint}`, body, {
-    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }
-  });
-  return res.data;
+  return perfAudit.timeAsync(perfAudit.classifySalesforce(endpoint), `POST ${endpoint}`, async () => {
+    const token = await getAccessToken();
+    const res = await axios.post(`${baseUrl()}${endpoint}`, body, {
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }
+    });
+    return res.data;
+  }, { endpoint });
 }
 
 async function sfUiPost(endpoint, body) {
-  const token = await getAccessToken();
-  const res = await axios.post(`${uiApiListViewBaseUrl()}${endpoint}`, body, {
-    timeout: 30000,
-    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }
-  });
-  return res.data;
+  return perfAudit.timeAsync('salesforce', `UI POST ${endpoint}`, async () => {
+    const token = await getAccessToken();
+    const res = await axios.post(`${uiApiListViewBaseUrl()}${endpoint}`, body, {
+      timeout: 30000,
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }
+    });
+    return res.data;
+  }, { endpoint });
 }
 
 async function sfUiGet(endpoint, params = {}) {
-  const token = await getAccessToken();
-  const res = await axios.get(`${uiApiListViewBaseUrl()}${endpoint}`, {
-    timeout: 30000,
-    headers: { Authorization: `Bearer ${token}` },
-    params
-  });
-  return res.data;
+  return perfAudit.timeAsync('metadata', `UI GET ${endpoint}`, async () => {
+    const token = await getAccessToken();
+    const res = await axios.get(`${uiApiListViewBaseUrl()}${endpoint}`, {
+      timeout: 30000,
+      headers: { Authorization: `Bearer ${token}` },
+      params
+    });
+    return res.data;
+  }, { endpoint });
 }
 
 async function sfUiPatch(endpoint, body) {
-  const token = await getAccessToken();
-  const res = await axios.patch(`${uiApiListViewBaseUrl()}${endpoint}`, body, {
-    timeout: 30000,
-    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }
-  });
-  return res.data;
+  return perfAudit.timeAsync('salesforce', `UI PATCH ${endpoint}`, async () => {
+    const token = await getAccessToken();
+    const res = await axios.patch(`${uiApiListViewBaseUrl()}${endpoint}`, body, {
+      timeout: 30000,
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }
+    });
+    return res.data;
+  }, { endpoint });
 }
 
 async function sfUiDelete(endpoint) {
-  const token = await getAccessToken();
-  await axios.delete(`${uiApiListViewBaseUrl()}${endpoint}`, {
-    timeout: 30000,
-    headers: { Authorization: `Bearer ${token}` }
-  });
+  await perfAudit.timeAsync('salesforce', `UI DELETE ${endpoint}`, async () => {
+    const token = await getAccessToken();
+    await axios.delete(`${uiApiListViewBaseUrl()}${endpoint}`, {
+      timeout: 30000,
+      headers: { Authorization: `Bearer ${token}` }
+    });
+  }, { endpoint });
 }
 
 async function sfPatch(endpoint, body, config = {}) {
-  const token = await getAccessToken();
-  const res = await axios.patch(`${baseUrl()}${endpoint}`, body, {
-    ...config,
-    headers: {
-      Authorization: `Bearer ${token}`,
-      'Content-Type': 'application/json',
-      ...(config.headers || {})
-    }
-  });
-  return res.data;
+  return perfAudit.timeAsync('salesforce', `PATCH ${endpoint}`, async () => {
+    const token = await getAccessToken();
+    const res = await axios.patch(`${baseUrl()}${endpoint}`, body, {
+      ...config,
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+        ...(config.headers || {})
+      }
+    });
+    return res.data;
+  }, { endpoint });
 }
 
 async function sfDelete(endpoint) {
-  const token = await getAccessToken();
-  await axios.delete(`${baseUrl()}${endpoint}`, {
-    headers: { Authorization: `Bearer ${token}` }
-  });
+  await perfAudit.timeAsync('salesforce', `DELETE ${endpoint}`, async () => {
+    const token = await getAccessToken();
+    await axios.delete(`${baseUrl()}${endpoint}`, {
+      headers: { Authorization: `Bearer ${token}` }
+    });
+  }, { endpoint });
 }
 
 function sleep(ms) {
@@ -2580,6 +2978,26 @@ const OBJECTS = {
     orderBy: 'CreatedDate DESC',
     searchFields: ['Name', 'Type', 'Status']
   },
+  Quote: {
+    fields: 'Id, Name, QuoteNumber, Status, ExpirationDate, GrandTotal, Subtotal, OpportunityId, Opportunity.Name, AccountId, Account.Name',
+    orderBy: 'CreatedDate DESC',
+    searchFields: ['Name', 'QuoteNumber', 'Status']
+  },
+  Product2: {
+    fields: 'Id, Name, ProductCode, Family, IsActive, Description, CreatedDate',
+    orderBy: 'Name',
+    searchFields: ['Name', 'ProductCode', 'Family', 'Description']
+  },
+  OpportunityLineItem: {
+    fields: 'Id, OpportunityId, Opportunity.Name, Product2Id, Product2.Name, PricebookEntryId, Quantity, UnitPrice, TotalPrice, ListPrice, ServiceDate, Description, SortOrder',
+    orderBy: 'SortOrder, ServiceDate',
+    searchFields: ['Description']
+  },
+  QuoteLineItem: {
+    fields: 'Id, LineNumber, QuoteId, Quote.Name, Product2Id, Product2.Name, PricebookEntryId, Quantity, UnitPrice, TotalPrice, ListPrice, Discount, Description, SortOrder',
+    orderBy: 'SortOrder, LineNumber',
+    searchFields: ['Description']
+  },
   Task: {
     fields: 'Id, Subject, Status, Priority, ActivityDate, TaskSubtype, WhoId, Who.Name, WhatId, What.Name, OwnerId, Owner.Name, Description, CreatedDate',
     orderBy: 'CreatedDate DESC',
@@ -2607,6 +3025,53 @@ const OBJECTS = {
   }
 };
 
+const PRIMARY_CRM_OBJECTS = ['Account', 'Contact', 'Opportunity', 'Case', 'Lead', 'Campaign', 'Quote', 'Product2', 'OpportunityLineItem', 'QuoteLineItem'];
+const INTERNAL_OBJECTS = ['Task', 'Event', 'EmailMessage', 'Pricebook2', 'User'];
+
+async function ensurePrimaryCrmObjectsRegistered() {
+  const rows = PRIMARY_CRM_OBJECTS.map((apiName, index) => ({
+    api_name: apiName,
+    label: apiName === 'Product2' ? 'Product' : apiName === 'OpportunityLineItem' ? 'Opportunity Product' : apiName === 'QuoteLineItem' ? 'Quote Line Item' : apiName,
+    is_active: true,
+    sort_order: (index + 1) * 10
+  }));
+
+  const { data: existingRows, error: existingError } = await supabase
+    .from('sf_objects')
+    .select('api_name')
+    .in('api_name', PRIMARY_CRM_OBJECTS);
+
+  if (existingError) {
+    console.error('[sf_objects] Could not load registered CRM objects:', existingError.message);
+    return;
+  }
+
+  const existing = new Set((existingRows || []).map(row => row.api_name));
+  const inserts = rows.filter(row => !existing.has(row.api_name));
+  const updates = rows.filter(row => existing.has(row.api_name));
+
+  const operations = [
+    ...updates.map(row => supabase
+      .from('sf_objects')
+      .update({
+        label: row.label,
+        is_active: row.is_active,
+        sort_order: row.sort_order
+      })
+      .eq('api_name', row.api_name)),
+    ...(inserts.length ? [supabase.from('sf_objects').insert(inserts)] : [])
+  ];
+
+  const results = await Promise.all(operations);
+  const failed = results.find(result => result.error);
+  if (failed?.error) {
+    console.error('[sf_objects] Could not register CRM objects:', failed.error.message);
+    return;
+  }
+
+  invalidateAllUserContextCache();
+}
+
 const BULK_AUTO_THRESHOLD = Math.max(parseInt(process.env.BULK_AUTO_THRESHOLD, 10) || 200, 1);
 const BULK_MAX_POLL_MS = Math.max(parseInt(process.env.BULK_MAX_POLL_MS, 10) || 120000, 5000);
 const BULK_POLL_INTERVAL_MS = Math.max(parseInt(process.env.BULK_POLL_INTERVAL_MS, 10) || 2000, 500);
@@ -2622,7 +3087,7 @@ function escapeSOQL(value) {
 async function getObjectFieldSet(objectName) {
   const cacheKey = `${orgStore.activeOrgKey}:${objectName}`;
   if (describeFieldCache.has(cacheKey)) return describeFieldCache.get(cacheKey);
-  const meta = await sfGet(`/sobjects/${objectName}/describe`);
+  const meta = await getObjectDescribe(objectName);
   const fieldSet = new Set((meta.fields || [])
     .filter(field => !field.deprecatedAndHidden)
     .map(field => field.name));
@@ -2644,13 +3109,14 @@ function isSelectableField(field, availableFields) {
   return availableFields.has(`${root}Id`);
 }
 
-async function fieldsCsvForObject(objectName, overrideFields = '') {
+async function fieldsCsvForObject(objectName, overrideFields = '', availableFields = null) {
   const cfg = OBJECTS[objectName];
-  const availableFields = await getObjectFieldSet(objectName);
-  const fields = splitConfiguredFields(overrideFields || cfg.fields)
-    .filter(field => field === 'Id' || isSelectableField(field, availableFields));
+  const defaultFieldsStr = cfg ? cfg.fields : 'Id, Name';
+  const resolvedAvailableFields = availableFields || await getObjectFieldSet(objectName);
+  const fields = splitConfiguredFields(overrideFields || defaultFieldsStr)
+    .filter(field => field === 'Id' || isSelectableField(field, resolvedAvailableFields));
   PORTAL_AUDIT_FIELDS.forEach((field) => {
-    if (availableFields.has(field)) fields.push(field);
+    if (resolvedAvailableFields.has(field)) fields.push(field);
   });
   return fields.length ? [...new Set(['Id', ...fields])].join(', ') : 'Id';
 }
@@ -2703,6 +3169,19 @@ function buildWhereClause(objectName, search, extraWhere, availableFields = null
   return conditions.length ? ` WHERE ${conditions.join(' AND ')}` : '';
 }
 
+function listScopeEnforcesVisibility(scope, user) {
+  if (isFullAccessUser(user)) return true;
+  return ['public_read', 'public_read_write', 'sharing_any_owner', 'owner_scope']
+    .includes(scope?.reason);
+}
+
+async function canUseSalesforceTotalForList(objectName, user, scope = null) {
+  if (isFullAccessUser(user)) return true;
+  if (['public_read', 'public_read_write', 'sharing_any_owner'].includes(scope?.reason)) return true;
+  const owdAccess = await getOrgWideDefaultAccess(objectName);
+  return ['public_read', 'public_read_write'].includes(owdAccess);
+}
+
 function appendExtraWhereToSOQL(soql, extraWhere) {
   if (!extraWhere) return soql;
   const compact = String(soql || '').replace(/\s+/g, ' ').trim();
@@ -2717,11 +3196,11 @@ function appendExtraWhereToSOQL(soql, extraWhere) {
   return `${head}${joiner}${extraWhere}${tail}`;
 }
 
-async function buildSOQL(objectName, search, extraWhere, limit = null, offset = 0) {
+async function buildSOQL(objectName, search, extraWhere, limit = null, offset = 0, availableFields = null) {
   const cfg = OBJECTS[objectName];
-  const availableFields = await getObjectFieldSet(objectName);
-  let soql = `SELECT ${await fieldsCsvForObject(objectName)} FROM ${objectName}`;
-  soql += buildWhereClause(objectName, search, extraWhere, availableFields);
+  const resolvedAvailableFields = availableFields || await getObjectFieldSet(objectName);
+  let soql = `SELECT ${await fieldsCsvForObject(objectName, '', resolvedAvailableFields)} FROM ${objectName}`;
+  soql += buildWhereClause(objectName, search, extraWhere, resolvedAvailableFields);
   soql += ` ORDER BY ${cfg.orderBy}`;
   if (limit !== null && limit !== undefined) {
     const safeLimit = Math.min(Math.max(parseInt(limit, 10) || 25, 1), 2000);
@@ -2733,9 +3212,10 @@ async function buildSOQL(objectName, search, extraWhere, limit = null, offset = 
   return soql;
 }
 
-async function relatedQuery(objectName, fields, where, limit = 5) {
+async function relatedQuery(objectName, fields, where, limit = 5, sortBy = null, sortDir = 'ASC') {
   const selectFields = await fieldsCsvForObject(objectName, fields);
-  const soql = `SELECT ${selectFields} FROM ${objectName} WHERE ${where} ORDER BY ${OBJECTS[objectName].orderBy} LIMIT ${limit}`;
+  const orderClause = sortBy ? `${sortBy} ${sortDir}` : (OBJECTS[objectName]?.orderBy || 'Id');
+  const soql = `SELECT ${selectFields} FROM ${objectName} WHERE ${where} ORDER BY ${orderClause} LIMIT ${limit}`;
   const data = await sfGet('/query', { q: soql });
   return {
     records: data.records || [],
@@ -2747,8 +3227,8 @@ async function emptyRelatedList(key, objectName, title, message = '') {
   return { key, objectName, title, records: [], totalSize: 0, message };
 }
 
-async function buildRelatedList(key, objectName, title, fields, where, limit = 5) {
-  const data = await relatedQuery(objectName, fields, where, limit);
+async function buildRelatedList(key, objectName, title, fields, where, limit = 5, sortBy = null, sortDir = 'ASC') {
+  const data = await relatedQuery(objectName, fields, where, limit, sortBy, sortDir);
   return { key, objectName, title, ...data };
 }
 
@@ -2819,6 +3299,10 @@ async function getRelatedListsForRecord(objectName, id) {
       safeRelatedList(
         () => buildRelatedList('cases', 'Case', 'Cases', 'Id, CaseNumber, Subject, Status, Priority, Type, AccountId, Account.Name, CreatedDate', `AccountId = '${safeId}'`),
         { key: 'cases', objectName: 'Case', title: 'Cases' }
+      ),
+      safeRelatedList(
+        () => buildRelatedList('quotes', 'Quote', 'Quotes', 'Id, Name, QuoteNumber, Status, ExpirationDate, GrandTotal, OpportunityId, Opportunity.Name, AccountId, Account.Name', `AccountId = '${safeId}'`),
+        { key: 'quotes', objectName: 'Quote', title: 'Quotes' }
       )
     ]);
   }
@@ -2835,10 +3319,28 @@ async function getRelatedListsForRecord(objectName, id) {
     ]);
   }
   if (objectName === 'Opportunity') {
-    return [await safeRelatedList(
-      () => getOpportunityCaseRelated(id),
-      { key: 'cases', objectName: 'Case', title: 'Cases' }
-    )];
+    return Promise.all([
+      safeRelatedList(
+        () => buildRelatedList('quotes', 'Quote', 'Quotes', 'Id, Name, QuoteNumber, Status, ExpirationDate, GrandTotal, OpportunityId, Opportunity.Name, AccountId, Account.Name', `OpportunityId = '${safeId}'`),
+        { key: 'quotes', objectName: 'Quote', title: 'Quotes' }
+      ),
+      safeRelatedList(
+        () => buildRelatedList('opportunityProducts', 'OpportunityLineItem', 'Products', 'Id, OpportunityId, Product2Id, Product2.Name, Quantity, UnitPrice, TotalPrice, ServiceDate, SortOrder', `OpportunityId = '${safeId}'`, 10, 'SortOrder', 'ASC'),
+        { key: 'opportunityProducts', objectName: 'OpportunityLineItem', title: 'Products' }
+      ),
+      safeRelatedList(
+        () => getOpportunityCaseRelated(id),
+        { key: 'cases', objectName: 'Case', title: 'Cases' }
+      )
+    ]);
+  }
+  if (objectName === 'Quote') {
+    return [
+      await safeRelatedList(
+        () => buildRelatedList('quoteLineItems', 'QuoteLineItem', 'Quote Line Items', 'Id, LineNumber, QuoteId, Product2Id, Product2.Name, Quantity, UnitPrice, TotalPrice, Discount, Description, SortOrder', `QuoteId = '${safeId}'`, 10, 'SortOrder', 'ASC'),
+        { key: 'quoteLineItems', objectName: 'QuoteLineItem', title: 'Quote Line Items' }
+      )
+    ];
   }
   if (objectName === 'Campaign') {
     return [
@@ -2849,6 +3351,89 @@ async function getRelatedListsForRecord(objectName, id) {
     ];
   }
   return [];
+}
+
+async function getObjectChildRelationships(objectName) {
+  const cacheKey = `${orgStore.activeOrgKey}:${objectName}`;
+  if (describeChildRelsCache.has(cacheKey)) return describeChildRelsCache.get(cacheKey);
+  
+  const meta = await getObjectDescribe(objectName);
+  const rels = (meta.childRelationships || [])
+    .filter(rel => rel.relationshipName)
+    .map(rel => ({
+      relationshipName: rel.relationshipName,
+      childSObject: rel.childSObject,
+      field: rel.field
+    }));
+    
+  describeChildRelsCache.set(cacheKey, rels);
+  return rels;
+}
+
+async function getCustomRelatedListForRecord(objectName, id, listConfigs) {
+  const safeId = escapeSOQL(id);
+  const promises = listConfigs.map(config => {
+    return safeRelatedList(
+      async () => {
+        let selectFields = config.fields || [];
+        if (!selectFields.includes('Id')) {
+          selectFields = ['Id', ...selectFields];
+        }
+        
+        const whereClause = `${config.field} = '${safeId}'`;
+        
+        return buildRelatedList(
+          config.key,
+          config.objectName,
+          config.title,
+          selectFields.join(', '),
+          whereClause,
+          config.limit || 5,
+          config.sortBy,
+          config.sortDir || 'ASC'
+        );
+      },
+      { key: config.key, objectName: config.objectName, title: config.title }
+    );
+  });
+  return Promise.all(promises);
+}
+
+function ensureRequiredRelatedListConfigs(objectName, configs = []) {
+  const merged = Array.isArray(configs) ? [...configs] : [];
+  const hasList = (childObject, key) => merged.some(config =>
+    config?.objectName === childObject || config?.key === key
+  );
+
+  if (objectName === 'Opportunity' && !hasList('Quote', 'quotes')) {
+    merged.unshift({
+      key: 'quotes',
+      objectName: 'Quote',
+      title: 'Quotes',
+      field: 'OpportunityId',
+      fields: ['Id', 'Name', 'QuoteNumber', 'Status', 'GrandTotal'],
+      limit: 5,
+      sortBy: 'CreatedDate',
+      sortDir: 'DESC'
+    });
+  }
+  if (objectName === 'Opportunity' && !hasList('OpportunityLineItem', 'opportunityProducts')) {
+    const insertAt = merged.findIndex(config => config?.key === 'cases' || config?.objectName === 'Case');
+    const productConfig = {
+      key: 'opportunityProducts',
+      objectName: 'OpportunityLineItem',
+      title: 'Products',
+      field: 'OpportunityId',
+      fields: ['Id', 'Product2.Name', 'Quantity', 'UnitPrice', 'TotalPrice', 'ServiceDate'],
+      limit: 10,
+      sortBy: 'SortOrder',
+      sortDir: 'ASC'
+    };
+    if (insertAt >= 0) merged.splice(insertAt, 0, productConfig);
+    else merged.push(productConfig);
+  }
+
+  return merged;
 }
 
 function queryMoreEndpoint(nextRecordsUrl = '') {
@@ -3117,6 +3702,10 @@ function objectFromId(id) {
     '500': 'Case',
     '00Q': 'Lead',
     '701': 'Campaign',
+    '0Q0': 'Quote',
+    '01t': 'Product2',
+    '00k': 'OpportunityLineItem',
+    '0QL': 'QuoteLineItem',
     '00T': 'Task',
     '00U': 'Event',
     '02s': 'EmailMessage',
@@ -3145,22 +3734,35 @@ async function buildLookupLabels(record, fields) {
     .filter((item) => item.object);
 
   const labels = {};
-  await Promise.all(lookups.map(async (lookup) => {
+  const lookupsByObject = lookups.reduce((acc, lookup) => {
+    if (!acc.has(lookup.object)) acc.set(lookup.object, []);
+    acc.get(lookup.object).push(lookup);
+    return acc;
+  }, new Map());
+
+  await Promise.all([...lookupsByObject.entries()].map(async ([objectName, objectLookups]) => {
     try {
+      const ids = [...new Set(objectLookups.map((lookup) => lookup.id).filter(Boolean))];
+      if (!ids.length) return;
       const data = await sfGet('/query', {
-        q: `SELECT Id, Name FROM ${lookup.object} WHERE Id = '${escapeSOQL(lookup.id)}' LIMIT 1`
+        q: `SELECT Id, Name FROM ${objectName} WHERE Id IN (${ids.map((id) => `'${escapeSOQL(id)}'`).join(', ')})`
       });
-      labels[lookup.field] = {
-        id: lookup.id,
-        object: lookup.object,
-        name: data.records?.[0]?.Name || lookup.id
-      };
+      const namesById = new Map((data.records || []).map((item) => [item.Id, item.Name || item.Id]));
+      objectLookups.forEach((lookup) => {
+        labels[lookup.field] = {
+          id: lookup.id,
+          object: lookup.object,
+          name: namesById.get(lookup.id) || lookup.id
+        };
+      });
     } catch {
-      labels[lookup.field] = {
-        id: lookup.id,
-        object: lookup.object,
-        name: lookup.id
-      };
+      objectLookups.forEach((lookup) => {
+        labels[lookup.field] = {
+          id: lookup.id,
+          object: lookup.object,
+          name: lookup.id
+        };
+      });
     }
   }));
 
@@ -3445,6 +4047,7 @@ async function issuePortalSession(user, req, authMethod = 'password') {
     .from('users')
     .update({ last_login_at: new Date().toISOString() })
     .eq('id', user.id);
+  invalidateUserContextCache(user.id);
 
   await writeAuditLog({
     userId: user.id,
@@ -3532,6 +4135,7 @@ app.post('/api/auth/login', async (req, res) => {
       .from('users')
       .update({ last_login_at: new Date().toISOString() })
       .eq('id', user.id);
+    invalidateUserContextCache(user.id);
 
     // 6. Log successful login
     await writeAuditLog({
@@ -3886,6 +4490,7 @@ app.post('/api/auth/reset-password', async (req, res) => {
         updated_at: new Date().toISOString()
       })
       .eq('id', resetRecord.user_id);
+    invalidateUserContextCache(resetRecord.user_id);
 
     // 5. Mark token as used (so it can't be reused)
     await supabase
@@ -3973,7 +4578,7 @@ app.get('/api/auth/verify-reset-token', async (req, res) => {
 // Protected by JWT middleware.
 app.get('/api/portal/me', checkAuth, async (req, res) => {
   try {
-    const userData = await getUserWithPermissions(req.user.id);
+    const userData = req.userContext?.raw || await getUserWithPermissions(req.user.id);
 
     if (!userData) {
       return res.status(404).json({
@@ -3981,21 +4586,7 @@ app.get('/api/portal/me', checkAuth, async (req, res) => {
       });
     }
 
-    const { data: imageRow } = await supabase
-      .from('users')
-      .select('profile_image')
-      .eq('id', req.user.id)
-      .single();
-
-    // Check if assigned profile is System Administrator
-    const { data: profileData } = await supabase
-      .from('user_profile_assignments')
-      .select('profiles(id, name, is_system_admin)')
-      .eq('user_id', req.user.id)
-      .single();
-
-    const isSystemAdmin =
-      profileData?.profiles?.is_system_admin || false;
+    const isSystemAdmin = Boolean(userData.profile?.is_system_admin);
 
     res.json({
       id: userData.id,
@@ -4006,7 +4597,7 @@ app.get('/api/portal/me', checkAuth, async (req, res) => {
       // NEW
       isSystemAdmin: isSystemAdmin,
 
-      profileImage: imageRow?.profile_image || null,
+      profileImage: userData.profile_image || null,
       profile: userData.profile,
       permissions: userData.permissions,
       lastLoginAt: userData.last_login_at
@@ -4111,6 +4702,7 @@ app.patch('/api/portal/profile', checkAuth, async (req, res) => {
     updates.updated_at = new Date().toISOString();
 
     await supabase.from('users').update(updates).eq('id', req.user.id);
+    invalidateUserContextCache(req.user.id);
 
     await writeAuditLog({
       userId: req.user.id,
@@ -4212,6 +4804,7 @@ app.post('/api/portal/users', checkAuth, checkRole('admin'), async (req, res) =>
       );
     }
 
+    invalidateUserContextCache(newUser.id);
     roleVisibilityCache.clear();
 
     await writeAuditLog({
@@ -4294,6 +4887,7 @@ app.post('/api/portal/users/:id/cancel-invitation', checkAuth, checkRole('admin'
       })
       .eq('id', id);
     if (updateError) throw updateError;
+    invalidateUserContextCache(id);
 
     await writeAuditLog({
       userId: req.user.id,
@@ -4401,6 +4995,7 @@ app.patch('/api/portal/users/:id', checkAuth, checkRole('admin'), async (req, re
 
     // Clear field perm cache
     clearFieldPermCache(id);
+    invalidateUserContextCache(id);
 
     await writeAuditLog({
       userId:    req.user.id,
@@ -4500,6 +5095,7 @@ app.delete('/api/portal/users/:id', checkAuth, checkRole('admin'), async (req, r
     });
 
     clearFieldPermCache(id);
+    invalidateUserContextCache(id);
     res.json({ success: true });
   } catch (err) {
     console.error('DELETE /api/portal/users error:', err.message);
@@ -4535,6 +5131,7 @@ app.post('/api/portal/profiles', checkAuth, checkRole('admin'), async (req, res)
       );
     }
     await writeAuditLog({ userId: req.user.id, userEmail: req.user.email, userRole: req.user.role, action: 'create_profile', payload: { name }, ipAddress: req.ip });
+    invalidateAllUserContextCache();
     res.status(201).json({ success: true, id: profile.id });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -4551,6 +5148,7 @@ app.patch('/api/portal/profiles/:id', checkAuth, checkRole('admin'), async (req,
       );
     }
     await writeAuditLog({ userId: req.user.id, userEmail: req.user.email, userRole: req.user.role, action: 'update_profile', payload: { id: req.params.id, name }, ipAddress: req.ip });
+    invalidateAllUserContextCache();
     res.json({ success: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -4562,6 +5160,7 @@ app.delete('/api/portal/profiles/:id', checkAuth, checkRole('admin'), async (req
     if (count > 0) return res.status(409).json({ error: 'Cannot delete a profile that is assigned to users' });
     await supabase.from('profile_object_permissions').delete().eq('profile_id', req.params.id);
     await supabase.from('profiles').delete().eq('id', req.params.id);
+    invalidateAllUserContextCache();
     res.json({ success: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -4582,6 +5181,7 @@ app.post('/api/portal/permission-sets', checkAuth, checkRole('admin'), async (re
       );
     }
     await writeAuditLog({ userId: req.user.id, userEmail: req.user.email, userRole: req.user.role, action: 'create_perm_set', payload: { name }, ipAddress: req.ip });
+    invalidateAllUserContextCache();
     res.status(201).json({ success: true, id: ps.id });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -4601,6 +5201,7 @@ app.patch('/api/portal/permission-sets/:id', checkAuth, checkRole('admin'), asyn
     }
     await writeAuditLog({ userId: req.user.id, userEmail: req.user.email, userRole: req.user.role, action: 'update_perm_set', payload: { id: req.params.id }, ipAddress: req.ip });
     clearAllFieldPermCache();
+    invalidateAllUserContextCache();
     res.json({ success: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -4613,6 +5214,7 @@ app.delete('/api/portal/permission-sets/:id', checkAuth, checkRole('admin'), asy
     await supabase.from('permission_set_object_perms').delete().eq('perm_set_id', req.params.id);
     await supabase.from('permission_sets').delete().eq('id', req.params.id);
     clearAllFieldPermCache();
+    invalidateAllUserContextCache();
     res.json({ success: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -4715,7 +5317,7 @@ app.get('/api/portal/field-security/available-fields', checkAuth, checkRole('adm
   const sfObject = req.query.object;
   if (!OBJECTS[sfObject]) return res.status(400).json({ error: 'Unknown object' });
   try {
-    const data = await sfGet(`/sobjects/${sfObject}/describe`);
+    const data = await getObjectDescribe(sfObject);
     const fields = (data.fields || [])
       .filter(field => !field.deprecatedAndHidden)
       .filter(field => !['address', 'location'].includes(field.type))
@@ -5211,6 +5813,7 @@ app.post('/api/auth/logout', async (req, res) => {
         action: 'logout',
         ipAddress: req.ip
       });
+      invalidateUserContextCache(decoded.id);
     }
   } catch { /* token already expired, that's fine */ }
 
@@ -5293,11 +5896,19 @@ app.get('/auth/salesforce', (req, res) => {
   res.redirect(`${SF.loginUrl}/services/oauth2/authorize?${params.toString()}`);
 });
 
+async function metadataAwareSfGet(endpoint, params = {}, config = {}) {
+  const describeMatch = String(endpoint || '').match(/^\/sobjects\/([^/]+)\/describe$/);
+  if (describeMatch && (!params || !Object.keys(params).length)) {
+    return getObjectDescribe(describeMatch[1]);
+  }
+  return sfGet(endpoint, params, config);
+}
+
 app.use('/api/reports', createReportsRouter({
   checkAuth,
   deps: {
     objects: OBJECTS,
-    sfGet,
+    sfGet: metadataAwareSfGet,
     escapeSOQL,
     getObjectFieldSet,
     getEffectivePermissions,
@@ -5404,7 +6015,8 @@ app.get('/api/lookup/:object', checkAuth, async (req, res) => {
 
   try {
     if (!isFullAccessUser(req.user)) {
-      const perms = await getEffectivePermissions(req.user.id, object);
+      const perms = permissionsFromRequestContext(req, object) ||
+        await getEffectivePermissions(req.user.id, object);
       if (!perms?.can_read) {
         return res.status(403).json({
           error: permissionDeniedMessage(),
@@ -5423,7 +6035,11 @@ app.get('/api/lookup/:object', checkAuth, async (req, res) => {
       Contact: 'Id, Name, Email, AccountId, Account.Name',
       Lead: 'Id, Name, Email, Company',
       User: 'Id, Name, Email, Username',
-      Opportunity: 'Id, Name, AccountId, Account.Name'
+      Opportunity: 'Id, Name, AccountId, Account.Name',
+      Quote: 'Id, Name, QuoteNumber, Status, AccountId, Account.Name, OpportunityId, Opportunity.Name',
+      Product2: 'Id, Name, ProductCode, Family, IsActive',
+      OpportunityLineItem: 'Id, OpportunityId, Opportunity.Name, Product2Id, Product2.Name, Quantity, TotalPrice',
+      QuoteLineItem: 'Id, LineNumber, QuoteId, Quote.Name, Product2Id, Product2.Name, Quantity, TotalPrice'
     }[object] || OBJECTS[object].fields;
     const selectFields = await fieldsCsvForObject(object, fields);
     const sfStartedAt = performance.now();
@@ -5700,7 +6316,7 @@ app.get('/api/:object/count', checkAuth, async (req, res, next) => {
 app.get('/api/debug/data-source', checkAuth, requireAdminPanel, async (req, res) => {
   try {
     const results = {};
-    for (const objectName of ['Account', 'Contact', 'Opportunity', 'Case', 'Lead', 'Campaign']) {
+    for (const objectName of PRIMARY_CRM_OBJECTS) {
       const soql = await buildCountSOQL(objectName);
       const data = await sfGet('/query', { q: soql });
       results[objectName] = Number(data.records?.[0]?.expr0 ?? data.totalSize ?? 0);
@@ -5836,7 +6452,7 @@ app.get('/api/:object/fields', checkAuth, async (req, res, next) => {
   if (!OBJECTS[object]) return res.status(400).json({ error: `Unknown object: ${object}` });
 
   try {
-    const data = await sfGet(`/sobjects/${object}/describe`);
+    const data = await getObjectDescribe(object);
     const fields = data.fields
       .filter(field => !field.deprecatedAndHidden)
       .map(field => ({
@@ -5912,22 +6528,27 @@ app.get('/api/:object/layouts', checkAuth, async (req, res) => {
 app.get('/api/portal/layouts/:object', checkAuth, async (req, res) => {
   const { object } = req.params;
   try {
-    const { data, error } = await supabase
-      .from('portal_custom_layouts')
-      .select('layout_data')
-      .eq('user_id', req.user.id)
-      .eq('object_name', object)
-      .maybeSingle();
+    const payload = await getCachedLayoutJson('layout', object, req.user.id, async () => {
+      const { data, error } = await supabase
+        .from('portal_custom_layouts')
+        .select('layout_data')
+        .eq('user_id', req.user.id)
+        .eq('object_name', object)
+        .maybeSingle();
 
-    if (error) {
-      console.error('[GET /api/portal/layouts/:object] Supabase lookup error:', error);
-      return res.status(500).json({ error: 'Failed to retrieve layout from database' });
-    }
+      if (error) {
+        console.error('[GET /api/portal/layouts/:object] Supabase lookup error:', error);
+        const lookupError = new Error('Failed to retrieve layout from database');
+        lookupError.statusCode = 500;
+        throw lookupError;
+      }
 
-    res.json({ layout: data ? data.layout_data : null });
+      return { layout: data ? data.layout_data : null };
+    });
+    res.json(payload);
   } catch (err) {
     console.error('[GET /api/portal/layouts/:object] Exception:', err);
-    res.status(500).json({ error: 'Server error retrieving layout' });
+    res.status(err.statusCode || 500).json({ error: err.message || 'Server error retrieving layout' });
   }
 });
 
@@ -5957,6 +6578,7 @@ app.post('/api/portal/layouts/:object', checkAuth, async (req, res) => {
       return res.status(500).json({ error: 'Failed to save layout to database' });
     }
 
+    invalidateLayoutJson('layout', object, req.user.id);
     res.json({ success: true });
   } catch (err) {
     console.error('[POST /api/portal/layouts/:object] Exception:', err);
@@ -5979,6 +6601,7 @@ app.delete('/api/portal/layouts/:object', checkAuth, async (req, res) => {
       return res.status(500).json({ error: 'Failed to delete layout from database' });
     }
 
+    invalidateLayoutJson('layout', object, req.user.id);
     res.json({ success: true });
   } catch (err) {
     console.error('[DELETE /api/portal/layouts/:object] Exception:', err);
@@ -5990,22 +6613,27 @@ app.delete('/api/portal/layouts/:object', checkAuth, async (req, res) => {
 app.get('/api/portal/compact-layouts/:object', checkAuth, async (req, res) => {
   const { object } = req.params;
   try {
-    const { data, error } = await supabase
-      .from('portal_compact_layouts')
-      .select('fields')
-      .eq('user_id', req.user.id)
-      .eq('object_name', object)
-      .maybeSingle();
+    const payload = await getCachedLayoutJson('compact-layout', object, req.user.id, async () => {
+      const { data, error } = await supabase
+        .from('portal_compact_layouts')
+        .select('fields')
+        .eq('user_id', req.user.id)
+        .eq('object_name', object)
+        .maybeSingle();
 
-    if (error) {
-      console.error('[GET /api/portal/compact-layouts/:object] Supabase lookup error:', error);
-      return res.status(500).json({ error: 'Failed to retrieve compact layout from database' });
-    }
+      if (error) {
+        console.error('[GET /api/portal/compact-layouts/:object] Supabase lookup error:', error);
+        const lookupError = new Error('Failed to retrieve compact layout from database');
+        lookupError.statusCode = 500;
+        throw lookupError;
+      }
 
-    res.json({ fields: data ? data.fields : null });
+      return { fields: data ? data.fields : null };
+    });
+    res.json(payload);
   } catch (err) {
     console.error('[GET /api/portal/compact-layouts/:object] Exception:', err);
-    res.status(500).json({ error: 'Server error retrieving compact layout' });
+    res.status(err.statusCode || 500).json({ error: err.message || 'Server error retrieving compact layout' });
   }
 });
 
@@ -6035,6 +6663,7 @@ app.post('/api/portal/compact-layouts/:object', checkAuth, async (req, res) => {
       return res.status(500).json({ error: 'Failed to save compact layout to database' });
     }
 
+    invalidateLayoutJson('compact-layout', object, req.user.id);
     res.json({ success: true });
   } catch (err) {
     console.error('[POST /api/portal/compact-layouts/:object] Exception:', err);
@@ -6057,10 +6686,98 @@ app.delete('/api/portal/compact-layouts/:object', checkAuth, async (req, res) =>
       return res.status(500).json({ error: 'Failed to delete compact layout from database' });
     }
 
+    invalidateLayoutJson('compact-layout', object, req.user.id);
     res.json({ success: true });
   } catch (err) {
     console.error('[DELETE /api/portal/compact-layouts/:object] Exception:', err);
     res.status(500).json({ error: 'Server error deleting compact layout' });
+  }
+});
+
+// GET custom record page layout from Supabase
+app.get('/api/portal/record-pages/:object', checkAuth, async (req, res) => {
+  const { object } = req.params;
+  try {
+    const payload = await getCachedLayoutJson('record-page', object, '', async () => {
+      const { data, error } = await supabase
+        .from('portal_record_pages')
+        .select('layout, regions, updated_at')
+        .eq('object_name', object)
+        .maybeSingle();
+
+      if (error) {
+        if (error.code === 'PGRST205' || (error.message && error.message.includes('relation "portal_record_pages" does not exist'))) {
+          console.warn(`[GET /api/portal/record-pages/:object] Table not yet created. Falling back to default.`);
+          return { layout: null };
+        }
+        console.error('[GET /api/portal/record-pages/:object] Supabase lookup error:', error);
+        const lookupError = new Error('Failed to retrieve record page layout from database');
+        lookupError.statusCode = 500;
+        throw lookupError;
+      }
+
+      return { layout: data ? { layout: data.layout, regions: data.regions, updated_at: data.updated_at } : null };
+    });
+    res.json(payload);
+  } catch (err) {
+    console.error('[GET /api/portal/record-pages/:object] Exception:', err);
+    res.status(err.statusCode || 500).json({ error: err.message || 'Server error retrieving record page layout' });
+  }
+});
+
+// POST custom record page layout to Supabase (save/upsert)
+app.post('/api/portal/record-pages/:object', checkAuth, requireAdmin, async (req, res) => {
+  const { object } = req.params;
+  const { layout, regions } = req.body;
+
+  if (!layout || !regions) {
+    return res.status(400).json({ error: 'Invalid record page layout data' });
+  }
+
+  try {
+    const { error } = await supabase
+      .from('portal_record_pages')
+      .upsert({
+        object_name: object,
+        layout,
+        regions,
+        updated_at: new Date()
+      }, {
+        onConflict: 'object_name'
+      });
+
+    if (error) {
+      console.error('[POST /api/portal/record-pages/:object] Supabase upsert error:', error);
+      return res.status(500).json({ error: 'Failed to save record page layout to database' });
+    }
+
+    invalidateLayoutJson('record-page', object);
+    res.json({ success: true });
+  } catch (err) {
+    console.error('[POST /api/portal/record-pages/:object] Exception:', err);
+    res.status(500).json({ error: 'Server error saving record page layout' });
+  }
+});
+
+// DELETE custom record page layout from Supabase (reset to default)
+app.delete('/api/portal/record-pages/:object', checkAuth, requireAdmin, async (req, res) => {
+  const { object } = req.params;
+  try {
+    const { error } = await supabase
+      .from('portal_record_pages')
+      .delete()
+      .eq('object_name', object);
+
+    if (error) {
+      console.error('[DELETE /api/portal/record-pages/:object] Supabase delete error:', error);
+      return res.status(500).json({ error: 'Failed to delete record page layout from database' });
+    }
+
+    invalidateLayoutJson('record-page', object);
+    res.json({ success: true });
+  } catch (err) {
+    console.error('[DELETE /api/portal/record-pages/:object] Exception:', err);
+    res.status(500).json({ error: 'Server error deleting record page layout' });
   }
 });
 
@@ -6082,7 +6799,10 @@ app.get('/api/search/global', checkAuth, async (req, res) => {
     `Opportunity(Id, Name, StageName, Amount),`,
     `Case(Id, CaseNumber, Subject, Status),`,
     `Lead(Id, Name, Email, Company),`,
-    `Campaign(Id, Name, Status, Type)`,
+    `Campaign(Id, Name, Status, Type),`,
+    `Quote(Id, Name, QuoteNumber, Status),`,
+    `Product2(Id, Name, ProductCode, Family),`,
+    `OpportunityLineItem(Id, Quantity, TotalPrice)`,
     `LIMIT 40`
   ].join(' ');
 
@@ -6107,11 +6827,60 @@ app.get('/api/search/global', checkAuth, async (req, res) => {
   }
 });
 
+app.get('/api/debug/performance-audit', checkAuth, requireAdminPanel, (req, res) => {
+  res.json(perfAudit.report());
+});
+
+app.post('/api/debug/performance-audit/reset', checkAuth, requireAdminPanel, (req, res) => {
+  perfAudit.reset();
+  res.json({ reset: true, at: new Date().toISOString() });
+});
+
+app.get('/api/debug/user-context-cache', checkAuth, requireAdminPanel, (req, res) => {
+  res.json(getUserContextCacheStats());
+});
+
+app.get('/api/debug/request-context', checkAuth, requireAdminPanel, (req, res) => {
+  res.json(getRequestContextStats());
+});
+
+app.get('/api/debug/metadata-cache', checkAuth, requireAdminPanel, (req, res) => {
+  res.json(getMetadataCacheStats());
+});
+
+app.post('/api/debug/metadata-cache/invalidate', checkAuth, requireAdminPanel, (req, res) => {
+  const objectName = req.body?.objectName || req.query.objectName;
+  if (objectName) {
+    invalidateMetadata(objectName);
+    return res.json({ invalidated: objectName, stats: getMetadataCacheStats() });
+  }
+  invalidateAllMetadata();
+  res.json({ invalidated: 'all', stats: getMetadataCacheStats() });
+});
+
+app.get('/api/debug/layout-cache', checkAuth, requireAdminPanel, (req, res) => {
+  res.json(getLayoutJsonCacheStats());
+});
+
+app.post('/api/debug/layout-cache/invalidate', checkAuth, requireAdminPanel, (req, res) => {
+  const objectName = req.body?.objectName || req.query.objectName;
+  if (objectName) {
+    invalidateLayoutJson('', objectName);
+    return res.json({ invalidated: objectName, stats: getLayoutJsonCacheStats() });
+  }
+  invalidateAllLayoutJson();
+  res.json({ invalidated: 'all', stats: getLayoutJsonCacheStats() });
+});
+
+app.get('/api/debug/record-detail-cache', checkAuth, requireAdminPanel, (req, res) => {
+  res.json(getRecentRecordDetailStats());
+});
+
 // Get picklist values for a field (helper for dropdowns)
 app.get('/api/meta/:object/picklist/:field', checkAuth, async (req, res) => {
   const { object, field } = req.params;
   try {
-    const data = await sfGet(`/sobjects/${object}/describe`);
+    const data = await getObjectDescribe(object);
     const fieldMeta = data.fields.find(f => f.name === field);
     const values = fieldMeta?.picklistValues?.filter(p => p.active).map(p => p.value) || [];
     res.json({ values });
@@ -6243,20 +7012,79 @@ app.get('/api/:object/:id/related', checkAuth, async (req, res, next) => {
       });
     }
 
-    const lists = await filterRelatedListsByVisibility(
-      await getRelatedListsForRecord(object, id),
-      req,
-      requestId
-    );
-    res.json({ object, id, lists });
+    let customRelatedLists = [];
+    let hasCustom = false;
+    try {
+      const { data, error } = await supabase
+        .from('portal_record_pages')
+        .select('regions')
+        .eq('object_name', object)
+        .maybeSingle();
+      
+      if (!error && data && data.regions) {
+        for (const r of Object.keys(data.regions)) {
+          const list = data.regions[r] || [];
+          list.forEach(c => {
+            if (c && typeof c === 'object') {
+              if (c.name === 'related-lists') {
+                hasCustom = true;
+                if (c.relatedLists && c.relatedLists.length > 0) {
+                  customRelatedLists.push(...c.relatedLists.filter(rl => rl && rl.enabled));
+                }
+              } else if (c.name === 'related-list-single') {
+                hasCustom = true;
+                if (c.config && c.config.childObject && c.config.relationshipName) {
+                  const key = c.config.key || `${c.config.relationshipName.toLowerCase()}_single_${r}`;
+                  customRelatedLists.push({
+                    key: key,
+                    objectName: c.config.childObject,
+                    relationshipName: c.config.relationshipName,
+                    field: c.config.field,
+                    title: c.config.title || c.title || c.config.relationshipName,
+                    fields: c.config.fields || [],
+                    limit: c.config.limit || 5,
+                    sortBy: c.config.sortBy,
+                    sortDir: c.config.sortDir || 'ASC'
+                  });
+                }
+              }
+            }
+          });
+        }
+      }
+    } catch (dbErr) {
+      console.warn('DB error checking record page custom related lists:', dbErr);
+    }
+
+    let lists;
+    if (hasCustom) {
+      customRelatedLists = ensureRequiredRelatedListConfigs(object, customRelatedLists);
+      lists = await getCustomRelatedListForRecord(object, id, customRelatedLists);
+    } else {
+      lists = await getRelatedListsForRecord(object, id);
+    }
+
+    const visibleLists = await filterRelatedListsByVisibility(lists, req, requestId);
+    res.json({ object, id, lists: visibleLists });
     securityPerfLog(requestId, 'GET related', {
       object,
-      lists: lists.length,
+      lists: visibleLists.length,
       parentSfMs,
       totalMs: msSince(requestStartedAt)
     });
   } catch (err) {
     handleSFError(err, res, `Related lists ${object}/${id}`);
+  }
+});
+
+app.get('/api/:object/child-relationships', checkAuth, async (req, res) => {
+  const { object } = req.params;
+  if (!OBJECTS[object]) return res.status(400).json({ error: `Unknown object: ${object}` });
+  try {
+    const rels = await getObjectChildRelationships(object);
+    res.json({ relationships: rels });
+  } catch (err) {
+    handleSFError(err, res, `Child relationships for ${object}`);
   }
 });
 
@@ -6481,7 +7309,7 @@ const objectFieldDetailsCache = new Map();
 async function getObjectFieldDetails(objectName) {
   const cacheKey = `${orgStore.activeOrgKey}:${objectName}`;
   if (objectFieldDetailsCache.has(cacheKey)) return objectFieldDetailsCache.get(cacheKey);
-  const meta = await sfGet(`/sobjects/${objectName}/describe`);
+  const meta = await getObjectDescribe(objectName);
   const fields = (meta.fields || [])
     .filter(f => !f.deprecatedAndHidden)
     .filter(f => !['address', 'location'].includes(f.type))
@@ -6988,8 +7816,7 @@ app.get('/api/:object', checkAuth,
         const records = visibleRecords.map(record =>
           applyFieldSecurity(record, req.fieldPerms)
         );
-        const owdAccess = await getOrgWideDefaultAccess(object);
-        const canUseSalesforceTotal = req.user.isSystemAdmin || ['public_read', 'public_read_write'].includes(owdAccess);
+        const canUseSalesforceTotal = await canUseSalesforceTotalForList(object, req.user);
 
         securityPerfLog(requestId, 'GET list cursor', {
           object,
@@ -7010,11 +7837,15 @@ app.get('/api/:object', checkAuth,
       }
 
       // Initial query
-      const scope = await buildReadableRecordScopeFilter(object, req.user, requestId);
+      const availableFields = await getObjectFieldSet(object);
+      const scope = await buildReadableRecordScopeFilter(object, req.user, requestId, availableFields);
       const soql = await buildSOQL(
         object,
         req.query.search,
-        [req.query.where, scope.clause].filter(Boolean).join(' AND ')
+        [req.query.where, scope.clause].filter(Boolean).join(' AND '),
+        null,
+        0,
+        availableFields
       );
 
       const sfStartedAt = performance.now();
@@ -7026,23 +7857,27 @@ app.get('/api/:object', checkAuth,
       const sfMs = msSince(sfStartedAt);
 
       const ownerStartedAt = performance.now();
-      const ownedRecords = await hydrateRecordOwners(data.records || [], object);
+      const canTrustScopedQuery = listScopeEnforcesVisibility(scope, req.user);
+      const ownedRecords = canTrustScopedQuery
+        ? (data.records || [])
+        : await hydrateRecordOwners(data.records || [], object);
       const ownerMs = msSince(ownerStartedAt);
 
-      // Apply record visibility
-      const visibleRecords = await applyRecordVisibility(
-        ownedRecords,
-        req.user.id,
-        req.user.role,
-        object,
-        req.user.isSystemAdmin,
-        requestId
-      );
+      // Apply record visibility only when the Salesforce query was not already scoped.
+      const visibleRecords = canTrustScopedQuery
+        ? ownedRecords
+        : await applyRecordVisibility(
+            ownedRecords,
+            req.user.id,
+            req.user.role,
+            object,
+            req.user.isSystemAdmin,
+            requestId
+          );
       const records = visibleRecords.map(record =>
         applyFieldSecurity(record, req.fieldPerms)
       );
-      const owdAccess = await getOrgWideDefaultAccess(object);
-      const canUseSalesforceTotal = req.user.isSystemAdmin || ['public_read', 'public_read_write'].includes(owdAccess);
+      const canUseSalesforceTotal = await canUseSalesforceTotalForList(object, req.user, scope);
 
       res.json({
         ...data,
@@ -7099,76 +7934,101 @@ app.get('/api/:object/:id', checkAuth,
     }
 
     try {
-      const sfStartedAt = performance.now();
-      const record = await sfGet(`/sobjects/${object}/${id}`);
-      const meta = await sfGet(`/sobjects/${object}/describe`);
-      const sfMs = msSince(sfStartedAt);
+      const cached = getRecentRecordDetail(object, id, req.user.id);
+      if (cached) return res.json(cached);
 
-      const fields = meta.fields
-        .filter(field => !field.deprecatedAndHidden)
-        .map(field => ({
-          name: field.name,
-          label: field.label,
-          type: field.type,
-          updateable: field.updateable,
-          createable: field.createable,
-          nillable: field.nillable,
-          referenceTo: field.referenceTo || [],
-          relationshipName: field.relationshipName || '',
-          controllerName: field.controllerName || '',
-          controllerValues: field.controllerValues || {},
-          picklistValues: normalizePicklistValues(field),
-
-          // Field-level security
-          fieldSecurityReadOnly:
-            req.fieldPerms?.readonlyFields?.has(field.name) || false
-        }))
-        .filter(field =>
-          !req.fieldPerms?.hiddenFields?.has(field.name)
-        );
-
-      const cleanRecord = applyFieldSecurity(record, req.fieldPerms);
-      // Check if user can see this specific record and return record-level access to the UI.
-      const securityStartedAt = performance.now();
-      const recordAccess = await evaluateRecordAccess(
-        record,
-        req.user.id,
-        req.user.role,
-        object,
-        req.user.isSystemAdmin
-      );
-      const securityMs = msSince(securityStartedAt);
-      if (!recordAccess.allowed) {
-        return res.status(403).json({
-          error: 'You do not have access to this record.',
-          code: 'RECORD_ACCESS_DENIED'
-        });
+      const cacheKey = recordDetailCacheKey(object, id, req.user.id);
+      if (recentRecordDetailInflight.has(cacheKey)) {
+        recentRecordDetailStats.deduped += 1;
+        return res.json(cloneMetadata(await recentRecordDetailInflight.get(cacheKey)));
       }
 
-      const lookupLabels = await buildLookupLabels(
-        cleanRecord,
-        fields
-      );
+      recentRecordDetailStats.rebuilds += 1;
+      const payloadPromise = (async () => {
+        const sfStartedAt = performance.now();
+        const [record, meta] = await Promise.all([
+          sfGet(`/sobjects/${object}/${id}`),
+          getObjectDescribe(object)
+        ]);
+        const sfMs = msSince(sfStartedAt);
 
-      res.json({
-        record: cleanRecord,
-        fields,
-        lookupLabels,
-        recordAccess
-      });
-      securityPerfLog(requestId, 'GET detail', {
-        object,
-        sfRecords: 1,
-        evaluated: 1,
-        visible: 1,
-        access: recordAccess.accessLevel,
-        via: recordAccess.via,
-        sfMs,
-        securityMs,
-        totalMs: msSince(requestStartedAt)
-      });
+        const fields = meta.fields
+          .filter(field => !field.deprecatedAndHidden)
+          .map(field => ({
+            name: field.name,
+            label: field.label,
+            type: field.type,
+            updateable: field.updateable,
+            createable: field.createable,
+            nillable: field.nillable,
+            referenceTo: field.referenceTo || [],
+            relationshipName: field.relationshipName || '',
+            controllerName: field.controllerName || '',
+            controllerValues: field.controllerValues || {},
+            picklistValues: normalizePicklistValues(field),
+
+            // Field-level security
+            fieldSecurityReadOnly:
+              req.fieldPerms?.readonlyFields?.has(field.name) || false
+          }))
+          .filter(field =>
+            !req.fieldPerms?.hiddenFields?.has(field.name)
+          );
+
+        const cleanRecord = applyFieldSecurity(record, req.fieldPerms);
+        // Check if user can see this specific record and return record-level access to the UI.
+        const securityStartedAt = performance.now();
+        const recordAccess = await evaluateRecordAccess(
+          record,
+          req.user.id,
+          req.user.role,
+          object,
+          req.user.isSystemAdmin
+        );
+        const securityMs = msSince(securityStartedAt);
+        if (!recordAccess.allowed) {
+          const denied = new Error('You do not have access to this record.');
+          denied.statusCode = 403;
+          denied.code = 'RECORD_ACCESS_DENIED';
+          throw denied;
+        }
+
+        const lookupLabels = await buildLookupLabels(
+          cleanRecord,
+          fields
+        );
+
+        const payload = {
+          record: cleanRecord,
+          fields,
+          lookupLabels,
+          recordAccess
+        };
+        setRecentRecordDetail(object, id, req.user.id, payload);
+        securityPerfLog(requestId, 'GET detail', {
+          object,
+          sfRecords: 1,
+          evaluated: 1,
+          visible: 1,
+          access: recordAccess.accessLevel,
+          via: recordAccess.via,
+          sfMs,
+          securityMs,
+          totalMs: msSince(requestStartedAt)
+        });
+        return payload;
+      })().finally(() => recentRecordDetailInflight.delete(cacheKey));
+
+      recentRecordDetailInflight.set(cacheKey, payloadPromise);
+      res.json(cloneMetadata(await payloadPromise));
 
     } catch (err) {
+      if (err.statusCode === 403) {
+        return res.status(403).json({
+          error: err.message,
+          code: err.code || 'RECORD_ACCESS_DENIED'
+        });
+      }
       handleSFError(err, res, `GET ${object}/${id}`);
     }
   }
@@ -7279,6 +8139,7 @@ app.patch('/api/:object', checkAuth, async (req, res, next) => {
         wait: req.body?.wait,
         includeResults: req.body?.includeResults
       });
+      securedRecords.forEach((record) => invalidateRecentRecordDetail(object, record.Id));
       return res.json({ ...result, bulk: true });
     }
 
@@ -7288,6 +8149,9 @@ app.patch('/api/:object', checkAuth, async (req, res, next) => {
       if (!Id) throw new Error('Update requires Id on every record');
       return sfPatch(`/sobjects/${object}/${Id}`, applyFieldWriteSecurity(fields, req.fieldPerms));
     }));
+    records.forEach((record) => {
+      if (record?.Id) invalidateRecentRecordDetail(object, record.Id);
+    });
     res.json({
       bulk: false,
       success: results.every((item) => item.status === 'fulfilled'),
@@ -7396,6 +8260,7 @@ app.patch('/api/:object/:id', checkAuth,
         bodyWithModifier
       );
       const sfMs = msSince(sfStartedAt);
+      invalidateRecentRecordDetail(object, id);
 
       res.json({
         success: true
@@ -7457,10 +8322,12 @@ app.delete('/api/:object', checkAuth, async (req, res, next) => {
         wait: req.body?.wait,
         includeResults: req.body?.includeResults
       });
+      records.forEach((record) => invalidateRecentRecordDetail(object, record.Id));
       return res.json({ ...result, bulk: true });
     }
 
     const results = await Promise.allSettled(records.map((record) => sfDelete(`/sobjects/${object}/${record.Id}`)));
+    records.forEach((record) => invalidateRecentRecordDetail(object, record.Id));
     res.json({
       bulk: false,
       success: results.every((item) => item.status === 'fulfilled'),
@@ -7497,6 +8364,7 @@ app.delete('/api/:object/:id', checkAuth, async (req, res, next) => {
     }
 
     await sfDelete(`/sobjects/${object}/${id}`);
+    invalidateRecentRecordDetail(object, id);
     res.json({ success: true });
   } catch (err) {
     handleSFError(err, res, `DELETE ${object}/${id}`);
@@ -7520,7 +8388,10 @@ app.get('/api/search/global', checkAuth, async (req, res) => {
     `Opportunity(Id, Name, StageName, Amount),`,
     `Case(Id, CaseNumber, Subject, Status),`,
     `Lead(Id, Name, Email, Company),`,
-    `Campaign(Id, Name, Status, Type)`,
+    `Campaign(Id, Name, Status, Type),`,
+    `Quote(Id, Name, QuoteNumber, Status),`,
+    `Product2(Id, Name, ProductCode, Family),`,
+    `OpportunityLineItem(Id, Quantity, TotalPrice)`,
     `LIMIT 40`
   ].join(' ');
 
@@ -7537,7 +8408,7 @@ app.get('/api/search/global', checkAuth, async (req, res) => {
 app.get('/api/meta/:object/picklist/:field', checkAuth, async (req, res) => {
   const { object, field } = req.params;
   try {
-    const data = await sfGet(`/sobjects/${object}/describe`);
+    const data = await getObjectDescribe(object);
     const fieldMeta = data.fields.find(f => f.name === field);
     const values = fieldMeta?.picklistValues?.filter(p => p.active).map(p => p.value) || [];
     res.json({ values });
@@ -7548,9 +8419,15 @@ app.get('/api/meta/:object/picklist/:field', checkAuth, async (req, res) => {
 
 
 app.get('/admin', (req, res) => {
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, private');
   res.sendFile(path.join(__dirname, 'public', 'admin.html'));
 });
 app.get('/admin.html', (req, res) => {
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, private');
+  res.sendFile(path.join(__dirname, 'public', 'admin.html'));
+});
+app.get('/admin/*', (req, res) => {
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, private');
   res.sendFile(path.join(__dirname, 'public', 'admin.html'));
 });
 // Serve frontend for all unmatched routes
@@ -7562,6 +8439,7 @@ app.use((req, res) => {
 app.listen(PORT, async () => {
   console.log(`SaaSRAY CRM server running at http://localhost:${PORT}`);
   try {
+    await ensurePrimaryCrmObjectsRegistered();
     await getAccessToken();
   } catch (e) {
     console.error(`❌ Auth failed: ${e.message}\n`);

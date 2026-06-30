@@ -178,6 +178,97 @@ const OBJECT_META = {
       "Description",
     ],
   },
+  Quote: {
+    title: "Quotes",
+    icon: "quote",
+    columns: [
+      "Name",
+      "QuoteNumber",
+      "Status",
+      "ExpirationDate",
+      "GrandTotal",
+      "Opportunity.Name",
+      "Account.Name",
+    ],
+    editable: [
+      "Name",
+      "Status",
+      "ExpirationDate",
+      "OpportunityId",
+      "AccountId",
+      "Description",
+    ],
+    lookups: {
+      OpportunityId: { object: "Opportunity", label: "Opportunity" },
+      AccountId: { object: "Account", label: "Account" },
+    },
+  },
+  Product2: {
+    title: "Products",
+    icon: "product",
+    columns: [
+      "Name",
+      "ProductCode",
+      "Family",
+      "IsActive",
+      "Description",
+    ],
+    editable: [
+      "Name",
+      "ProductCode",
+      "Family",
+      "IsActive",
+      "Description",
+    ],
+  },
+  OpportunityLineItem: {
+    title: "Opportunity Products",
+    icon: "opportunityProduct",
+    columns: [
+      "Product2.Name",
+      "Quantity",
+      "UnitPrice",
+      "TotalPrice",
+      "ServiceDate",
+    ],
+    editable: [
+      "OpportunityId",
+      "PricebookEntryId",
+      "Quantity",
+      "UnitPrice",
+      "ServiceDate",
+      "Description",
+    ],
+    lookups: {
+      OpportunityId: { object: "Opportunity", label: "Opportunity" },
+      Product2Id: { object: "Product2", label: "Product" },
+    },
+  },
+  QuoteLineItem: {
+    title: "Quote Line Items",
+    icon: "quoteLineItem",
+    columns: [
+      "LineNumber",
+      "Quote.Name",
+      "Product2.Name",
+      "Quantity",
+      "UnitPrice",
+      "TotalPrice",
+      "Discount",
+    ],
+    editable: [
+      "QuoteId",
+      "PricebookEntryId",
+      "Quantity",
+      "UnitPrice",
+      "Discount",
+      "Description",
+    ],
+    lookups: {
+      QuoteId: { object: "Quote", label: "Quote" },
+      Product2Id: { object: "Product2", label: "Product" },
+    },
+  },
   Task: {
     title: "Tasks",
     icon: "task",
@@ -557,12 +648,29 @@ let sfListViews = [];
 let searchTimer = null;
 let globalTimer = null;
 let lookupTimer = null;
-const CLIENT_CACHE_TTL_MS = 30 * 1000;
+const CLIENT_CACHE_TTL_MS = 10 * 60 * 1000;
+const RECENT_RECORD_CACHE_TTL_MS = 10 * 60 * 1000;
+const RECENT_RECORD_CACHE_MAX = 100;
+const SPA_STATE_STORAGE_KEY = "saasrayCrmSpaState:v1";
+const LIST_VIEW_CACHE_TTL_MS = 10 * 60 * 1000;
 const crmListCache = new Map();
+const recentRecordCache = new Map();
+const recordDetailInflight = new Map();
 const apiInFlightRequests = new Map();
 const crmBackgroundRefreshes = new Map();
 const crmPageStates = new Map();
+const listViewCache = new Map();
+const objectTotalCountCache = new Map();
+const spaCacheStats = {
+  listHits: 0,
+  listMisses: 0,
+  pageRestores: 0,
+  recordHits: 0,
+  recordMisses: 0,
+  automaticRefreshesRemoved: 0,
+};
 const objectFieldMetadataCache = new Map();
+const sharedPerformanceCache = window.SaaSRAYPerformance || null;
 let restoringCrmHistory = false;
 let editingRecord = null;
 let deletingRecord = null;
@@ -575,6 +683,20 @@ let visibleRecordCount = RENDER_CHUNK_SIZE;
 let loadingMoreRecords = false;
 let lazyObserver = null;
 let lazyLoadQueued = false;
+let listStateVersion = 0;
+let listRestoreInProgress = false;
+const VIRTUAL_ROW_ESTIMATE_PX = 57;
+const VIRTUAL_MIN_BUFFER_ROWS = 8;
+const VIRTUAL_MAX_BUFFER_ROWS = 40;
+let virtualTableState = {
+  signature: "",
+  rowHeight: VIRTUAL_ROW_ESTIMATE_PX,
+  rowHeightMeasured: false,
+  start: -1,
+  end: -1,
+  pool: [],
+  raf: 0,
+};
 let currentViewMode = "table";
 let draggedKanbanId = null;
 const kanbanPicklistCache = {};
@@ -723,10 +845,37 @@ async function loadObjectFields(objectName = currentObject) {
   if (objectFieldMetadataCache.has(objectName)) {
     return objectFieldMetadataCache.get(objectName);
   }
+  const metadataPath = `/api/${objectName}/fields`;
+  const sharedCacheKey = `saasray:v1:${metadataPath}`;
+  const sharedFields = sharedPerformanceCache?.getCacheValue?.(sharedCacheKey, "metadata");
+  if (sharedFields?.fields?.length) {
+    const fields = sharedFields.fields
+      .filter((field) => field?.name && field.name !== "Id" && !String(field.name).includes("attributes"))
+      .map((field) => ({
+        ...field,
+        label: cleanListViewLabel(field.label || humanizeFieldLabel(field.name)),
+      }))
+      .sort((a, b) => a.label.localeCompare(b.label));
+    if (fields.length) {
+      objectFieldMetadataCache.set(objectName, fields);
+      scheduleObjectMetadataPrefetch(objectName);
+      return fields;
+    }
+  }
   const fallback = [...new Set([...(OBJECT_META[objectName]?.columns || []), ...(OBJECT_META[objectName]?.editable || [])])]
     .map((name) => ({ name, label: humanizeFieldLabel(name), type: "string" }));
   try {
-    const data = await api(`/api/${objectName}/fields`);
+    const token = getAuthToken();
+    const data = sharedPerformanceCache?.fetchJson
+      ? await sharedPerformanceCache.fetchJson(metadataPath, {
+          cacheKey: sharedCacheKey,
+          cacheType: "metadata",
+          headers: {
+            "Content-Type": "application/json",
+            ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          },
+        })
+      : await api(metadataPath);
     const fields = (data.fields || fallback)
       .filter((field) => field?.name && field.name !== "Id" && !String(field.name).includes("attributes"))
       .map((field) => ({
@@ -735,10 +884,41 @@ async function loadObjectFields(objectName = currentObject) {
       }))
       .sort((a, b) => a.label.localeCompare(b.label));
     objectFieldMetadataCache.set(objectName, fields.length ? fields : fallback);
+    scheduleObjectMetadataPrefetch(objectName);
   } catch {
     objectFieldMetadataCache.set(objectName, fallback);
   }
   return objectFieldMetadataCache.get(objectName);
+}
+
+function scheduleObjectMetadataPrefetch(objectName = currentObject) {
+  if (!sharedPerformanceCache?.prefetch) return;
+  const token = getAuthToken();
+  if (!token) return;
+  const relatedObjectsByObject = {
+    Account: ["Contact", "Opportunity", "Case"],
+    Contact: ["Account", "Opportunity", "Task", "Event"],
+    Opportunity: ["Account", "Contact"],
+    Case: ["Account", "Contact"],
+    Lead: ["Campaign"],
+    Campaign: ["Lead"],
+    Quote: ["Account", "Opportunity"],
+    Product2: [],
+    OpportunityLineItem: ["Opportunity", "Product2"],
+    QuoteLineItem: ["Quote", "Product2"],
+  };
+  const targets = relatedObjectsByObject[objectName] || [];
+  targets.forEach((target) => {
+    const path = `/api/${target}/fields`;
+    sharedPerformanceCache.prefetch(path, {
+      cacheKey: `saasray:v1:${path}`,
+      cacheType: "metadata",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+      },
+    });
+  });
 }
 
 function getCachedObjectFields(objectName = currentObject) {
@@ -875,6 +1055,10 @@ function standardIconImage(key) {
     event: "event_120.png",
     email: "email_120.png",
     call: "log_a_call_120.png",
+    quote: "quote_glyph_icon_cropped.png",
+    quoteLineItem: "quote_glyph_icon_cropped.png",
+    product: "product_glyph_icon_cropped.png",
+    opportunityProduct: "product_glyph_icon_cropped.png",
   };
   const file = images[key];
   if (!file) return standardIconSvg(key);
@@ -893,6 +1077,12 @@ function standardIconSvg(key) {
     lead: '<svg viewBox="0 0 24 24"><path d="M12 3a3 3 0 110 6 3 3 0 010-6zM5 12a4 4 0 014-4h6a4 4 0 014 4v1h-4l-3 7-3-7H5v-1zm6.2 1l.8 2 .8-2h-1.6z"/></svg>',
     campaign:
       '<svg viewBox="0 0 24 24"><path d="M12 3a9 9 0 109 9 9 9 0 00-9-9zm0 3a6 6 0 11-6 6 6 6 0 016-6zm0 2.5a3.5 3.5 0 103.5 3.5A3.5 3.5 0 0012 8.5z"/></svg>',
+    quote:
+      '<svg viewBox="0 0 24 24"><path d="M6 3h12a2 2 0 012 2v16l-3-1.5-3 1.5-3-1.5L8 21l-4-2V5a2 2 0 012-2zm2 5h8V6H8v2zm0 4h8v-2H8v2zm0 4h5v-2H8v2z"/></svg>',
+    product:
+      '<svg viewBox="0 0 24 24"><path d="M12 2l8 4v12l-8 4-8-4V6l8-4zm0 2.2L7.1 6.6 12 9l4.9-2.4L12 4.2zM6 8.2v8.6l5 2.5v-8.6L6 8.2zm12 0l-5 2.5v8.6l5-2.5V8.2z"/></svg>',
+    quoteLineItem:
+      '<svg viewBox="0 0 24 24"><path d="M5 3h14a2 2 0 012 2v14a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2zm2 4v3h3V7H7zm5 0v3h5V7h-5zm-5 5v3h3v-3H7zm5 0v3h5v-3h-5z"/></svg>',
     user: '<svg viewBox="0 0 24 24"><path d="M12 12a4 4 0 100-8 4 4 0 000 8zm-6 8a6 6 0 0112 0H6z"/></svg>',
   };
   return (
@@ -976,6 +1166,10 @@ function objectFromId(id) {
       500: "Case",
       "00Q": "Lead",
       701: "Campaign",
+      "0Q0": "Quote",
+      "01t": "Product2",
+      "00k": "OpportunityLineItem",
+      "0QL": "QuoteLineItem",
       "00T": "Task",
       "00U": "Event",
       "02s": "EmailMessage",
@@ -1077,6 +1271,56 @@ function cloneCacheValue(value) {
   }
 }
 
+function recentRecordCacheKey(objectName, id) {
+  return `${orgSettings.activeOrgKey || "default"}:${objectName}:${id}`;
+}
+
+function getRecentRecordCache(objectName, id) {
+  const key = recentRecordCacheKey(objectName, id);
+  const entry = recentRecordCache.get(key);
+  if (!entry || Date.now() - entry.timestamp > RECENT_RECORD_CACHE_TTL_MS) {
+    if (entry) recentRecordCache.delete(key);
+    spaCacheStats.recordMisses += 1;
+    return null;
+  }
+  recentRecordCache.delete(key);
+  recentRecordCache.set(key, entry);
+  spaCacheStats.recordHits += 1;
+  return cloneCacheValue(entry.value);
+}
+
+function setRecentRecordCache(objectName, id, value) {
+  const key = recentRecordCacheKey(objectName, id);
+  if (recentRecordCache.has(key)) recentRecordCache.delete(key);
+  recentRecordCache.set(key, {
+    timestamp: Date.now(),
+    value: cloneCacheValue(value)
+  });
+  while (recentRecordCache.size > RECENT_RECORD_CACHE_MAX) {
+    recentRecordCache.delete(recentRecordCache.keys().next().value);
+  }
+}
+
+function invalidateRecentRecordCache(objectName, id = '') {
+  if (!id) {
+    const prefix = `${orgSettings.activeOrgKey || "default"}:${objectName}:`;
+    for (const key of [...recentRecordCache.keys()]) {
+      if (key.startsWith(prefix)) recentRecordCache.delete(key);
+    }
+    return;
+  }
+  recentRecordCache.delete(recentRecordCacheKey(objectName, id));
+}
+
+function applyCachedRecordLayouts(cached) {
+  if (!cached?.layouts) return;
+  const { objectName, layout, compactLayout, recordPage } = cached.layouts;
+  if (!objectName) return;
+  if (layout) DB_LAYOUT_CACHE[objectName] = layout;
+  if (compactLayout) COMPACT_LAYOUT_CACHE[objectName] = compactLayout;
+  if (recordPage) RECORD_PAGE_CACHE[objectName] = recordPage;
+}
+
 function currentScrollPosition() {
   return window.scrollY || document.documentElement.scrollTop || document.body.scrollTop || 0;
 }
@@ -1102,19 +1346,191 @@ function getCrmListCache(key) {
   const entry = crmListCache.get(key);
   if (!entry || Date.now() - entry.timestamp > CLIENT_CACHE_TTL_MS) {
     if (entry) crmListCache.delete(key);
+    spaCacheStats.listMisses += 1;
     return null;
   }
+  spaCacheStats.listHits += 1;
   return cloneCacheValue(entry);
 }
 
 function setCrmListCache(key, entry) {
   crmListCache.set(key, cloneCacheValue({ ...entry, timestamp: Date.now() }));
+  syncSidebarBadgeFromListCache(entry);
 }
 
 function peekCrmListCache(key) {
   const entry = crmListCache.get(key);
   return entry ? cloneCacheValue(entry) : null;
 }
+
+function cachedListCount(entry) {
+  const total = Number(entry?.payload?.totalSize ?? entry?.totalRecords);
+  const records = entry?.payload?.records || entry?.currentRecords;
+  const loaded = Array.isArray(records) ? records.length : 0;
+  if (Number.isFinite(total) && total > 0 && !(entry?.payload?.nextRecordsUrl && total <= loaded)) {
+    return total;
+  }
+  const objectName = entry?.objectName;
+  const cachedTotal = objectName ? objectTotalCountCache.get(objectName) : null;
+  if (Number.isFinite(cachedTotal) && cachedTotal > 0) return cachedTotal;
+  return loaded || null;
+}
+
+function rememberObjectTotalCount(objectName, count) {
+  const numeric = Number(count);
+  if (!objectName || !OBJECT_META[objectName] || !Number.isFinite(numeric) || numeric <= 0) return;
+  const previous = Number(objectTotalCountCache.get(objectName) || 0);
+  if (numeric >= previous) {
+    objectTotalCountCache.set(objectName, numeric);
+    updateBadge(objectName, numeric);
+  }
+}
+
+function knownObjectTotalCount(objectName, fallback = 0) {
+  const known = Number(objectTotalCountCache.get(objectName) || 0);
+  const fb = Number(fallback || 0);
+  return known > fb ? known : fb;
+}
+
+function syncSidebarBadgeFromListCache(entry) {
+  const objectName = entry?.objectName;
+  if (!objectName || !OBJECT_META[objectName]) return;
+  const count = cachedListCount(entry);
+  if (count !== null) updateBadge(objectName, count);
+}
+
+function syncSidebarBadgesFromCache() {
+  for (const entry of crmListCache.values()) syncSidebarBadgeFromListCache(entry);
+  for (const state of crmPageStates.values()) syncSidebarBadgeFromListCache(state);
+  for (const [objectName, count] of objectTotalCountCache.entries()) {
+    updateBadge(objectName, count);
+  }
+}
+
+function pruneCrmSpaCaches(now = Date.now()) {
+  for (const [key, entry] of crmListCache.entries()) {
+    if (!entry?.timestamp || now - entry.timestamp > CLIENT_CACHE_TTL_MS) {
+      crmListCache.delete(key);
+    }
+  }
+  for (const [key, state] of crmPageStates.entries()) {
+    if (!state?.timestamp || now - state.timestamp > CLIENT_CACHE_TTL_MS) {
+      crmPageStates.delete(key);
+    }
+  }
+  for (const [key, entry] of listViewCache.entries()) {
+    if (!entry?.timestamp || now - entry.timestamp > LIST_VIEW_CACHE_TTL_MS) {
+      listViewCache.delete(key);
+    }
+  }
+  for (const [key, entry] of recentRecordCache.entries()) {
+    if (!entry?.timestamp || now - entry.timestamp > RECENT_RECORD_CACHE_TTL_MS) {
+      recentRecordCache.delete(key);
+    }
+  }
+}
+
+function serializeMapForStorage(map) {
+  return Array.from(map.entries()).map(([key, value]) => [key, value]);
+}
+
+function restoreMapFromStorage(map, entries = []) {
+  map.clear();
+  entries.forEach(([key, value]) => {
+    if (key) map.set(key, value);
+  });
+}
+
+function restoreCrmListCacheFromStorage(entries = []) {
+  crmListCache.clear();
+  entries.forEach(([key, value]) => {
+    const objectName = value?.objectName;
+    if (!key || !objectName || !OBJECT_META[objectName]) return;
+    if (!key.startsWith(crmListCachePrefix(objectName))) return;
+    if (!hasUsableCrmListCacheEntry(value, objectName)) return;
+    crmListCache.set(key, value);
+  });
+}
+
+function restoreObjectTotalCountsFromStorage(entries = []) {
+  objectTotalCountCache.clear();
+  entries.forEach(([objectName, count]) => rememberObjectTotalCount(objectName, count));
+}
+
+function persistCrmSpaState() {
+  if (!$("content")) return;
+  try {
+    captureCrmPageState(currentObject);
+    pruneCrmSpaCaches();
+    sessionStorage.setItem(
+      SPA_STATE_STORAGE_KEY,
+      JSON.stringify({
+        timestamp: Date.now(),
+        orgKey: orgSettings.activeOrgKey || "default",
+        currentObject,
+        currentViewId,
+        currentViewMode,
+        sortState,
+        selectedListRecordId,
+        crmListCache: serializeMapForStorage(crmListCache),
+        crmPageStates: serializeMapForStorage(crmPageStates),
+        listViewCache: serializeMapForStorage(listViewCache),
+        recentRecordCache: serializeMapForStorage(recentRecordCache),
+        objectTotalCountCache: serializeMapForStorage(objectTotalCountCache),
+      }),
+    );
+  } catch (err) {
+    console.warn("CRM state persistence skipped:", err.message || err);
+  }
+}
+
+function persistCrmStateBeforeExternalNavigation(event) {
+  const target = event.target?.closest?.('a[href], button');
+  if (!target) return;
+  const href = target.getAttribute?.("href") || "";
+  const isCrmModuleExit =
+    href === "/reports.html" ||
+    href === "/dashboards.html" ||
+    target.id === "adminPanelBtn";
+  if (isCrmModuleExit) persistCrmSpaState();
+}
+
+function restoreCrmSpaStateFromStorage() {
+  try {
+    const raw = sessionStorage.getItem(SPA_STATE_STORAGE_KEY);
+    if (!raw) return false;
+    const state = JSON.parse(raw);
+    if (!state || Date.now() - state.timestamp > CLIENT_CACHE_TTL_MS) return false;
+    const activeOrgKey = orgSettings.activeOrgKey || "default";
+    if (state.orgKey && state.orgKey !== activeOrgKey) return false;
+    restoreCrmListCacheFromStorage(state.crmListCache || []);
+    restoreMapFromStorage(crmPageStates, state.crmPageStates || []);
+    restoreMapFromStorage(listViewCache, state.listViewCache || []);
+    restoreMapFromStorage(recentRecordCache, state.recentRecordCache || []);
+    restoreObjectTotalCountsFromStorage(state.objectTotalCountCache || []);
+    pruneCrmSpaCaches();
+    return true;
+  } catch (err) {
+    console.warn("CRM state restore skipped:", err.message || err);
+    return false;
+  }
+}
+
+function getSpaCacheStats() {
+  const listTotal = spaCacheStats.listHits + spaCacheStats.listMisses;
+  const recordTotal = spaCacheStats.recordHits + spaCacheStats.recordMisses;
+  return {
+    ...spaCacheStats,
+    listCacheSize: crmListCache.size,
+    pageStateSize: crmPageStates.size,
+    listViewCacheSize: listViewCache.size,
+    recordCacheSize: recentRecordCache.size,
+    listHitRatio: listTotal ? spaCacheStats.listHits / listTotal : 0,
+    recordHitRatio: recordTotal ? spaCacheStats.recordHits / recordTotal : 0,
+  };
+}
+
+window.getCrmSpaCacheStats = getSpaCacheStats;
 
 function normalizeCrmPayloadForCompare(payload = {}) {
   return {
@@ -1150,9 +1566,19 @@ function showBackgroundRefreshIndicator(show) {
 
 function refreshCrmCachePayload(entry) {
   if (!entry?.payload) return;
-  entry.payload.records = cloneCacheValue(currentRecords || []);
+  const nextRecords = Array.isArray(currentRecords) ? currentRecords : [];
+  const existingRecords = Array.isArray(entry.payload.records) ? entry.payload.records : [];
+  if (nextRecords.length || !existingRecords.length) {
+    entry.payload.records = cloneCacheValue(nextRecords);
+  }
   entry.payload.nextRecordsUrl = nextRecordsUrl || null;
-  entry.payload.totalSize = totalRecords || currentRecords.length;
+  const preservedTotal = Math.max(
+    Number(entry.payload.totalSize || 0),
+    Number(totalRecords || 0),
+    Number(objectTotalCountCache.get(entry.objectName) || 0),
+  );
+  entry.payload.totalSize = preservedTotal || entry.payload.records.length;
+  rememberObjectTotalCount(entry.objectName, entry.payload.totalSize);
   entry.payload.hiddenFields = Array.from(currentHiddenFields || []);
   entry.payload.columns = cloneCacheValue(currentColumns || []);
 }
@@ -1176,6 +1602,76 @@ function markCachedSelectedRecord(recordId) {
   entry.visibleRecordCount = visibleRecordCount;
 }
 
+function nextListStateVersion() {
+  listStateVersion += 1;
+  return listStateVersion;
+}
+
+function activeListCacheEntry() {
+  return loadData.activeCacheKey ? peekCrmListCache(loadData.activeCacheKey) : null;
+}
+
+function bestCrmListCacheForObject(objectName) {
+  const prefix = crmListCachePrefix(objectName);
+  let best = null;
+  for (const [key, entry] of crmListCache.entries()) {
+    if (!key.startsWith(prefix)) continue;
+    if (!hasUsableCrmListCacheEntry(entry, objectName)) continue;
+    if (!best || (entry.timestamp || 0) > (best.entry.timestamp || 0)) {
+      best = { key, entry };
+    }
+  }
+  return best ? { key: best.key, entry: cloneCacheValue(best.entry) } : null;
+}
+
+function isCrmListCacheEntryForObject(entry, objectName) {
+  return Boolean(
+    entry?.objectName === objectName &&
+      entry?.payload &&
+      Array.isArray(entry.payload.records),
+  );
+}
+
+function hasUsableCrmListCacheEntry(entry, objectName) {
+  if (!isCrmListCacheEntryForObject(entry, objectName)) return false;
+  const records = entry.payload.records || [];
+  const total = Number(entry.payload.totalSize || 0);
+  if (entry.payload.nextRecordsUrl && total <= records.length) return false;
+  if (!records.length && total === 0) return false;
+  return true;
+}
+
+function isCrmPageStateForObject(state, objectName) {
+  if (!state || state.objectName !== objectName) return false;
+  const html = String(state.contentHtml || "");
+  if (html && html.includes('data-object=') && !html.includes(`data-object="${objectName}"`)) {
+    return false;
+  }
+  if (state.activeCacheKey && !state.activeCacheKey.startsWith(crmListCachePrefix(objectName))) {
+    return false;
+  }
+  return true;
+}
+
+function applyListCacheEntry(entry, objectName = currentObject) {
+  if (!isCrmListCacheEntryForObject(entry, objectName)) return false;
+  applyCrmListPayload(entry.payload);
+  visibleRecordCount = entry.visibleRecordCount || visibleRecordCount || RENDER_CHUNK_SIZE;
+  selectedListRecordId = entry.selectedRecord || selectedListRecordId || null;
+  return true;
+}
+
+function hasRenderableListRows() {
+  return Array.isArray(currentRecords) && currentRecords.length > 0;
+}
+
+function isCurrentListRequest(version, objectName, cacheKey = "") {
+  if (version !== listStateVersion) return false;
+  if (objectName !== currentObject) return false;
+  if (cacheKey && loadData.activeCacheKey && cacheKey !== loadData.activeCacheKey) return false;
+  return true;
+}
+
 function cloneSetValues(setValue) {
   return Array.from(setValue || []);
 }
@@ -1197,8 +1693,23 @@ function crmObjectFromLocation() {
   return objectName && OBJECT_META[objectName] ? objectName : null;
 }
 
+function crmRouteFromLocation() {
+  const hash = decodeURIComponent(window.location.hash || "");
+  const recordMatch = hash.match(/^#record=([A-Za-z]+)\/([^/]+)$/);
+  if (recordMatch && OBJECT_META[recordMatch[1]]) {
+    return {
+      view: "record",
+      objectName: recordMatch[1],
+      recordId: recordMatch[2],
+    };
+  }
+  const objectName = crmObjectFromLocation();
+  if (objectName) return { view: "object", objectName };
+  return null;
+}
+
 function initialReadableObject() {
-  const requested = crmObjectFromLocation();
+  const requested = crmRouteFromLocation()?.objectName || crmObjectFromLocation();
   if (requested && canReadObject(requested)) return requested;
   return firstReadableNavObject() || currentObject;
 }
@@ -1208,11 +1719,35 @@ function writeCrmHistory(objectName, replace = false) {
   const hash = `#object=${encodeURIComponent(objectName)}`;
   if (window.location.hash === hash && history.state?.crmObject === objectName) return;
   const method = replace ? "replaceState" : "pushState";
-  history[method]({ ...(history.state || {}), crmObject: objectName }, "", hash);
+  history[method]({ ...(history.state || {}), crmObject: objectName, crmView: "object" }, "", hash);
+}
+
+function writeRecordHistory(objectName, recordId, replace = false) {
+  if (!objectName || !recordId || !OBJECT_META[objectName]) return;
+  const hash = `#record=${encodeURIComponent(objectName)}/${encodeURIComponent(recordId)}`;
+  if (
+    window.location.hash === hash &&
+    history.state?.crmObject === objectName &&
+    history.state?.crmRecordId === recordId
+  ) return;
+  const method = replace ? "replaceState" : "pushState";
+  history[method](
+    {
+      ...(history.state || {}),
+      crmObject: objectName,
+      crmView: "record",
+      crmRecordId: recordId,
+    },
+    "",
+    hash,
+  );
 }
 
 function captureCrmPageState(objectName = currentObject) {
   if (!objectName || !OBJECT_META[objectName] || !$("content")) return;
+  if (viewingDetail) return;
+  const tableObject = $("tableCard")?.dataset?.object;
+  if (tableObject && tableObject !== objectName) return;
   rememberCurrentListCacheState();
   crmPageStates.set(objectName, {
     timestamp: Date.now(),
@@ -1225,7 +1760,7 @@ function captureCrmPageState(objectName = currentObject) {
     currentViewId,
     sfListViews: cloneCacheValue(sfListViews || []),
     sortState: cloneCacheValue(sortState || { field: null, direction: "asc" }),
-    totalRecords,
+    totalRecords: knownObjectTotalCount(objectName, totalRecords || currentRecords.length),
     nextRecordsUrl,
     visibleRecordCount,
     currentViewMode,
@@ -1237,46 +1772,73 @@ function captureCrmPageState(objectName = currentObject) {
     viewingDetail,
     detailRecordState: cloneCacheValue(detailRecordState || null),
   });
+  syncSidebarBadgesFromCache();
 }
 
 function restoreCrmPageState(objectName) {
   const state = crmPageStates.get(objectName);
-  if (!state || Date.now() - state.timestamp > CLIENT_CACHE_TTL_MS) return false;
-  if (state.activeCacheKey && !getCrmListCache(state.activeCacheKey)) return false;
+  if (state && !isCrmPageStateForObject(state, objectName)) {
+    crmPageStates.delete(objectName);
+  }
+  const stateIsFresh =
+    isCrmPageStateForObject(state, objectName) &&
+    Date.now() - state.timestamp <= CLIENT_CACHE_TTL_MS;
+  const fallbackCache = bestCrmListCacheForObject(objectName);
+  const activeKey = (stateIsFresh && state.activeCacheKey) || fallbackCache?.key || "";
+  const activeEntry = activeKey ? getCrmListCache(activeKey) : null;
+  const cachedEntry = hasUsableCrmListCacheEntry(activeEntry, objectName)
+    ? activeEntry
+    : fallbackCache?.entry || null;
+  if (!stateIsFresh && !cachedEntry) return false;
+  if (stateIsFresh && state.activeCacheKey && !cachedEntry && !fallbackCache) return false;
+  const entryMeta = cachedEntry || {};
 
+  listRestoreInProgress = true;
+  nextListStateVersion();
   currentObject = objectName;
-  currentRecords = cloneCacheValue(state.currentRecords || []);
-  currentColumns = cloneCacheValue(state.currentColumns || []);
-  currentHiddenFields = new Set(state.currentHiddenFields || []);
-  currentViewId = state.currentViewId || "all";
-  sfListViews = cloneCacheValue(state.sfListViews || []);
-  sortState = cloneCacheValue(state.sortState || { field: null, direction: "asc" });
-  totalRecords = state.totalRecords || 0;
-  nextRecordsUrl = state.nextRecordsUrl || null;
-  visibleRecordCount = state.visibleRecordCount || RENDER_CHUNK_SIZE;
-  currentViewMode = state.currentViewMode || "table";
+  currentRecords = cloneCacheValue(stateIsFresh ? state.currentRecords || [] : []);
+  currentColumns = cloneCacheValue(stateIsFresh ? state.currentColumns || [] : []);
+  currentHiddenFields = new Set(stateIsFresh ? state.currentHiddenFields || [] : []);
+  currentViewId = (stateIsFresh ? state.currentViewId : entryMeta.filters?.viewId) || "all";
+  sfListViews = cloneCacheValue(stateIsFresh ? state.sfListViews || [] : sfListViews || []);
+  sortState = cloneCacheValue((stateIsFresh ? state.sortState : entryMeta.sort) || { field: null, direction: "asc" });
+  totalRecords = knownObjectTotalCount(
+    objectName,
+    stateIsFresh ? state.totalRecords || entryMeta.payload?.totalSize || 0 : entryMeta.payload?.totalSize || 0,
+  );
+  nextRecordsUrl = stateIsFresh ? state.nextRecordsUrl || null : entryMeta.payload?.nextRecordsUrl || null;
+  visibleRecordCount = (stateIsFresh ? state.visibleRecordCount : entryMeta.visibleRecordCount) || RENDER_CHUNK_SIZE;
+  currentViewMode = (stateIsFresh ? state.currentViewMode : "table") || "table";
   loadingMoreRecords = false;
-  listContentHtml = state.listContentHtml || listContentHtml;
-  viewingDetail = Boolean(state.viewingDetail);
-  detailRecordState = cloneCacheValue(state.detailRecordState || null);
-  selectedListRecordId = state.selectedRecord || null;
-  loadData.activeCacheKey = state.activeCacheKey || "";
+  listContentHtml = (stateIsFresh ? state.listContentHtml : listContentHtml) || listContentHtml;
+  viewingDetail = false;
+  detailRecordState = null;
+  selectedListRecordId = (stateIsFresh ? state.selectedRecord : entryMeta.selectedRecord) || null;
+  loadData.activeCacheKey = activeKey || "";
+  if (cachedEntry) applyListCacheEntry(cachedEntry);
 
-  $("content").innerHTML = state.contentHtml;
+  const cachedListHtml = String(stateIsFresh ? state.contentHtml || "" : "");
+  $("content").innerHTML = cachedListHtml.includes('id="tableCard"')
+    ? cachedListHtml
+    : listContentHtml;
   const searchInput = $("objSearch");
-  if (searchInput) searchInput.value = state.search || "";
+  if (searchInput) searchInput.value = (stateIsFresh ? state.search : entryMeta.search) || "";
   const select = $("listViewSelect");
   if (select) select.value = currentViewId;
+  $("pageIcon").innerHTML = objectIcon(objectName);
+  $("pageTitle").textContent = getCurrentViewName();
   setActiveNavObject(objectName);
+  syncSidebarBadgesFromCache();
   applyObjectNavGuards();
   updateViewToggle();
-  showActiveView();
+  clearObjectListLoadingState();
   applyPermissionGuards(objectName);
-  updatePagination();
-  updateRecordCounts();
-  observeLazySentinel();
-  requestAnimationFrame(() => window.scrollTo(0, state.scrollPosition || 0));
-  queueLazyLoadIfNeeded();
+  if (!viewingDetail && currentViewMode === "table") {
+    renderTable();
+  }
+  finalizeCachedObjectListRestore((stateIsFresh ? state.scrollPosition : entryMeta.scrollPosition) || 0);
+  spaCacheStats.pageRestores += 1;
+  listRestoreInProgress = false;
   return true;
 }
 
@@ -1290,11 +1852,27 @@ async function restoreCrmObjectFromHistory(objectName) {
   }
 }
 
+async function restoreCrmRecordFromHistory(objectName, recordId) {
+  if (!objectName || !recordId || !OBJECT_META[objectName] || !canReadObject(objectName)) return;
+  restoringCrmHistory = true;
+  try {
+    if (objectName !== currentObject) {
+      captureCrmPageState(currentObject);
+      currentObject = objectName;
+      setActiveNavObject(objectName);
+    }
+    await openRecordDetail(objectName, recordId, { preserveHistory: true });
+  } finally {
+    restoringCrmHistory = false;
+  }
+}
+
 function invalidateCrmObjectCache(objectName) {
   const prefix = crmListCachePrefix(objectName);
   for (const key of crmListCache.keys()) {
     if (key.startsWith(prefix)) crmListCache.delete(key);
   }
+  listViewCache.delete(`${orgSettings.activeOrgKey || "default"}:${objectName}`);
   crmPageStates.delete(objectName);
   for (const key of apiInFlightRequests.keys()) {
     if (key.includes(`/api/${objectName}`)) apiInFlightRequests.delete(key);
@@ -1305,9 +1883,11 @@ function invalidateCrmObjectCache(objectName) {
 }
 
 function applyCrmListPayload(payload) {
-  currentRecords = payload.records || [];
+  if (!payload || !Array.isArray(payload.records)) return false;
+  currentRecords = payload.records;
   nextRecordsUrl = payload.nextRecordsUrl || null;
-  totalRecords = payload.totalSize || currentRecords.length;
+  totalRecords = knownObjectTotalCount(currentObject, payload.totalSize || currentRecords.length);
+  rememberObjectTotalCount(currentObject, totalRecords);
   currentHiddenFields = new Set(payload.hiddenFields || []);
   if (payload.columns) {
     currentColumns = normalizeListViewColumns(payload.columns);
@@ -1315,6 +1895,7 @@ function applyCrmListPayload(payload) {
     applyLocalView();
   }
   currentColumns = currentColumns.filter((field) => !currentHiddenFields.has(field));
+  return true;
 }
 
 async function fetchCrmListPayload(path, cacheKey, cacheMeta, forceRefresh = false) {
@@ -1344,11 +1925,17 @@ async function fetchCrmListPayload(path, cacheKey, cacheMeta, forceRefresh = fal
 async function refreshCrmListInBackground(path, cacheKey, cacheMeta) {
   if (crmBackgroundRefreshes.has(cacheKey)) return crmBackgroundRefreshes.get(cacheKey);
   const previousEntry = peekCrmListCache(cacheKey);
+  const refreshObject = cacheMeta?.objectName || currentObject;
+  const refreshVersion = listStateVersion;
   const request = api(path)
     .then(async (payload) => {
-      if (!payload || payload.error) return;
+      if (!payload || payload.error || !Array.isArray(payload.records)) return;
       const previousPayload = previousEntry?.payload || null;
-      const activeView = loadData.activeCacheKey === cacheKey && !viewingDetail;
+      const activeView =
+        loadData.activeCacheKey === cacheKey &&
+        !viewingDetail &&
+        currentObject === refreshObject &&
+        listStateVersion === refreshVersion;
       const previousColumns = cloneCacheValue(currentColumns || []);
       const scrollPosition = activeView ? currentScrollPosition() : previousEntry?.scrollPosition || 0;
       const visibleCount = activeView ? visibleRecordCount : previousEntry?.visibleRecordCount || RENDER_CHUNK_SIZE;
@@ -1366,7 +1953,7 @@ async function refreshCrmListInBackground(path, cacheKey, cacheMeta) {
 
       if (!activeView || sameCrmPayload(previousPayload, payload)) return;
 
-      applyCrmListPayload(payload);
+      if (!applyCrmListPayload(payload)) return;
       visibleRecordCount = visibleCount;
       applySort();
       if (currentViewMode === "kanban") {
@@ -1375,7 +1962,7 @@ async function refreshCrmListInBackground(path, cacheKey, cacheMeta) {
         patchRenderedTableRows(previousColumns);
       }
       updatePagination();
-      updateBadge(currentObject, totalRecords || currentRecords.length);
+      updateBadge(currentObject, knownObjectTotalCount(currentObject, totalRecords || currentRecords.length));
       updateRecordCounts();
       applyPermissionGuards(currentObject);
       captureCrmPageState(currentObject);
@@ -1385,10 +1972,8 @@ async function refreshCrmListInBackground(path, cacheKey, cacheMeta) {
     })
     .finally(() => {
       crmBackgroundRefreshes.delete(cacheKey);
-      showBackgroundRefreshIndicator(false);
     });
   crmBackgroundRefreshes.set(cacheKey, request);
-  showBackgroundRefreshIndicator(true);
   return request;
 }
 
@@ -1545,8 +2130,9 @@ async function completePortalLogin(data) {
   setStoredPerms(data.permissions || {});
   window.portalUser = data.user;
   applyAllPermissionGuards();
+  const route = crmRouteFromLocation();
   currentObject = initialReadableObject();
-  writeCrmHistory(currentObject, true);
+  if (route?.view !== "record") writeCrmHistory(currentObject, true);
 
   hideLoginPage();
 
@@ -1559,6 +2145,11 @@ async function completePortalLogin(data) {
 
   applyAllPermissionGuards();
   await checkConnection();
+  if (route?.view === "record" && route.recordId) {
+    loadListViews().catch((err) => console.warn("List views warmup failed:", err.message || err));
+    await openRecordDetail(route.objectName, route.recordId, { preserveHistory: true });
+    return;
+  }
   await loadListViews();
   await loadData();
 }
@@ -1937,7 +2528,7 @@ async function openUserProfile() {
 
         <!-- Header -->
         <div style="display:flex;align-items:center;gap:16px;margin-bottom:28px">
-          <button class="btn btn-ghost btn-sm" onclick="restoreListContent()">
+          <button class="btn btn-ghost btn-sm" onclick="backToCurrentList()">
             ← Back
           </button>
           <h1 style="font-size:20px;font-weight:800">My Profile</h1>
@@ -2395,9 +2986,20 @@ async function loadListViews() {
     renderListViewSelect();
     return;
   }
+  const cacheKey = `${orgSettings.activeOrgKey || "default"}:${currentObject}`;
+  const cached = listViewCache.get(cacheKey);
+  if (cached && Date.now() - cached.timestamp <= LIST_VIEW_CACHE_TTL_MS) {
+    sfListViews = cloneCacheValue(cached.listviews || []);
+    renderListViewSelect();
+    return;
+  }
   try {
     const data = await api(`/api/${currentObject}/listviews`);
     sfListViews = data.listviews || [];
+    listViewCache.set(cacheKey, {
+      timestamp: Date.now(),
+      listviews: cloneCacheValue(sfListViews),
+    });
   } catch (err) {
     sfListViews = [];
   }
@@ -2464,8 +3066,13 @@ async function handleListViewChange(value) {
 async function loadData(options = {}) {
   const loadToken = Symbol("loadData");
   loadData.latestToken = loadToken;
+  const requestObject = currentObject;
+  const requestVersion = nextListStateVersion();
   rememberCurrentListCacheState();
   const forceRefresh = Boolean(options.forceRefresh);
+  let showedFullPageLoading = false;
+  let restoredOrRendered = false;
+  let loadFailed = false;
   const search = $("objSearch")?.value || "";
   const meta = OBJECT_META[currentObject];
   if (!meta || !canReadObject(currentObject)) {
@@ -2481,6 +3088,7 @@ async function loadData(options = {}) {
   currentColumns = meta.columns.slice();
   currentHiddenFields = new Set();
   await loadObjectFields(currentObject);
+  if (!isCurrentListRequest(requestVersion, requestObject)) return;
 
   $("pageIcon").innerHTML = objectIcon(currentObject);
   $("pageTitle").textContent = getCurrentViewName();
@@ -2516,37 +3124,48 @@ async function loadData(options = {}) {
       viewSignature,
       pageSize: localView?.pageSize || RENDER_CHUNK_SIZE,
     });
-    const cachedEntry = forceRefresh
+    const cacheCandidate = forceRefresh
       ? null
       : getCrmListCache(cacheKey);
+    const cachedEntry = hasUsableCrmListCacheEntry(cacheCandidate, currentObject)
+      ? cacheCandidate
+      : null;
     if (!cachedEntry) {
       $("pageSub").textContent =
         `Loading ${meta.title.toLowerCase()} from Salesforce...`;
       $("stateLoading").style.display = "flex";
+      showedFullPageLoading = true;
       $("stateError").style.display = "none";
       $("tableCard").style.display = "none";
       if ($("kanbanCard")) $("kanbanCard").style.display = "none";
       updateViewToggle();
+    } else {
+      clearObjectListLoadingState({ showList: false });
     }
     const result = cachedEntry
       ? { payload: cachedEntry.payload, fromCache: true, meta: cachedEntry }
       : await fetchCrmListPayload(path, cacheKey, cacheMeta, forceRefresh);
+    if (!isCurrentListRequest(requestVersion, requestObject)) return;
     loadData.activeCacheKey = cacheKey;
-    applyCrmListPayload(result.payload || {});
+    if (!applyCrmListPayload(result.payload || {})) return;
 
-    if (viewingDetail || loadData.latestToken !== loadToken) return;
+    if (viewingDetail || loadData.latestToken !== loadToken || !isCurrentListRequest(requestVersion, requestObject, cacheKey)) return;
 
     visibleRecordCount = result.fromCache && result.meta?.visibleRecordCount
       ? result.meta.visibleRecordCount
       : RENDER_CHUNK_SIZE;
+    selectedListRecordId = result.fromCache && result.meta?.selectedRecord
+      ? result.meta.selectedRecord
+      : selectedListRecordId;
     applySort();
     await renderCurrentView();
-    if (viewingDetail || loadData.latestToken !== loadToken) return;
+    if (viewingDetail || loadData.latestToken !== loadToken || !isCurrentListRequest(requestVersion, requestObject, cacheKey)) return;
+    restoredOrRendered = true;
     updatePagination();
-    updateBadge(currentObject, totalRecords || currentRecords.length);
+    updateBadge(currentObject, knownObjectTotalCount(currentObject, totalRecords || currentRecords.length));
     updateRecordCounts();
     if (!result.fromCache) await verifyListCountWhenSmall();
-    $("stateLoading").style.display = "none";
+    clearObjectListLoadingState({ showList: false });
     applyPermissionGuards(currentObject);
     showActiveView();
     if (result.fromCache && result.meta?.scrollPosition) {
@@ -2554,11 +3173,9 @@ async function loadData(options = {}) {
     }
     queueLazyLoadIfNeeded();
     captureCrmPageState(currentObject);
-    if (cachedEntry) {
-      refreshCrmListInBackground(path, cacheKey, cacheMeta);
-    }
  } catch (err) {
-    $('stateLoading').style.display = 'none';
+    loadFailed = true;
+    clearObjectListLoadingState({ showList: false, hideError: false });
     $('stateError').style.display   = 'flex';
 
     const isAuth  = /auth|oauth|token|unknown_error/i.test(err.message);
@@ -2597,6 +3214,10 @@ async function loadData(options = {}) {
 
     // Also show toast for quick visibility
     toast(detail, 'err', 10000);
+  } finally {
+    if (loadData.latestToken === loadToken && !viewingDetail && isCurrentListRequest(requestVersion, requestObject) && (showedFullPageLoading || restoredOrRendered)) {
+      clearObjectListLoadingState({ showList: restoredOrRendered, hideError: !loadFailed });
+    }
   }
 }
 
@@ -2752,7 +3373,6 @@ function applyLocalView() {
 function renderTable() {
   if (viewingDetail) return;
   renderFilterPills();
-  const recordsToRender = getRecordsToRender();
   const table = $("dataTable");
   const tableCard = $("tableCard");
   if (!table || !tableCard) return;
@@ -2778,7 +3398,8 @@ function renderTable() {
     </tr>
   `;
 
-  if (!recordsToRender.length) {
+  if (!currentRecords.length) {
+    resetVirtualTableState();
     $("tbody").innerHTML = `
       <tr>
         <td class="table-empty" colspan="${columnCount}">
@@ -2791,20 +3412,8 @@ function renderTable() {
     return;
   }
 
-  const rowHtml = recordsToRender
-    .map((record) => renderTableRowHtml(record, showActions))
-    .join("");
-  const canLoadMore =
-    nextRecordsUrl || visibleRecordCount < currentRecords.length;
-  $("tbody").innerHTML = `
-    ${rowHtml}
-    <tr id="lazyLoadSentinel" class="lazy-load-row">
-      <td colspan="${columnCount}">
-        ${loadingMoreRecords ? "Loading more records..." : canLoadMore ? "Scroll to load more records" : "All loaded"}
-      </td>
-    </tr>
-  `;
-  observeLazySentinel();
+  setupVirtualTableBody($("tbody"), columnCount, showActions);
+  renderVirtualTableWindow(true);
 }
 
 function renderFilterPills() {
@@ -2844,9 +3453,8 @@ async function removeLocalViewFilter(index) {
   await loadData({ forceRefresh: true });
 }
 
-function renderTableRowHtml(record, showActions) {
+function renderTableCellsHtml(record, showActions) {
   return `
-    <tr class="${selectedListRecordId === record.Id ? "selected-row" : ""}" data-record-id="${escapeHtml(record.Id)}" onclick="openRecordDetail('${currentObject}', '${escapeJs(record.Id)}')">
       ${currentColumns.map((field) => `<td class="${fieldColumnClass(field)}">${formatValue(field, getValue(record, field), record)}</td>`).join("")}
       ${showActions ? `<td class="actions-col">
         <div class="row-acts">
@@ -2863,6 +3471,13 @@ function renderTableRowHtml(record, showActions) {
           </button>` : ''}
         </div>
       </td>` : ''}
+  `;
+}
+
+function renderTableRowHtml(record, showActions) {
+  return `
+    <tr class="${selectedListRecordId === record.Id ? "selected-row" : ""}" data-record-id="${escapeHtml(record.Id)}" onclick="openRecordDetail('${currentObject}', '${escapeJs(record.Id)}')">
+      ${renderTableCellsHtml(record, showActions)}
     </tr>
   `;
 }
@@ -2881,55 +3496,189 @@ function patchRenderedTableRows(previousColumns = currentColumns) {
     return;
   }
 
-  const recordsToRender = getRecordsToRender();
   const showActions = canDo(currentObject, "can_edit") || canDo(currentObject, "can_delete");
   const columnCount = currentColumns.length + (showActions ? 1 : 0);
-  const sentinel = $("lazyLoadSentinel");
 
-  if (!recordsToRender.length) {
+  if (!currentRecords.length) {
     renderTable();
     return;
   }
 
-  const existingRows = new Map(
-    [...tbody.querySelectorAll("tr[data-record-id]")].map((row) => [
-      row.dataset.recordId,
-      row,
-    ]),
-  );
-  const nextIds = new Set(recordsToRender.map((record) => record.Id));
-  const anchor = sentinel || null;
+  setupVirtualTableBody(tbody, columnCount, showActions);
+  renderVirtualTableWindow(true);
+}
 
-  recordsToRender.forEach((record) => {
-    const nextHtml = renderTableRowHtml(record, showActions).trim();
-    const existing = existingRows.get(record.Id);
-    if (existing) {
-      if (existing.outerHTML.trim() !== nextHtml) {
-        existing.outerHTML = nextHtml;
-      }
-      const row = tbody.querySelector(`tr[data-record-id="${CSS.escape(record.Id)}"]`);
-      if (row) tbody.insertBefore(row, anchor);
-      return;
-    }
-    const template = document.createElement("template");
-    template.innerHTML = nextHtml;
-    tbody.insertBefore(template.content.firstElementChild, anchor);
+function resetVirtualTableState() {
+  if (virtualTableState.raf) cancelAnimationFrame(virtualTableState.raf);
+  virtualTableState = {
+    signature: "",
+    rowHeight: VIRTUAL_ROW_ESTIMATE_PX,
+    rowHeightMeasured: false,
+    start: -1,
+    end: -1,
+    pool: [],
+    raf: 0,
+  };
+}
+
+function virtualTableSignature(columnCount, showActions) {
+  return JSON.stringify({
+    object: currentObject,
+    columns: currentColumns,
+    columnCount,
+    showActions,
   });
+}
 
-  existingRows.forEach((row, id) => {
-    if (!nextIds.has(id)) row.remove();
-  });
-
-  if (sentinel) {
-    const canLoadMore = nextRecordsUrl || visibleRecordCount < currentRecords.length;
-    sentinel.className = "lazy-load-row";
-    sentinel.innerHTML = `
-      <td colspan="${columnCount}">
-        ${loadingMoreRecords ? "Loading more records..." : canLoadMore ? "Scroll to load more records" : "All loaded"}
-      </td>
-    `;
+function setupVirtualTableBody(tbody, columnCount, showActions) {
+  if (!tbody) return;
+  const signature = virtualTableSignature(columnCount, showActions);
+  if (virtualTableState.signature === signature && $("virtualTopSpacer") && $("virtualBottomSpacer")) {
+    updateVirtualSentinel(columnCount);
+    return;
   }
-  observeLazySentinel();
+
+  if (lazyObserver) lazyObserver.disconnect();
+  resetVirtualTableState();
+  virtualTableState.signature = signature;
+
+  tbody.innerHTML = `
+    <tr id="virtualTopSpacer" class="virtual-spacer-row" aria-hidden="true">
+      <td colspan="${columnCount}"><div class="virtual-spacer-block"></div></td>
+    </tr>
+    <tr id="virtualBottomSpacer" class="virtual-spacer-row" aria-hidden="true">
+      <td colspan="${columnCount}"><div class="virtual-spacer-block"></div></td>
+    </tr>
+    <tr id="lazyLoadSentinel" class="lazy-load-row">
+      <td colspan="${columnCount}">All loaded</td>
+    </tr>
+  `;
+  updateVirtualSentinel(columnCount);
+}
+
+function updateVirtualSentinel(columnCount) {
+  const sentinel = $("lazyLoadSentinel");
+  if (!sentinel) return;
+  sentinel.innerHTML = `
+    <td colspan="${columnCount}">
+      ${loadingMoreRecords ? "Loading more records..." : nextRecordsUrl ? "Scroll to load more records" : "All loaded"}
+    </td>
+  `;
+}
+
+function virtualBufferRows() {
+  const rowHeight = Math.max(virtualTableState.rowHeight || VIRTUAL_ROW_ESTIMATE_PX, 32);
+  const viewportRows = Math.ceil(window.innerHeight / rowHeight);
+  return Math.max(VIRTUAL_MIN_BUFFER_ROWS, Math.min(VIRTUAL_MAX_BUFFER_ROWS, viewportRows));
+}
+
+function measureVirtualRowHeight(row) {
+  if (!row || virtualTableState.rowHeightMeasured) return;
+  const measured = row.getBoundingClientRect().height;
+  if (measured > 20) {
+    virtualTableState.rowHeight = measured;
+    virtualTableState.rowHeightMeasured = true;
+  }
+}
+
+function computeVirtualRange() {
+  const table = $("dataTable");
+  if (!table || !currentRecords.length) return { start: 0, end: 0 };
+
+  const tableTop = table.getBoundingClientRect().top + window.scrollY;
+  const headerHeight = table.tHead?.getBoundingClientRect().height || 44;
+  const bodyTop = tableTop + headerHeight;
+  const rowHeight = Math.max(virtualTableState.rowHeight || VIRTUAL_ROW_ESTIMATE_PX, 32);
+  const buffer = virtualBufferRows();
+  const viewportTop = window.scrollY;
+  const viewportBottom = viewportTop + window.innerHeight;
+
+  const rawStart = Math.floor((viewportTop - bodyTop) / rowHeight) - buffer;
+  const rawEnd = Math.ceil((viewportBottom - bodyTop) / rowHeight) + buffer;
+  const maxStart = Math.max(0, currentRecords.length - 1);
+  const start = Math.min(maxStart, Math.max(0, rawStart));
+  const end = Math.min(currentRecords.length, Math.max(start + 1, rawEnd));
+  return { start, end };
+}
+
+function setVirtualSpacerHeight(id, height) {
+  const spacer = $(id)?.querySelector(".virtual-spacer-block");
+  if (!spacer) return;
+  const nextHeight = `${Math.max(0, Math.round(height))}px`;
+  if (spacer.style.height !== nextHeight) spacer.style.height = nextHeight;
+}
+
+function ensureVirtualRowPool(size) {
+  const tbody = $("tbody");
+  const bottomSpacer = $("virtualBottomSpacer");
+  if (!tbody || !bottomSpacer) return [];
+
+  while (virtualTableState.pool.length < size) {
+    const row = document.createElement("tr");
+    row.className = "virtual-record-row";
+    row.style.display = "none";
+    tbody.insertBefore(row, bottomSpacer);
+    virtualTableState.pool.push(row);
+  }
+  return virtualTableState.pool;
+}
+
+function updateVirtualRow(row, record, showActions) {
+  if (!row || !record) return;
+  row.style.display = "";
+  const nextClass = `${selectedListRecordId === record.Id ? "selected-row " : ""}virtual-record-row`;
+  if (row.className !== nextClass) row.className = nextClass;
+  if (row.dataset.recordId !== record.Id) {
+    row.dataset.recordId = record.Id;
+    row.onclick = () => openRecordDetail(currentObject, record.Id);
+    row.innerHTML = renderTableCellsHtml(record, showActions);
+  }
+}
+
+function renderVirtualTableWindow(force = false) {
+  if (viewingDetail || currentViewMode !== "table") return;
+  const tbody = $("tbody");
+  if (!tbody || !$("virtualTopSpacer") || !$("virtualBottomSpacer")) return;
+
+  const showActions = canDo(currentObject, "can_edit") || canDo(currentObject, "can_delete");
+  const columnCount = currentColumns.length + (showActions ? 1 : 0);
+  const { start, end } = computeVirtualRange();
+  const visibleCount = Math.max(0, end - start);
+
+  if (!force && start === virtualTableState.start && end === virtualTableState.end) {
+    updateVirtualSentinel(columnCount);
+    return;
+  }
+
+  const rows = ensureVirtualRowPool(visibleCount);
+  for (let index = 0; index < rows.length; index += 1) {
+    const row = rows[index];
+    const record = index < visibleCount ? currentRecords[start + index] : null;
+    if (record) {
+      updateVirtualRow(row, record, showActions);
+      if (index === 0) measureVirtualRowHeight(row);
+    } else {
+      row.style.display = "none";
+      row.removeAttribute("data-record-id");
+      row.onclick = null;
+    }
+  }
+
+  const rowHeight = Math.max(virtualTableState.rowHeight || VIRTUAL_ROW_ESTIMATE_PX, 32);
+  setVirtualSpacerHeight("virtualTopSpacer", start * rowHeight);
+  setVirtualSpacerHeight("virtualBottomSpacer", Math.max(0, currentRecords.length - end) * rowHeight);
+  virtualTableState.start = start;
+  virtualTableState.end = end;
+  updateVirtualSentinel(columnCount);
+}
+
+function scheduleVirtualTableRender(force = false) {
+  if (currentViewMode !== "table" || viewingDetail) return;
+  if (virtualTableState.raf) cancelAnimationFrame(virtualTableState.raf);
+  virtualTableState.raf = requestAnimationFrame(() => {
+    virtualTableState.raf = 0;
+    renderVirtualTableWindow(force);
+  });
 }
 
 function updateViewToggle() {
@@ -3250,18 +3999,22 @@ function lazyEndpoint(cursor) {
 
 async function loadMoreRecords() {
   if (loadingMoreRecords || !nextRecordsUrl) return false;
+  const requestObject = currentObject;
+  const requestVersion = listStateVersion;
   loadingMoreRecords = true;
   updatePagination();
   try {
     const data = await api(lazyEndpoint(nextRecordsUrl));
+    if (!isCurrentListRequest(requestVersion, requestObject)) return false;
     appendUniqueRecords(data.records || []);
     nextRecordsUrl = data.nextRecordsUrl || null;
-    totalRecords = data.totalSize || totalRecords || currentRecords.length;
+    totalRecords = knownObjectTotalCount(currentObject, data.totalSize || totalRecords || currentRecords.length);
+    rememberObjectTotalCount(currentObject, totalRecords);
     applyLocalView();
     applySort();
     await renderCurrentView();
     updatePagination();
-    updateBadge(currentObject, totalRecords || currentRecords.length);
+    updateBadge(currentObject, knownObjectTotalCount(currentObject, totalRecords || currentRecords.length));
     updateRecordCounts();
     rememberCurrentListCacheState();
     return true;
@@ -3271,7 +4024,6 @@ async function loadMoreRecords() {
   } finally {
     loadingMoreRecords = false;
     updatePagination();
-    queueLazyLoadIfNeeded();
   }
 }
 
@@ -3298,6 +4050,11 @@ function shouldLazyLoadMore() {
     $("tableCard")?.style.display === "none"
   )
     return false;
+  if ($("virtualTopSpacer") && $("virtualBottomSpacer")) {
+    const prefetchRows = Math.max(virtualBufferRows() * 2, RENDER_CHUNK_SIZE);
+    const { end } = computeVirtualRange();
+    return currentRecords.length - end <= prefetchRows;
+  }
   const tableCard = $("tableCard");
   if (!tableCard) return false;
   const rect = tableCard.getBoundingClientRect();
@@ -3305,11 +4062,8 @@ function shouldLazyLoadMore() {
 }
 
 async function handleLazyScroll() {
+  scheduleVirtualTableRender();
   if (loadingMoreRecords || !shouldLazyLoadMore()) return;
-  if (visibleRecordCount < currentRecords.length) {
-    await showMoreVisibleRecords();
-    return;
-  }
   if (nextRecordsUrl) await loadMoreRecords();
 }
 
@@ -3323,30 +4077,25 @@ function queueLazyLoadIfNeeded() {
 }
 
 function observeLazySentinel() {
-  const sentinel = $("lazyLoadSentinel");
-  if (!sentinel) return;
-  if (!lazyObserver) {
-    lazyObserver = new IntersectionObserver(
-      (entries) => {
-        if (entries.some((entry) => entry.isIntersecting)) handleLazyScroll();
-      },
-      { root: null, rootMargin: "700px 0px", threshold: 0 },
-    );
-  }
-  lazyObserver.disconnect();
-  lazyObserver.observe(sentinel);
+  if (lazyObserver) lazyObserver.disconnect();
 }
 
 function loadedRangeText() {
-  const shown = Math.min(visibleRecordCount, currentRecords.length);
+  const shown =
+    currentViewMode === "table"
+      ? currentRecords.length
+      : Math.min(visibleRecordCount, currentRecords.length);
   if (!totalRecords) return `${shown} shown`;
   return `${shown} of ${totalRecords}`;
 }
 
 function updateRecordCounts() {
   if (viewingDetail) return;
-  const shown = Math.min(visibleRecordCount, currentRecords.length);
-  const totalLabel = totalRecords || currentRecords.length;
+  const shown =
+    currentViewMode === "table"
+      ? currentRecords.length
+      : Math.min(visibleRecordCount, currentRecords.length);
+  const totalLabel = knownObjectTotalCount(currentObject, totalRecords || currentRecords.length);
   const pageSub = $("pageSub");
   const recCount = $("recCount");
   if (!pageSub || !recCount) return;
@@ -3355,6 +4104,57 @@ function updateRecordCounts() {
     currentViewMode === "kanban"
       ? `${currentRecords.length} loaded`
       : `${shown} shown`;
+}
+
+function clearObjectListLoadingState({ showList = true, hideError = true } = {}) {
+  const loading = $("stateLoading");
+  const error = $("stateError");
+  if (loading) loading.style.display = "none";
+  if (hideError && error) error.style.display = "none";
+  if (showList && !viewingDetail) showActiveView();
+}
+
+function restoreWindowScrollPosition(targetY = 0, attempts = 8) {
+  const desired = Math.max(0, Number(targetY) || 0);
+  let lastApplied = -1;
+  const tryScroll = (remaining) => {
+    const maxScroll = Math.max(0, document.documentElement.scrollHeight - window.innerHeight);
+    const nextScroll = Math.min(desired, maxScroll);
+    window.scrollTo(0, nextScroll);
+    scheduleVirtualTableRender(true);
+    renderVirtualTableWindow(true);
+    lastApplied = nextScroll;
+    if (remaining <= 0) return;
+    const current = currentScrollPosition();
+    if (Math.abs(current - desired) <= 2 || maxScroll >= desired) {
+      requestAnimationFrame(() => {
+        const finalScroll = Math.min(desired, Math.max(0, document.documentElement.scrollHeight - window.innerHeight));
+        window.scrollTo(0, finalScroll);
+        scheduleVirtualTableRender(true);
+        renderVirtualTableWindow(true);
+        if (Math.abs(finalScroll - lastApplied) > 2) {
+          requestAnimationFrame(() => renderVirtualTableWindow(true));
+        }
+      });
+      return;
+    }
+    requestAnimationFrame(() => tryScroll(remaining - 1));
+  };
+  requestAnimationFrame(() => tryScroll(attempts));
+}
+
+function finalizeCachedObjectListRestore(scrollPosition = 0) {
+  showActiveView();
+  clearObjectListLoadingState();
+  updatePagination();
+  updateRecordCounts();
+  observeLazySentinel();
+  if (currentViewMode === "table") {
+    renderVirtualTableWindow(true);
+  }
+  restoreWindowScrollPosition(scrollPosition || 0);
+  queueLazyLoadIfNeeded();
+  captureCrmPageState(currentObject);
 }
 
 async function verifyListCountWhenSmall() {
@@ -3369,8 +4169,9 @@ async function verifyListCountWhenSmall() {
     const count = Number(data.totalSize || 0);
     if (count !== totalRecords) {
       totalRecords = count;
+      rememberObjectTotalCount(currentObject, count);
       updateRecordCounts();
-      updateBadge(currentObject, totalRecords || currentRecords.length);
+      updateBadge(currentObject, knownObjectTotalCount(currentObject, totalRecords || currentRecords.length));
     }
     if (count <= currentRecords.length && count <= 100) {
       const orgLabel = data.org?.label ? ` in ${data.org.label}` : "";
@@ -3423,6 +4224,7 @@ async function switchObject(objectName) {
     closeSidebar();
     return;
   }
+  nextListStateVersion();
   currentObject = objectName;
   currentRecords = [];
   totalRecords = 0;
@@ -3440,18 +4242,36 @@ async function switchObject(objectName) {
   await loadData();
 }
 
-function restoreListContent(shouldLoad = true) {
+function restoreListContent(shouldLoad = false, options = {}) {
   if (!listContentHtml) return;
+  listRestoreInProgress = true;
+  nextListStateVersion();
   $("content").innerHTML = listContentHtml;
   viewingDetail = false;
   detailRecordState = null;
   setActiveNavObject(currentObject);
+  clearObjectListLoadingState();
+  applyListCacheEntry(activeListCacheEntry());
+  if (!options.preserveHistory && !restoringCrmHistory) {
+    writeCrmHistory(currentObject, true);
+  }
   if (shouldLoad) {
     renderListViewSelect();
+    listRestoreInProgress = false;
     loadData();
   } else {
-    captureCrmPageState(currentObject);
+    renderCurrentView()
+      .catch((err) => console.warn("List restore render failed:", err.message || err))
+      .finally(() => {
+        const entry = activeListCacheEntry();
+        finalizeCachedObjectListRestore(entry?.scrollPosition || 0);
+        listRestoreInProgress = false;
+      });
   }
+}
+
+function backToCurrentList() {
+  restoreListContent(false);
 }
 
 function updateBadge(objectName, count) {
@@ -3473,7 +4293,9 @@ function pageRangeStart() {
 }
 
 function pageRangeEnd() {
-  return Math.min(visibleRecordCount, currentRecords.length);
+  return currentViewMode === "table"
+    ? currentRecords.length
+    : Math.min(visibleRecordCount, currentRecords.length);
 }
 
 function updatePagination() {
@@ -3490,10 +4312,10 @@ function updatePagination() {
     : `Showing ${loadedRangeText()}`;
   const lazyHint = $("lazyHint");
   if (lazyHint) {
+    const hasMoreLocalRows =
+      currentViewMode === "kanban" && visibleRecordCount < currentRecords.length;
     lazyHint.textContent =
-      nextRecordsUrl || visibleRecordCount < currentRecords.length
-        ? "Scroll to load more"
-        : "All loaded";
+      nextRecordsUrl || hasMoreLocalRows ? "Scroll to load more" : "All loaded";
   }
 }
 
@@ -3703,6 +4525,10 @@ function getCustomCompactFields(objectName) {
       Opportunity: ["StageName", "Amount", "CloseDate", "Probability"],
       Case: ["Status", "Priority", "Type", "CreatedDate"],
       Campaign: ["Type", "Status", "StartDate", "EndDate"],
+      Quote: ["QuoteNumber", "Status", "ExpirationDate", "GrandTotal"],
+      Product2: ["ProductCode", "Family", "IsActive"],
+      OpportunityLineItem: ["Opportunity.Name", "Product2.Name", "Quantity", "TotalPrice"],
+      QuoteLineItem: ["Quote.Name", "Product2.Name", "Quantity", "TotalPrice"],
       User: ["Email", "Username", "Title"],
     }[objectName] ||
     OBJECT_META[objectName]?.columns ||
@@ -3741,6 +4567,39 @@ async function loadCompactLayoutForObject(objectName) {
 
 const LAYOUT_CACHE = {};
 const DB_LAYOUT_CACHE = {};
+
+const RECORD_PAGE_CACHE = {};
+
+function getDefaultRecordPageLayout() {
+  return {
+    layout: 'header-two-column',
+    regions: {
+      header: ['compact-layout'],
+      left: ['related-lists', 'details'],
+      right: ['activity', 'chatter'],
+      bottom: []
+    }
+  };
+}
+
+async function loadRecordPageForObject(objectName) {
+  if (RECORD_PAGE_CACHE[objectName]) {
+    return RECORD_PAGE_CACHE[objectName];
+  }
+  try {
+    const res = await api(`/api/portal/record-pages/${objectName}`);
+    if (res && res.layout) {
+      RECORD_PAGE_CACHE[objectName] = res.layout;
+      return res.layout;
+    }
+  } catch (err) {
+    console.warn(`Failed to fetch record page layout for ${objectName}:`, err);
+  }
+
+  const defaultPage = getDefaultRecordPageLayout();
+  RECORD_PAGE_CACHE[objectName] = defaultPage;
+  return defaultPage;
+}
 
 function normalizeLayoutData(layout) {
   if (!Array.isArray(layout)) return [];
@@ -3858,6 +4717,7 @@ function resolveLayoutField(entry, fields) {
   return {
     ...field,
     readOnly: Boolean(config.readOnly),
+    required: Boolean(config.required),
     layoutLabel: config.label || getAddressFieldLabel(config.name, field),
   };
 }
@@ -3957,8 +4817,8 @@ function renderFieldControl(
     labelFor(field);
   const type = fieldMeta.type || "string";
   const value = record[field] ?? getDefaultFieldValue(field, fieldMeta, type);
-  const required =
-    fieldMeta.nillable === false ? '<span class="form-req">*</span>' : "";
+  const isRequired = fieldMeta.required || fieldMeta.nillable === false;
+  const required = isRequired ? '<span class="form-req">*</span>' : "";
   const spanClass = shouldSpanField(field, type) ? "span-2" : "";
   const readOnly =
     Boolean(fieldMeta.readOnly) ||
@@ -4246,7 +5106,130 @@ function closeModal() {
   modalPresetValues = {};
 }
 
-async function openRecordDetail(objectName, id) {
+const CRM_COMPONENT_CACHE = new Map();
+
+async function preloadCrmComponent(name) {
+  if (CRM_COMPONENT_CACHE.has(name)) return CRM_COMPONENT_CACHE.get(name);
+  try {
+    const mod = await import(`/components/${name}/component.js`);
+    const comp = mod.default || mod;
+    CRM_COMPONENT_CACHE.set(name, comp);
+    return comp;
+  } catch (err) {
+    console.error(`Failed to load component ${name}:`, err);
+    const fallback = {
+      render(config, context) {
+        return `<div class="error-state compact"><p>Component "${name}" failed to load.</p></div>`;
+      }
+    };
+    CRM_COMPONENT_CACHE.set(name, fallback);
+    return fallback;
+  }
+}
+
+function componentNamesForRecordPage(pageConfig) {
+  const names = new Set(['compact-layout', 'details']);
+  const regions = pageConfig?.regions || {};
+  Object.keys(regions).forEach((region) => {
+    (regions[region] || []).forEach((component) => {
+      if (typeof component === 'string') names.add(component);
+      else if (component?.name) names.add(component.name);
+    });
+  });
+  return names;
+}
+
+async function loadRecordDetailData(objectName, id) {
+  const cached = getRecentRecordCache(objectName, id);
+  if (cached?.data) {
+    applyCachedRecordLayouts(cached);
+    return cached.data;
+  }
+
+  const key = recentRecordCacheKey(objectName, id);
+  if (recordDetailInflight.has(key)) {
+    return cloneCacheValue(await recordDetailInflight.get(key));
+  }
+
+  const promise = api(`/api/${objectName}/${id}`)
+    .finally(() => recordDetailInflight.delete(key));
+  recordDetailInflight.set(key, promise);
+  return cloneCacheValue(await promise);
+}
+
+async function loadRecordLayoutBundle(objectName) {
+  const [layout, compactLayout, recordPage] = await Promise.all([
+    loadLayoutForObject(objectName),
+    loadCompactLayoutForObject(objectName),
+    loadRecordPageForObject(objectName)
+  ]);
+  return { objectName, layout, compactLayout, recordPage };
+}
+
+function buildRecordDetailViewModel(objectName, id, data) {
+  const record = data.record || {};
+  const fields = data.fields || [];
+  detailLookupLabels = data.lookupLabels || {};
+  const title = record.Name || record.Subject || record.CaseNumber || record.Email || id;
+  const displayFields = fields
+    .filter(
+      (field) =>
+        record[field.name] !== null &&
+        record[field.name] !== undefined &&
+        field.name !== "attributes",
+    )
+    .slice(0, 80);
+
+  return { record, fields, title, displayFields };
+}
+
+async function renderRecordDetailFromData(objectName, id, data) {
+  const { record, fields, title, displayFields } = buildRecordDetailViewModel(objectName, id, data);
+  const pageConfig = RECORD_PAGE_CACHE[objectName] || getDefaultRecordPageLayout();
+  await Promise.all(Array.from(componentNamesForRecordPage(pageConfig)).map(name => preloadCrmComponent(name)));
+
+  currentObject = objectName;
+  detailRecordState = {
+    objectName,
+    id,
+    record,
+    fields,
+    recordAccess: data.recordAccess || { allowed: true, accessLevel: "read" },
+  };
+  setActiveNavObject(objectName);
+  renderRecordDetailPage(objectName, record, fields, displayFields, title, id);
+  captureCrmPageState(objectName);
+  return { record, fields };
+}
+
+function loadRecordSecondaryComponents(objectName, id, record) {
+  if (detailRecordState?.objectName !== objectName || detailRecordState?.id !== id) return;
+  const hasRelated = document.querySelector('.record-related-card') ||
+    document.querySelector('.record-related-card-container') ||
+    document.querySelector('[id^="relatedList-"]');
+  const hasActivity = document.getElementById('activityTimeline');
+  const hasChatter = document.getElementById('chatterFeed');
+
+  if (hasRelated) {
+    loadRelatedRecords(objectName, id).catch((err) => console.warn("Related records load failed:", err.message || err));
+    if (objectName === "Campaign") {
+      activeCampaign = record;
+      loadCampaignMembers(id).catch((err) => console.warn("Campaign members load failed:", err.message || err));
+    }
+  }
+  if (hasActivity) {
+    loadRecordActivity(objectName, id).catch((err) => console.warn("Activity load failed:", err.message || err));
+  }
+  if (hasChatter) {
+    setTimeout(() => {
+      if (detailRecordState?.objectName === objectName && detailRecordState?.id === id) {
+        loadChatterFeed().catch((err) => console.warn("Chatter load failed:", err.message || err));
+      }
+    }, 0);
+  }
+}
+
+async function openRecordDetail(objectName, id, options = {}) {
   if (!id || !OBJECT_META[objectName]) return;
   markCachedSelectedRecord(id);
   if (!canReadObject(objectName)) {
@@ -4255,70 +5238,58 @@ async function openRecordDetail(objectName, id) {
   }
 
   try {
-    $("content").innerHTML = `
-      <div class="state-box">
-        <div class="spinner-ring"><div></div><div></div><div></div><div></div></div>
-        <p>Loading record detail...</p>
-      </div>
-    `;
+    captureCrmPageState(currentObject);
+    if (!options.preserveHistory && !restoringCrmHistory) {
+      writeRecordHistory(objectName, id);
+    }
     viewingDetail = true;
 
-    const [data] = await Promise.all([
-      api(`/api/${objectName}/${id}`),
-      loadLayoutForObject(objectName),
-      loadCompactLayoutForObject(objectName)
-    ]);
-    const record = data.record || {};
-    const fields = data.fields || [];
-    detailLookupLabels = data.lookupLabels || {};
-    const title =
-      record.Name || record.Subject || record.CaseNumber || record.Email || id;
-    const displayFields = fields
-      .filter(
-        (field) =>
-          record[field.name] !== null &&
-          record[field.name] !== undefined &&
-          field.name !== "attributes",
-      )
-      .slice(0, 80);
-
-    currentObject = objectName;
-    detailRecordState = {
-      objectName,
-      id,
-      record,
-      fields,
-      recordAccess: data.recordAccess || { allowed: true, accessLevel: "read" },
-    };
-    setActiveNavObject(objectName);
-    renderRecordDetailPage(
-      objectName,
-      record,
-      fields,
-      displayFields,
-      title,
-      id,
-    );
-    if (objectName === "Campaign") {
-      activeCampaign = record;
-      await Promise.all([
-        loadRelatedRecords(objectName, id),
-        loadCampaignMembers(id),
-        loadRecordActivity(objectName, id),
-      ]);
-    } else {
-      await Promise.all([
-        loadRelatedRecords(objectName, id),
-        loadRecordActivity(objectName, id),
-      ]);
+    const cached = getRecentRecordCache(objectName, id);
+    if (!cached?.data) {
+      $("content").innerHTML = `
+        <div class="state-box">
+          <div class="spinner-ring"><div></div><div></div><div></div><div></div></div>
+          <p>Loading record detail...</p>
+        </div>
+      `;
     }
-    captureCrmPageState(objectName);
+    if (cached) applyCachedRecordLayouts(cached);
+    const recordPromise = cached?.data
+      ? Promise.resolve(cached.data)
+      : loadRecordDetailData(objectName, id);
+    const layoutPromise = loadRecordLayoutBundle(objectName);
+
+    const data = await recordPromise;
+    const rendered = await renderRecordDetailFromData(objectName, id, data);
+    setRecentRecordCache(objectName, id, {
+      data,
+      layouts: {
+        objectName,
+        layout: DB_LAYOUT_CACHE[objectName] || LAYOUT_CACHE[objectName] || null,
+        compactLayout: COMPACT_LAYOUT_CACHE[objectName] || null,
+        recordPage: RECORD_PAGE_CACHE[objectName] || null
+      }
+    });
+
+    layoutPromise
+      .then(async (layouts) => {
+        if (detailRecordState?.objectName !== objectName || detailRecordState?.id !== id) return;
+        applyCachedRecordLayouts({ layouts });
+        setRecentRecordCache(objectName, id, { data, layouts });
+        await renderRecordDetailFromData(objectName, id, data);
+        loadRecordSecondaryComponents(objectName, id, rendered.record);
+      })
+      .catch((err) => {
+        console.warn("Record layout load failed:", err.message || err);
+        setRecentRecordCache(objectName, id, { data });
+        loadRecordSecondaryComponents(objectName, id, rendered.record);
+      });
   } catch (err) {
     $("content").innerHTML = `
       <div class="state-box error-state">
         <h3>Could not load record</h3>
         <p>${escapeHtml(err.message)}</p>
-        <button class="btn btn-ghost" onclick="restoreListContent()">Back to List</button>
+        <button class="btn btn-ghost" onclick="backToCurrentList()">Back to List</button>
       </div>
     `;
   }
@@ -4334,6 +5305,262 @@ function renderRecordDetailPage(
 ) {
   const summaryFields = getResolvedCompactFields(objectName, fields);
   const canEditThisRecord = currentDetailCanEdit();
+
+  const pageConfig = RECORD_PAGE_CACHE[objectName] || {
+    layout: 'header-two-column',
+    regions: {
+      header: ['compact-layout'],
+      left: ['related-lists', 'details'],
+      right: ['activity', 'chatter'],
+      bottom: []
+    }
+  };
+
+  const resolveComponent = (c) => {
+    if (typeof c === 'string') {
+      return { name: c, title: '', collapsed: false, visible: true };
+    }
+    return {
+      name: c.name,
+      title: c.title || '',
+      collapsed: !!c.collapsed,
+      visible: c.visible !== false,
+      config: c.config || null
+    };
+  };
+
+  const renderSingleComponent = (comp, isTabbedChild = false) => {
+    const compInstance = CRM_COMPONENT_CACHE.get(comp.name);
+    if (compInstance) {
+      const renderContext = {
+        escapeHtml,
+        labelFor,
+        getValue,
+        formatValue,
+        record,
+        fields,
+        displayFields,
+        summaryFields,
+        objectName,
+        id,
+        isTabbedChild,
+        utilityIconSvg,
+        objectIcon,
+        canDo,
+        currentDetailCanEdit,
+        getRelatedListConfigs,
+        renderRelatedListShell,
+        renderConfiguredDetailSections,
+        renderChatterPanel,
+        renderRelatedPanel
+      };
+
+      const contentHtml = compInstance.render(comp, renderContext);
+
+      if (isTabbedChild) {
+        return contentHtml;
+      }
+
+      const compLabel = {
+        'compact-layout': 'Compact Layout',
+        'details': 'Details',
+        'related-lists': 'Related Lists',
+        'activity': 'Activity',
+        'chatter': 'Chatter',
+        'related-list-single': 'Related List'
+      }[comp.name] || comp.name;
+
+      const compTitle = comp.title || (comp.config && comp.config.title) || compLabel;
+
+      if (comp.name === 'compact-layout') {
+        return `
+          <div class="record-hero card" style="margin-bottom: 16px; border: 1px solid var(--border); border-radius: var(--r-md); background: var(--surface); box-shadow: var(--shadow-sm); overflow: hidden;">
+            ${contentHtml}
+          </div>
+        `;
+      }
+
+      return `
+        <div class="card record-${comp.name}-card" style="background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-md); box-shadow: var(--shadow-sm); overflow: hidden; margin-bottom: 16px;">
+          ${contentHtml}
+        </div>
+      `;
+    }
+
+    return `<div class="error-state"><p>Component ${comp.name} not found.</p></div>`;
+  };
+
+  const renderRegionComponents = (regionName) => {
+    const components = pageConfig.regions[regionName] || [];
+    const resolved = components.map(c => resolveComponent(c)).filter(c => c.visible);
+
+    if (resolved.length === 0) return '';
+
+    const hasRelatedLists = resolved.some(c => c.name === 'related-lists');
+    const hasDetails = resolved.some(c => c.name === 'details');
+    const groupLeftTabs = hasRelatedLists && hasDetails;
+
+    const hasActivity = resolved.some(c => c.name === 'activity');
+    const hasChatter = resolved.some(c => c.name === 'chatter');
+    const groupRightTabs = hasActivity && hasChatter;
+
+    const itemsToRender = [];
+    let i = 0;
+    while (i < resolved.length) {
+      const comp = resolved[i];
+      if (groupLeftTabs && (comp.name === 'related-lists' || comp.name === 'details')) {
+        const otherName = comp.name === 'related-lists' ? 'details' : 'related-lists';
+        const otherIdx = resolved.findIndex((c, idx) => idx > i && c.name === otherName);
+        if (otherIdx !== -1) {
+          const otherComp = resolved[otherIdx];
+          itemsToRender.push({
+            type: 'tab-container',
+            components: [comp, otherComp],
+            originalIndices: [i, otherIdx]
+          });
+          resolved.splice(otherIdx, 1);
+          i++;
+          continue;
+        }
+      }
+      
+      if (groupRightTabs && (comp.name === 'activity' || comp.name === 'chatter')) {
+        const otherName = comp.name === 'activity' ? 'chatter' : 'activity';
+        const otherIdx = resolved.findIndex((c, idx) => idx > i && c.name === otherName);
+        if (otherIdx !== -1) {
+          const otherComp = resolved[otherIdx];
+          itemsToRender.push({
+            type: 'tab-container',
+            components: [comp, otherComp],
+            originalIndices: [i, otherIdx]
+          });
+          resolved.splice(otherIdx, 1);
+          i++;
+          continue;
+        }
+      }
+
+      itemsToRender.push({
+        type: 'single',
+        component: comp,
+        index: i
+      });
+      i++;
+    }
+
+    return itemsToRender.map((item, itemIdx) => {
+      if (item.type === 'tab-container') {
+        const headersHtml = item.components.map((comp, idx) => {
+          const compLabel = {
+            'related-lists': 'Related',
+            'details': 'Details',
+            'activity': 'Activity',
+            'chatter': 'Chatter'
+          }[comp.name] || comp.name;
+
+          const activeClass = idx === 0 ? 'active' : '';
+          const borderStyle = idx === 0 
+            ? 'border-bottom: 3px solid var(--accent); color: var(--accent); font-weight: 700;' 
+            : 'border-bottom: 3px solid transparent; color: var(--text-2);';
+
+          return `
+            <li class="custom-tab-header ${activeClass}" 
+                data-region="${regionName}" 
+                data-index="${itemIdx}-${idx}" 
+                onclick="switchCustomTab('${regionName}', '${itemIdx}-${idx}')" 
+                style="padding: 10px 4px; font-size: 13.5px; font-weight: 600; cursor: pointer; transition: all 0.2s; ${borderStyle}">
+              ${escapeHtml(compLabel)}
+            </li>
+          `;
+        }).join('');
+
+        const contentsHtml = item.components.map((comp, idx) => {
+          const displayStyle = idx === 0 ? 'display: block;' : 'display: none;';
+          const componentHtml = renderSingleComponent(comp, true);
+
+          return `
+            <div class="custom-tab-content-${regionName}-${itemIdx}" id="tab-content-${regionName}-${itemIdx}-${idx}" data-mount-id="comp-mount-${regionName}-${item.originalIndices[idx]}" style="${displayStyle}">
+              ${componentHtml}
+            </div>
+          `;
+        }).join('');
+
+        return `
+          <div class="card custom-tab-container" style="background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-md); box-shadow: var(--shadow-sm); overflow: hidden; margin-bottom: 16px;">
+            <ul class="custom-tab-nav" style="display: flex; gap: 24px; border-bottom: 1px solid var(--border); margin: 0; padding: 0 20px; list-style: none; background: transparent;">
+              ${headersHtml}
+            </ul>
+            <div class="custom-tab-contents" style="padding: 12px;">
+              ${contentsHtml}
+            </div>
+          </div>
+        `;
+      } else {
+        return `
+          <div id="comp-container-${regionName}-${item.index}" data-mount-id="comp-mount-${regionName}-${item.index}">
+            ${renderSingleComponent(item.component, false)}
+          </div>
+        `;
+      }
+    }).join('');
+  };
+
+  let layoutHtml = '';
+  if (pageConfig.layout === 'one-column') {
+    layoutHtml = `
+      <div class="record-layout-one-column" style="display: flex; flex-direction: column; gap: 16px;">
+        ${renderRegionComponents('main')}
+      </div>
+    `;
+  } else if (pageConfig.layout === 'two-column') {
+    layoutHtml = `
+      <div class="record-layout-two-column" style="display: grid; grid-template-columns: minmax(0, 2fr) minmax(280px, 1fr); gap: 16px;">
+        <div class="record-layout-left" style="display: flex; flex-direction: column; gap: 16px;">
+          ${renderRegionComponents('left')}
+        </div>
+        <div class="record-layout-right" style="display: flex; flex-direction: column; gap: 16px;">
+          ${renderRegionComponents('right')}
+        </div>
+      </div>
+    `;
+  } else if (pageConfig.layout === 'header-two-column') {
+    layoutHtml = `
+      <div class="record-layout-header-two-column" style="display: flex; flex-direction: column; gap: 16px;">
+        <div class="record-layout-header" style="display: flex; flex-direction: column; gap: 16px;">
+          ${renderRegionComponents('header')}
+        </div>
+        <div class="record-layout-two-column-grid" style="display: grid; grid-template-columns: minmax(0, 2fr) minmax(280px, 1fr); gap: 16px;">
+          <div class="record-layout-left" style="display: flex; flex-direction: column; gap: 16px;">
+            ${renderRegionComponents('left')}
+          </div>
+          <div class="record-layout-right" style="display: flex; flex-direction: column; gap: 16px;">
+            ${renderRegionComponents('right')}
+          </div>
+        </div>
+      </div>
+    `;
+  } else {
+    // header-two-column-bottom
+    layoutHtml = `
+      <div class="record-layout-header-two-column-bottom" style="display: flex; flex-direction: column; gap: 16px;">
+        <div class="record-layout-header" style="display: flex; flex-direction: column; gap: 16px;">
+          ${renderRegionComponents('header')}
+        </div>
+        <div class="record-layout-two-column-grid" style="display: grid; grid-template-columns: minmax(0, 2fr) minmax(280px, 1fr); gap: 16px;">
+          <div class="record-layout-left" style="display: flex; flex-direction: column; gap: 16px;">
+            ${renderRegionComponents('left')}
+          </div>
+          <div class="record-layout-right" style="display: flex; flex-direction: column; gap: 16px;">
+            ${renderRegionComponents('right')}
+          </div>
+        </div>
+        <div class="record-layout-bottom" style="display: flex; flex-direction: column; gap: 16px;">
+          ${renderRegionComponents('bottom')}
+        </div>
+      </div>
+    `;
+  }
+
   $("content").innerHTML = `
     <div class="record-page">
       <div class="record-hero">
@@ -4346,87 +5573,55 @@ function renderRecordDetailPage(
             </div>
           </div>
           <div class="page-actions" style="display: flex; gap: 8px; align-items: center;">
-            <button class="btn btn-ghost" onclick="restoreListContent()">Back</button>
-            ${canDo(objectName, "can_edit") && canEditThisRecord
-              ? '<button class="btn btn-primary" onclick="editCurrentDetailRecord()">Edit</button>'
-              : ""}
-            <button class="btn btn-ghost" 
-                    style="display: inline-flex; align-items: center; justify-content: center; width: 34px; height: 34px; padding: 0; cursor: pointer;" 
-                    onclick="openCustomizeCompactLayoutModal()" 
-                    title="Customize Compact Layout">
-              <span style="display: flex; width: 16px; height: 16px; align-items: center; justify-content: center; fill: currentColor;">
-                ${utilityIconSvg("settings")}
-              </span>
-            </button>
+            <button class="btn btn-ghost" onclick="backToCurrentList()">Back</button>
+            <button class="btn btn-primary" onclick="editCurrentDetailRecord()">Edit</button>
           </div>
-        </div>
-        <div class="record-summary">
-          ${summaryFields
-            .map(
-              (field) => `
-            <div>
-              <span>${escapeHtml(labelFor(field))}</span>
-              <strong>${formatValue(field, getValue(record, field), record)}</strong>
-            </div>
-          `,
-            )
-            .join("")}
         </div>
       </div>
 
-      <div class="record-layout">
-        <section class="record-main">
-          <div class="record-tabs" style="display: flex; justify-content: space-between; align-items: center;">
-            <div style="display: flex; gap: 16px;">
-              <button class="record-tab active" id="tabRelatedBtn" onclick="showRecordTab('related')">Related</button>
-              <button class="record-tab" id="tabDetailsBtn" onclick="showRecordTab('details')">Details</button>
-            </div>
-            <div id="recordTabActions" style="display: none; padding: 6px 0;">
-              <button class="btn btn-ghost btn-sm" onclick="startRearrangingFields()" style="display: inline-flex; align-items: center; gap: 6px;">
-                ${utilityIconSvg("settings")} Rearrange Fields
-              </button>
-            </div>
-          </div>
-          <div id="recordRelatedPanel" class="record-tab-panel">
-            ${renderRelatedPanel(objectName)}
-          </div>
-          <div id="recordDetailsPanel" class="record-tab-panel" style="display:none">
-            <div id="detailsContent">
-              ${renderConfiguredDetailSections(objectName, record, fields, displayFields)}
-            </div>
-          </div>
-        </section>
-        <aside class="record-side">
-          <div class="activity-card">
-            <div class="side-tabs">
-              <button class="side-tab active" id="sideActivityBtn" onclick="showSideTab('activity')">Activity</button>
-              <button class="side-tab" id="sideChatterBtn" onclick="showSideTab('chatter')">Chatter</button>
-            </div>
-            <div id="sideActivityPanel">
-              <div class="activity-head">
-                <h3>Activity</h3>
-                <button class="cell-button-link" onclick="loadRecordActivity('${objectName}', '${id}')">Refresh</button>
-              </div>
-              <div id="activityTimeline">
-                <div class="activity-empty"><p>Loading activities...</p></div>
-              </div>
-            </div>
-            <div id="sideChatterPanel" style="display:none">
-              ${renderChatterPanel(objectName)}
-            </div>
-          </div>
-        </aside>
+      <div class="record-layout-container">
+        ${layoutHtml}
       </div>
     </div>
   `;
   applyPermissionGuards(objectName);
+
+  // Trigger mount lifecycle on all preloaded components
+  if (pageConfig && pageConfig.regions) {
+    Object.keys(pageConfig.regions).forEach(r => {
+      const comps = pageConfig.regions[r] || [];
+      const resolvedCount = comps.map(c => typeof c === 'string' ? { name: c, visible: true } : c).filter(c => c.visible !== false).length;
+      const isTabbed = (r === 'left' || r === 'right' || r === 'main' || r === 'bottom') && resolvedCount > 1;
+      
+      comps.forEach((c, idx) => {
+        const comp = typeof c === 'string' ? { name: c } : c;
+        const compInstance = CRM_COMPONENT_CACHE.get(comp.name);
+        if (compInstance && typeof compInstance.mount === 'function') {
+          const container = document.querySelector(`[data-mount-id="comp-mount-${r}-${idx}"]`) || document.getElementById(isTabbed ? `tab-content-${r}-${idx}` : `comp-container-${r}-${idx}`);
+          if (container) {
+            compInstance.mount(container, comp, { objectName, id });
+          }
+        }
+      });
+    });
+  }
+}
+
+function toggleCardCollapse(btnEl) {
+  const card = btnEl.closest('.card');
+  if (!card) return;
+  const body = card.querySelector('.card-body') || card.querySelector('.record-summary');
+  if (!body) return;
+  const isHidden = body.style.display === 'none';
+  body.style.display = isHidden ? '' : 'none';
+  btnEl.style.transform = isHidden ? 'none' : 'rotate(-90deg)';
 }
 
 function showSideTab(name) {
-  $("sideActivityPanel").style.display = name === "activity" ? "block" : "none";
-  $("sideChatterPanel").style.display = name === "chatter" ? "block" : "none";
-  $("sideActivityBtn").classList.toggle("active", name === "activity");
-  $("sideChatterBtn").classList.toggle("active", name === "chatter");
+  if ($("sideActivityPanel")) $("sideActivityPanel").style.display = name === "activity" ? "block" : "none";
+  if ($("sideChatterPanel")) $("sideChatterPanel").style.display = name === "chatter" ? "block" : "none";
+  if ($("sideActivityBtn")) $("sideActivityBtn").classList.toggle("active", name === "activity");
+  if ($("sideChatterBtn")) $("sideChatterBtn").classList.toggle("active", name === "chatter");
   if (
     name === "chatter" &&
     detailRecordState?.id &&
@@ -4500,6 +5695,10 @@ function getSummaryFields(objectName) {
       Opportunity: ["StageName", "Amount", "CloseDate", "Probability"],
       Case: ["Status", "Priority", "Type", "CreatedDate"],
       Campaign: ["Type", "Status", "StartDate", "EndDate"],
+      Quote: ["QuoteNumber", "Status", "ExpirationDate", "GrandTotal"],
+      Product2: ["ProductCode", "Family", "IsActive"],
+      OpportunityLineItem: ["Opportunity.Name", "Product2.Name", "Quantity", "TotalPrice"],
+      QuoteLineItem: ["Quote.Name", "Product2.Name", "Quantity", "TotalPrice"],
       User: ["Email", "Username", "Title"],
     }[objectName] ||
     OBJECT_META[objectName]?.columns ||
@@ -4507,8 +5706,15 @@ function getSummaryFields(objectName) {
   );
 }
 
-function renderRelatedPanel(objectName) {
-  const configs = getRelatedListConfigs(objectName);
+function renderRelatedPanel(objectName, comp = null) {
+  let configs = [];
+  if (comp && comp.relatedLists && comp.relatedLists.length > 0) {
+    configs = comp.relatedLists.filter(c => c && c.enabled);
+  } else {
+    configs = getRelatedListConfigs(objectName);
+  }
+  configs = ensureRequiredRelatedListConfigs(objectName, configs);
+
   const canShowCampaignMembers = objectName === "Campaign" && canReadObject("Campaign");
   if (!configs.length && !canShowCampaignMembers) {
     return `
@@ -4520,8 +5726,7 @@ function renderRelatedPanel(objectName) {
           </div>
         </div>
         <div class="table-empty">
-          <h3>No portal related list configured</h3>
-          <p>Use the Details tab or Salesforce Activity Timeline for this record.</p>
+          <h3>No related records.</h3>
         </div>
       </div>
     `;
@@ -4558,6 +5763,13 @@ function getRelatedListConfigs(objectName) {
           fields: ["CaseNumber", "Subject", "Status", "Priority"],
           parentLookup: "AccountId",
         },
+        {
+          key: "quotes",
+          objectName: "Quote",
+          title: "Quotes",
+          fields: ["Name", "QuoteNumber", "Status", "GrandTotal"],
+          parentLookup: "AccountId",
+        },
       ],
       Contact: [
         {
@@ -4579,6 +5791,20 @@ function getRelatedListConfigs(objectName) {
       ],
       Opportunity: [
         {
+          key: "quotes",
+          objectName: "Quote",
+          title: "Quotes",
+          fields: ["Name", "QuoteNumber", "Status", "GrandTotal"],
+          parentLookup: "OpportunityId",
+        },
+        {
+          key: "opportunityProducts",
+          objectName: "OpportunityLineItem",
+          title: "Products",
+          fields: ["Product2.Name", "Quantity", "UnitPrice", "TotalPrice", "ServiceDate"],
+          parentLookup: "OpportunityId",
+        },
+        {
           key: "cases",
           objectName: "Case",
           title: "Cases",
@@ -4586,6 +5812,15 @@ function getRelatedListConfigs(objectName) {
           parentLookup: "AccountId",
           sourceField: "AccountId",
           sourceNameField: "Account.Name",
+        },
+      ],
+      Quote: [
+        {
+          key: "quoteLineItems",
+          objectName: "QuoteLineItem",
+          title: "Quote Line Items",
+          fields: ["LineNumber", "Product2.Name", "Quantity", "UnitPrice", "TotalPrice"],
+          parentLookup: "QuoteId",
         },
       ],
       Campaign: [
@@ -4601,10 +5836,43 @@ function getRelatedListConfigs(objectName) {
   return configs.filter((config) => canReadObject(config.objectName));
 }
 
+function ensureRequiredRelatedListConfigs(objectName, configs = []) {
+  const merged = Array.isArray(configs) ? [...configs] : [];
+  const hasList = (childObject, key) => merged.some((config) =>
+    config?.objectName === childObject || config?.key === key
+  );
+
+  if (objectName === "Opportunity" && !hasList("Quote", "quotes") && canReadObject("Quote")) {
+    merged.unshift({
+      key: "quotes",
+      objectName: "Quote",
+      title: "Quotes",
+      fields: ["Name", "QuoteNumber", "Status", "GrandTotal"],
+      parentLookup: "OpportunityId",
+    });
+  }
+  if (objectName === "Opportunity" && !hasList("OpportunityLineItem", "opportunityProducts") && canReadObject("OpportunityLineItem")) {
+    const productConfig = {
+      key: "opportunityProducts",
+      objectName: "OpportunityLineItem",
+      title: "Products",
+      fields: ["Product2.Name", "Quantity", "UnitPrice", "TotalPrice", "ServiceDate"],
+      parentLookup: "OpportunityId",
+    };
+    const insertAt = merged.findIndex((config) => config?.key === "cases" || config?.objectName === "Case");
+    if (insertAt >= 0) merged.splice(insertAt, 0, productConfig);
+    else merged.push(productConfig);
+  }
+
+  return merged;
+}
+
 function renderRelatedListShell(config, noMargin = false) {
-  const canCreateRelated = canDo(config.objectName, "can_create") && currentDetailCanEdit();
+  const showNew = config.showNew !== false;
+  const canCreateRelated = showNew && canDo(config.objectName, "can_create") && currentDetailCanEdit();
+  const isSingle = isSingleRelatedList(config);
   return `
-    <div class="related-panel ${noMargin ? "no-margin" : ""}" id="relatedPanel-${escapeHtml(config.key)}">
+    <div class="related-panel ${isSingle ? "related-panel-single" : ""} ${noMargin ? "no-margin" : ""}" id="relatedPanel-${escapeHtml(config.key)}">
       <div class="related-head">
         <div>
           <h3>${objectIcon(config.objectName)}<span id="relatedTitle-${escapeHtml(config.key)}">${escapeHtml(config.title)}</span></h3>
@@ -4629,13 +5897,61 @@ function relatedListSubtitle(objectName) {
     {
       Contact: "Contacts associated with this account.",
       Opportunity: "Opportunities associated with this record.",
+      OpportunityLineItem: "Products associated with this opportunity.",
       Case: "Cases associated with this record.",
     }[objectName] || "Related records associated with this record."
   );
 }
 
+function isSingleRelatedList(config) {
+  const key = String(config?.key || "");
+  return Boolean(config?.isSingle || key.startsWith("rel_single_") || key.includes("_single_"));
+}
+
 async function loadRelatedRecords(objectName, id) {
-  const configs = getRelatedListConfigs(objectName);
+  const pageConfig = RECORD_PAGE_CACHE[objectName];
+  let configs = [];
+  let hasRelatedListsComp = false;
+  
+  if (pageConfig && pageConfig.regions) {
+    for (const r of Object.keys(pageConfig.regions)) {
+      const list = pageConfig.regions[r] || [];
+      list.forEach(c => {
+        if (c && typeof c === 'object') {
+          if (c.name === 'related-lists') {
+            hasRelatedListsComp = true;
+            if (c.relatedLists && c.relatedLists.length > 0) {
+              configs.push(...c.relatedLists.filter(rl => rl && rl.enabled));
+            }
+          } else if (c.name === 'related-list-single' && c.config) {
+            const key = c.config.key || `${c.config.relationshipName.toLowerCase()}_single_${r}`;
+            configs.push({
+              key: key,
+              objectName: c.config.childObject,
+              relationshipName: c.config.relationshipName,
+              field: c.config.field,
+              title: c.config.title || c.title || c.config.relationshipName,
+              fields: c.config.fields || [],
+              limit: c.config.limit || 5,
+              sortBy: c.config.sortBy,
+              sortDir: c.config.sortDir || 'ASC',
+              showNew: c.config.showNew !== false,
+              showViewAll: c.config.showViewAll !== false,
+              showEdit: c.config.showEdit !== false,
+              showDelete: c.config.showDelete !== false,
+              isSingle: true
+            });
+          }
+        }
+      });
+    }
+  }
+
+  if (configs.length === 0 && !hasRelatedListsComp) {
+    configs = getRelatedListConfigs(objectName);
+  }
+  configs = ensureRequiredRelatedListConfigs(objectName, configs);
+
   if (!configs.length) return;
 
   try {
@@ -4671,22 +5987,42 @@ function renderRelatedList(config, list) {
     return;
   }
   if (!records.length) {
-    body.innerHTML = `<div class="table-empty related-empty"><h3>No ${escapeHtml(config.title.toLowerCase())} found</h3></div>`;
+    body.innerHTML = `<div class="table-empty related-empty"><h3>No related records.</h3></div>`;
     return;
   }
 
+  const showViewAll = config.showViewAll !== false;
+  const isSingleCard = isSingleRelatedList(config);
+
+  if (isSingleCard) {
+    const maxDisplay = Math.max(1, Number(config.limit || 3));
+    const displayRecords = records.slice(0, maxDisplay);
+
+    body.innerHTML = `
+      <div class="related-cards-list-wrap">
+        ${displayRecords.map((record) => renderRelatedCardItem(config, record)).join("")}
+      </div>
+      ${showViewAll ? `<div class="related-view-all"><button class="cell-button-link" onclick="viewAllRelatedRecords('${escapeJs(config.key)}')">View All</button></div>` : ""}
+    `;
+    return;
+  }
+
+  const totalCount = Number(list.totalSize || records.length);
+  const hasMore = totalCount > records.length;
   body.innerHTML = `
     <div class="mini-table-wrap related-table-wrap">
       <table class="mini-table related-table">
         <thead>
-          <tr>${config.fields.map((field) => `<th>${escapeHtml(labelFor(field))}</th>`).join("")}</tr>
+          <tr>
+            ${(config.fields || ['Name']).map((field) => `<th>${escapeHtml(labelFor(field))}</th>`).join("")}
+          </tr>
         </thead>
         <tbody>
           ${records
             .map(
               (record) => `
             <tr onclick="openRecordDetail('${config.objectName}', '${escapeJs(record.Id)}')">
-              ${config.fields.map((field) => `<td>${renderRelatedCell(config.objectName, record, field)}</td>`).join("")}
+              ${(config.fields || ['Name']).map((field) => `<td>${renderRelatedCell(config.objectName, record, field)}</td>`).join("")}
             </tr>
           `,
             )
@@ -4694,7 +6030,36 @@ function renderRelatedList(config, list) {
         </tbody>
       </table>
     </div>
-    ${Number(list.totalSize || records.length) > records.length ? '<div class="related-view-all">Showing first 5 records</div>' : ""}
+    ${(showViewAll && hasMore) ? `<div class="related-view-all"><button class="cell-button-link" onclick="viewAllRelatedRecords('${escapeJs(config.key)}')">View All</button></div>` : ""}
+  `;
+}
+
+function renderRelatedCardItem(config, record) {
+  const primaryVal = getValue(record, "Name") || getValue(record, "CaseNumber") || "-";
+  const primaryFields = new Set(["Name", "CaseNumber", "Id"]);
+  const detailFields = (config.fields || ["Name"]).filter((field) => !primaryFields.has(field));
+
+  return `
+    <article class="related-card-item" onclick="openRecordDetail('${config.objectName}', '${escapeJs(record.Id)}')">
+      <div class="related-card-topline">
+        <div class="related-card-title">
+          <span class="related-card-icon">${objectIcon(config.objectName, record)}</span>
+          <button class="cell-button-link" onclick="event.stopPropagation(); openRecordDetail('${config.objectName}', '${escapeJs(record.Id)}')">
+            ${escapeHtml(primaryVal)}
+          </button>
+        </div>
+      </div>
+      ${detailFields.length ? `
+        <div class="related-card-fields">
+          ${detailFields.map((field) => `
+            <div class="related-card-field">
+              <span>${escapeHtml(labelFor(field))}:</span>
+              <strong>${renderRelatedCell(config.objectName, record, field)}</strong>
+            </div>
+          `).join("")}
+        </div>
+      ` : ""}
+    </article>
   `;
 }
 
@@ -5201,14 +6566,14 @@ function closeChatterMentionMenu() {
 }
 
 function showRecordTab(name) {
-  $("recordRelatedPanel").style.display = name === "related" ? "block" : "none";
-  $("recordDetailsPanel").style.display = name === "details" ? "block" : "none";
-  $("tabRelatedBtn").classList.toggle("active", name === "related");
-  $("tabDetailsBtn").classList.toggle("active", name === "details");
+  if ($("recordRelatedPanel")) $("recordRelatedPanel").style.display = name === "related" ? "block" : "none";
+  if ($("recordDetailsPanel")) $("recordDetailsPanel").style.display = name === "details" ? "block" : "none";
+  if ($("tabRelatedBtn")) $("tabRelatedBtn").classList.toggle("active", name === "related");
+  if ($("tabDetailsBtn")) $("tabDetailsBtn").classList.toggle("active", name === "details");
   
   const actions = $("recordTabActions");
   if (actions) {
-    actions.style.display = name === "details" ? "block" : "none";
+    actions.style.display = "none";
   }
   captureCrmPageState(currentObject);
 }
@@ -5648,9 +7013,46 @@ function openRelatedCreate(configKey) {
     toast("You do not have the level of access necessary to perform the operation you requested.", "err");
     return;
   }
-  const config = getRelatedListConfigs(detailRecordState.objectName).find(
-    (item) => item.key === configKey,
-  );
+  
+  const pageConfig = RECORD_PAGE_CACHE[detailRecordState.objectName];
+  let config = null;
+  if (pageConfig && pageConfig.regions) {
+    for (const r of Object.keys(pageConfig.regions)) {
+      const list = pageConfig.regions[r] || [];
+      const found = list.find(c => c && typeof c === 'object' && c.name === 'related-lists');
+      if (found && found.relatedLists) {
+        config = found.relatedLists.find(item => item.key === configKey);
+        if (config) break;
+      }
+      
+      const foundSingle = list.find(c => c && typeof c === 'object' && c.name === 'related-list-single' && c.config && (c.config.key === configKey || `${c.config.relationshipName.toLowerCase()}_single_${r}` === configKey));
+      if (foundSingle) {
+        config = {
+          key: foundSingle.config.key || `${foundSingle.config.relationshipName.toLowerCase()}_single_${r}`,
+          objectName: foundSingle.config.childObject,
+          relationshipName: foundSingle.config.relationshipName,
+          parentLookup: foundSingle.config.field,
+          field: foundSingle.config.field,
+          title: foundSingle.config.title || foundSingle.title || foundSingle.config.relationshipName,
+          fields: foundSingle.config.fields || [],
+          limit: foundSingle.config.limit || 5,
+          sortBy: foundSingle.config.sortBy,
+          sortDir: foundSingle.config.sortDir || 'ASC',
+          showNew: foundSingle.config.showNew !== false,
+          showViewAll: foundSingle.config.showViewAll !== false,
+          showEdit: foundSingle.config.showEdit !== false,
+          showDelete: foundSingle.config.showDelete !== false
+        };
+        break;
+      }
+    }
+  }
+  
+  if (!config) {
+    config = getRelatedListConfigs(detailRecordState.objectName).find(
+      (item) => item.key === configKey,
+    );
+  }
   if (!config) return;
 
   editingRecord = null;
@@ -5676,6 +7078,112 @@ function buildRelatedCreateRecord(config) {
     : parent.Name || parent.Subject || parent.CaseNumber || "";
   if (sourceName) record[relationshipName] = { Name: sourceName };
   return record;
+}
+
+async function editRelatedRecord(childObjectName, childId) {
+  try {
+    const fieldsRes = await fetchMetadata(`/api/${childObjectName}/fields`);
+    const fields = fieldsRes.fields || [];
+    const record = await api(`/api/${childObjectName}/${childId}`);
+    
+    editingRecord = record;
+    openRecordModal(`Edit ${childObjectName}`, record, fields, childObjectName);
+  } catch (err) {
+    console.error('Error opening related edit modal:', err);
+    toast('Error opening related edit modal', 'err');
+  }
+}
+
+let relatedDeletingRecord = null;
+function deleteRelatedRecord(childObjectName, childId, configKey) {
+  relatedDeletingRecord = { childObjectName, childId, configKey };
+  if (confirm(`Are you sure you want to delete this related record?`)) {
+    confirmDeleteRelated();
+  } else {
+    relatedDeletingRecord = null;
+  }
+}
+
+async function confirmDeleteRelated() {
+  if (!relatedDeletingRecord) return;
+  const { childObjectName, childId } = relatedDeletingRecord;
+  try {
+    await api(`/api/${childObjectName}/${childId}`, {
+      method: "DELETE",
+    });
+    invalidateCrmObjectCache(childObjectName);
+    toast("Record deleted", "ok");
+    if (detailRecordState) {
+      loadRelatedRecords(detailRecordState.objectName, detailRecordState.id);
+    }
+  } catch (err) {
+    toast(err.message || 'Could not delete record. Please try again.', 'err');
+  } finally {
+    relatedDeletingRecord = null;
+  }
+}
+
+async function viewAllRelatedRecords(configKey) {
+  if (!detailRecordState) return;
+  const pageConfig = RECORD_PAGE_CACHE[detailRecordState.objectName];
+  let config = null;
+  if (pageConfig && pageConfig.regions) {
+    for (const r of Object.keys(pageConfig.regions)) {
+      const list = pageConfig.regions[r] || [];
+      const found = list.find(c => c && typeof c === 'object' && c.name === 'related-lists');
+      if (found && found.relatedLists) {
+        config = found.relatedLists.find(item => item.key === configKey);
+        if (config) break;
+      }
+    }
+  }
+  if (!config) {
+    config = getRelatedListConfigs(detailRecordState.objectName).find(c => c.key === configKey);
+  }
+  if (!config) return;
+
+  try {
+    const data = await api(`/api/${detailRecordState.objectName}/${detailRecordState.id}/related`);
+    const list = (data.lists || []).find(l => l.key === configKey) || { records: [], totalSize: 0 };
+    
+    const modalHtml = `
+      <div class="modal-overlay open" id="viewAllRelatedModal" onclick="closeViewAllRelatedModal()">
+        <div class="modal-card" style="width: 800px; max-width: 90%; max-height: 80vh; overflow-y: auto;" onclick="event.stopPropagation()">
+          <div class="modal-header">
+            <h3>${escapeHtml(config.title)} (${list.totalSize || list.records.length})</h3>
+            <button class="modal-close" onclick="closeViewAllRelatedModal()">×</button>
+          </div>
+          <div class="modal-body" style="padding: 20px;">
+            <div class="mini-table-wrap">
+              <table class="mini-table">
+                <thead>
+                  <tr>
+                    ${(config.fields || ['Name']).map(f => `<th>${escapeHtml(labelFor(f))}</th>`).join('')}
+                  </tr>
+                </thead>
+                <tbody>
+                  ${(list.records || []).map(record => `
+                    <tr onclick="closeViewAllRelatedModal(); openRecordDetail('${config.objectName}', '${escapeJs(record.Id)}')">
+                      ${(config.fields || ['Name']).map(f => `<td>${renderRelatedCell(config.objectName, record, f)}</td>`).join('')}
+                    </tr>
+                  `).join('')}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>
+    `;
+    
+    document.body.insertAdjacentHTML('beforeend', modalHtml);
+  } catch (err) {
+    toast('Error loading related records', 'err');
+  }
+}
+
+function closeViewAllRelatedModal() {
+  const el = document.getElementById('viewAllRelatedModal');
+  if (el) el.remove();
 }
 
 function initializeEmailComposer() {
@@ -7236,6 +8744,7 @@ function setRecordSaveState(isSaving, objectName = currentObject) {
 
 async function refreshAfterSave(objectName, savedRecord, wasEditing) {
   const startedAt = performance.now();
+  if (savedRecord?.Id) invalidateRecentRecordCache(objectName, savedRecord.Id);
   if (viewingDetail && detailRecordState && wasEditing) {
     const mergedRecord = { ...detailRecordState.record, ...savedRecord };
     const fields = detailRecordState.fields || [];
@@ -8099,6 +9608,7 @@ document.addEventListener("click", (event) => {
   if (!event.target.closest(".profile-menu")) closeProfileMenu();
   if (!event.target.closest(".kanban-item")) closeKanbanMenus();
 });
+document.addEventListener("click", persistCrmStateBeforeExternalNavigation, true);
 
 document.addEventListener(
   "scroll",
@@ -8110,23 +9620,53 @@ document.addEventListener(
 );
 window.addEventListener("resize", () => {
   closeKanbanMenus();
+  virtualTableState.rowHeightMeasured = false;
+  scheduleVirtualTableRender(true);
   queueLazyLoadIfNeeded();
 });
 window.addEventListener("scroll", handleLazyScroll, { passive: true });
-window.addEventListener("popstate", () => {
-  const objectName = history.state?.crmObject || crmObjectFromLocation();
-  if (objectName && objectName !== currentObject) {
-    restoreCrmObjectFromHistory(objectName);
+window.addEventListener("pagehide", persistCrmSpaState);
+window.addEventListener("beforeunload", persistCrmSpaState);
+window.addEventListener("pageshow", (event) => {
+  if (!event.persisted) return;
+  restoreCrmSpaStateFromStorage();
+  const route = crmRouteFromLocation();
+  const objectName = route?.objectName || crmObjectFromLocation() || currentObject;
+  if (route?.view === "object" && objectName) {
+    restoreCrmPageState(objectName);
   }
 });
-window.addEventListener("focus", () => {
-  if (viewingDetail || !loadData.activeCacheKey || !getCrmListCache(loadData.activeCacheKey)) return;
-  loadData({ forceRefresh: true }).catch((err) =>
-    console.warn("Background refresh failed:", err.message || err),
-  );
+window.addEventListener("popstate", () => {
+  const route = history.state?.crmView
+    ? {
+        view: history.state.crmView,
+        objectName: history.state.crmObject,
+        recordId: history.state.crmRecordId,
+      }
+    : crmRouteFromLocation();
+  if (route?.view === "record" && route.objectName && route.recordId) {
+    restoreCrmRecordFromHistory(route.objectName, route.recordId);
+    return;
+  }
+  const objectName = route?.objectName || crmObjectFromLocation();
+  if (objectName) {
+    if (viewingDetail && objectName === currentObject) {
+      restoringCrmHistory = true;
+      restoreListContent(false, { preserveHistory: true });
+      restoringCrmHistory = false;
+      return;
+    }
+    if (objectName !== currentObject) {
+      restoreCrmObjectFromHistory(objectName);
+    } else if (!viewingDetail && !hasRenderableListRows()) {
+      restoreCrmPageState(objectName);
+    }
+  }
 });
+spaCacheStats.automaticRefreshesRemoved += 1;
 
 document.addEventListener("DOMContentLoaded", async () => {
+  sharedPerformanceCache?.markModuleInitialized?.("crm");
   listContentHtml = $("content").innerHTML;
 
   // Sidebar collapsed state
@@ -8140,6 +9680,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   }
 
   refreshSidebarIcons();
+  sharedPerformanceCache?.idle?.(() => sharedPerformanceCache.lazyImages?.(document), { timeout: 1000 });
 
   // ── AUTH GATE ────────────────────────────────────
   const handledGoogleRedirect = await finishGoogleLoginFromRedirect();
@@ -8155,8 +9696,9 @@ document.addEventListener("DOMContentLoaded", async () => {
   }
   // Token exists — load cached perms immediately (so UI guards work instantly)
   window.userPerms = getStoredPerms();
+  let route = crmRouteFromLocation();
   currentObject = initialReadableObject();
-  writeCrmHistory(currentObject, true);
+  if (route?.view !== "record") writeCrmHistory(currentObject, true);
   applyAllPermissionGuards();
 
   // Then boot the app normally
@@ -8164,961 +9706,86 @@ document.addEventListener("DOMContentLoaded", async () => {
     .then(() => checkConnection())
     .then(async (connection) => {
       if (connection?.success) {
+        restoreCrmSpaStateFromStorage();
+        syncSidebarBadgesFromCache();
         // Refresh permissions from server (in case they changed)
         try {
           const me = await api("/api/portal/me");
           if (me) {
             setStoredPerms(me.permissions || {});
             window.portalUser = me;
+            route = crmRouteFromLocation();
             currentObject = initialReadableObject();
-            writeCrmHistory(currentObject, true);
+            if (route?.view !== "record") writeCrmHistory(currentObject, true);
             applyAllPermissionGuards();
           }
         } catch {
           // If /portal/me fails, cached perms are still used
         }
-        await loadListViews();
-        await loadData();
+        if (route?.view === "record" && route.recordId) {
+          loadListViews().catch((err) => console.warn("List views warmup failed:", err.message || err));
+          await openRecordDetail(route.objectName, route.recordId, { preserveHistory: true });
+          return;
+        }
+        const restoredPage = route?.view === "object" && restoreCrmPageState(currentObject);
+        if (!restoredPage) {
+          await loadListViews();
+          await loadData();
+        }
       }
     });
 });
 
-/* ── Record Detail Layout Editor & Drag-and-Drop ─────────────────── */
-let isEditingLayout = false;
-let editingLayoutData = null;
-let layoutFieldSearchQuery = "";
-
-function startRearrangingFields() {
-  if (!detailRecordState) return;
-  const objectName = detailRecordState.objectName;
-  const allFields = detailRecordState.fields || [];
-  
-  // Clone, normalize, and filter active layout fields to only keep fields in metadata
-  const rawLayout = getActiveLayout(objectName);
-  const normalized = normalizeLayoutData(rawLayout);
-  
-  editingLayoutData = normalized.map(section => {
-    const leftFiltered = (section.leftFields || []).filter(fieldEntry => {
-      const name = typeof fieldEntry === "string" ? fieldEntry : fieldEntry.name;
-      return findLayoutField(name, allFields) !== undefined;
-    });
-    
-    const rightFiltered = (section.rightFields || []).filter(fieldEntry => {
-      const name = typeof fieldEntry === "string" ? fieldEntry : fieldEntry.name;
-      return findLayoutField(name, allFields) !== undefined;
-    });
-    
-    return {
-      title: section.title,
-      columns: section.columns || 2,
-      leftFields: leftFiltered,
-      rightFields: rightFiltered
-    };
-  });
-  
-  isEditingLayout = true;
-  layoutFieldSearchQuery = "";
-  
-  // Open modal
-  const existing = $("layoutEditorModalOverlay");
-  if (existing) existing.remove();
-
-  const overlay = document.createElement("div");
-  overlay.id = "layoutEditorModalOverlay";
-  overlay.className = "overlay open";
-  overlay.style.zIndex = "9998";
-  
-  overlay.addEventListener("click", (e) => {
-    if (e.target === overlay) {
-      cancelCustomLayout();
-    }
-  });
-
-  // Render stable modal wrapper
-  overlay.innerHTML = `
-    <div class="modal modal-wide layout-editor-modal" style="width: min(1300px, calc(100vw - 40px)); height: min(90vh, 850px); max-width: 1300px; max-height: 90vh; display: flex; flex-direction: column; padding: 0;">
-      <div class="modal-head">
-        <div class="modal-title-group">
-          <div class="modal-obj-icon">🛠️</div>
-          <h2>Page Layout Editor - ${escapeHtml(objectName)}</h2>
-        </div>
-        <button class="close-btn" onclick="cancelCustomLayout()">
-          <svg viewBox="0 0 20 20" width="18" height="18" fill="currentColor">
-            <path fill-rule="evenodd"
-              d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z"
-              clip-rule="evenodd" />
-          </svg>
-        </button>
-      </div>
-      <div class="modal-body" id="layoutEditorModalBody" style="flex: 1; display: flex; flex-direction: column; overflow: hidden; padding: 20px; background: var(--bg-canvas, #f3f5f9);">
-        ${renderLayoutEditorBodyHtml(objectName)}
-      </div>
-    </div>
-  `;
-
-  document.body.appendChild(overlay);
-  
-  // Initialize available fields search and drag-and-drop
-  setupAvailableFieldsFilter();
-}
-
-function getActiveLayout(objectName) {
-  if (DB_LAYOUT_CACHE[objectName]) {
-    return DB_LAYOUT_CACHE[objectName];
-  }
-  if (LAYOUT_CACHE[objectName]) {
-    return LAYOUT_CACHE[objectName];
-  }
-  return OBJECT_FIELD_LAYOUTS[objectName] || [];
-}
-
-function normalizeLayoutData(layout) {
-  return layout.map(section => ({
-    title: section.title || "Information",
-    columns: section.columns || 2,
-    leftFields: section.leftFields || section.fields || [],
-    rightFields: section.rightFields || []
-  }));
-}
-
-function renderLayoutEditorBodyHtml(objectName) {
-  // Collect all field names currently in the layout
-  const activeFieldNames = new Set();
-  editingLayoutData.forEach(section => {
-    (section.leftFields || []).forEach(f => {
-      const name = typeof f === 'string' ? f : f.name;
-      activeFieldNames.add(name);
-    });
-    (section.rightFields || []).forEach(f => {
-      const name = typeof f === 'string' ? f : f.name;
-      activeFieldNames.add(name);
-    });
-  });
-  
-  // Filter all fields from detailRecordState to find available fields
-  const allFields = detailRecordState.fields || [];
-  const availableFields = allFields.filter(f => !activeFieldNames.has(f.name));
-  
-  return `
-    <div class="layout-editor-container" style="display: flex; gap: 20px; background: transparent; border: none; border-radius: 0; padding: 0; margin-top: 0; height: 100%; box-shadow: none;">
-      <div class="layout-editor-sidebar" style="width: 280px; border-right: 1px solid var(--border-color, #e0e0e0); padding-right: 20px; display: flex; flex-direction: column; height: 100%;">
-        <div class="sidebar-header" style="margin-bottom: 12px;">
-          <h3 style="font-size: 14px; font-weight: 600; margin-bottom: 8px;">Available Fields</h3>
-          <input type="text" id="layoutFieldSearch" placeholder="Search fields..." class="layout-search-input">
-        </div>
-        <div class="available-fields-list" id="availableFieldsList" style="flex: 1; overflow-y: auto;">
-          ${renderAvailableFieldsList(availableFields)}
-        </div>
-      </div>
-      
-      <div class="layout-editor-canvas" style="flex: 1; display: flex; flex-direction: column; height: 100%; overflow: hidden;">
-        <div class="canvas-header" style="display: flex; align-items: center; gap: 10px; margin-bottom: 16px; padding-bottom: 12px; border-bottom: 1px solid var(--border-color, #e0e0e0); justify-content: flex-end;">
-          <button class="btn btn-primary btn-sm" onclick="saveCustomLayout()">${utilityIconSvg("like")} Save Layout</button>
-          <button class="btn btn-ghost btn-sm" onclick="cancelCustomLayout()">Cancel</button>
-          <button class="btn btn-ghost btn-danger-link btn-sm" onclick="resetCustomLayoutToDefault()">${utilityIconSvg("refresh")} Reset</button>
-          <button class="btn btn-ghost btn-sm" onclick="addNewLayoutSection()">${utilityIconSvg("comment")} + Add Section</button>
-        </div>
-        <div class="canvas-sections" id="canvasSections" style="flex: 1; overflow-y: auto; padding-right: 8px; display: flex; flex-direction: column; gap: 20px;">
-          ${editingLayoutData.map((section, sIdx) => renderEditorSection(section, sIdx)).join("")}
-        </div>
-      </div>
-    </div>
-  `;
-}
-
-function renderAvailableFieldsList(availableFields) {
-  if (availableFields.length === 0) {
-    return `<div class="sidebar-empty">All fields are on the layout</div>`;
-  }
-  return availableFields.map(field => `
-    <div class="available-field-item" 
-         draggable="true" 
-         ondragstart="layoutDragStartFromSidebar(event, '${field.name}')"
-         data-field-name="${field.name}"
-         data-field-label="${field.label || labelFor(field.name)}">
-      <div>
-        <span class="field-item-label">${escapeHtml(field.label || labelFor(field.name))}</span>
-        <span class="field-item-name">${escapeHtml(field.name)}</span>
-      </div>
-      <button class="btn btn-icon-only btn-ghost-link" onclick="addFieldToSectionFromSidebar('${field.name}')" title="Add to Section">
-        +
-      </button>
-    </div>
-  `).join("");
-}
-
-function renderEditorSection(section, sIdx) {
-  const cols = section.columns || 2;
-  return `
-    <div class="layout-edit-section" data-section-index="${sIdx}">
-      <div class="layout-edit-section-header" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
-        <input type="text" class="layout-edit-section-title-input" value="${escapeHtml(section.title)}" onchange="updateSectionTitle(${sIdx}, this.value)" style="width: 40%;">
-        
-        <div class="section-actions" style="display: flex; align-items: center; gap: 8px;">
-          <select class="btn btn-ghost btn-sm" onchange="changeSectionLayout(${sIdx}, this.value)" style="font-size: 12px; height: 28px; padding: 0 8px; border-radius: 4px; border: 1px solid var(--border-color, #d8dde6); background: white; cursor: pointer; font-weight: 500;">
-            <option value="2" ${cols === 2 ? 'selected' : ''}>2 Columns</option>
-            <option value="1" ${cols === 1 ? 'selected' : ''}>1 Column</option>
-          </select>
-          
-          <button class="btn btn-icon-only btn-ghost-link" onclick="moveSection(${sIdx}, -1)" ${sIdx === 0 ? 'disabled' : ''} title="Move Section Up">
-            ▲
-          </button>
-          <button class="btn btn-icon-only btn-ghost-link" onclick="moveSection(${sIdx}, 1)" ${sIdx === editingLayoutData.length - 1 ? 'disabled' : ''} title="Move Section Down">
-            ▼
-          </button>
-          <button class="btn btn-icon-only btn-danger-link" onclick="deleteLayoutSection(${sIdx})" title="Delete Section">
-            ${utilityIconSvg("trash")}
-          </button>
-        </div>
-      </div>
-      
-      ${cols === 1 
-        ? `
-        <div class="layout-edit-columns cols-1">
-          <div class="layout-edit-column" 
-               data-column="left"
-               ondragover="layoutAllowDrop(event)"
-               ondragenter="layoutDragEnter(event)"
-               ondragleave="layoutDragLeave(event)"
-               ondrop="layoutDropOnColumn(event, ${sIdx}, 'left')"
-               style="display: flex; flex-direction: column; gap: 8px; min-height: 80px; padding: 8px; border: 1px dashed transparent; border-radius: 6px; transition: all 0.2s;">
-            ${(section.leftFields || []).map((fieldEntry, fIdx) => renderEditorField(fieldEntry, sIdx, 'left', fIdx)).join("")}
-            ${(section.leftFields || []).length === 0 ? '<div class="grid-empty-msg">Drag fields here or add from sidebar</div>' : ''}
-          </div>
-        </div>
-        ` 
-        : `
-        <div class="layout-edit-columns cols-2" style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
-          <div class="layout-edit-column" 
-               data-column="left"
-               ondragover="layoutAllowDrop(event)"
-               ondragenter="layoutDragEnter(event)"
-               ondragleave="layoutDragLeave(event)"
-               ondrop="layoutDropOnColumn(event, ${sIdx}, 'left')"
-               style="display: flex; flex-direction: column; gap: 8px; min-height: 80px; padding: 8px; border: 1px dashed transparent; border-radius: 6px; transition: all 0.2s;">
-            ${(section.leftFields || []).map((fieldEntry, fIdx) => renderEditorField(fieldEntry, sIdx, 'left', fIdx)).join("")}
-            ${(section.leftFields || []).length === 0 ? '<div class="grid-empty-msg">Drag fields here</div>' : ''}
-          </div>
-          <div class="layout-edit-column" 
-               data-column="right"
-               ondragover="layoutAllowDrop(event)"
-               ondragenter="layoutDragEnter(event)"
-               ondragleave="layoutDragLeave(event)"
-               ondrop="layoutDropOnColumn(event, ${sIdx}, 'right')"
-               style="display: flex; flex-direction: column; gap: 8px; min-height: 80px; padding: 8px; border: 1px dashed transparent; border-radius: 6px; transition: all 0.2s;">
-            ${(section.rightFields || []).map((fieldEntry, fIdx) => renderEditorField(fieldEntry, sIdx, 'right', fIdx)).join("")}
-            ${(section.rightFields || []).length === 0 ? '<div class="grid-empty-msg">Drag fields here</div>' : ''}
-          </div>
-        </div>
-        `
-      }
-    </div>
-  `;
-}
-
-function renderEditorField(fieldEntry, sIdx, columnKey, fIdx) {
-  const name = typeof fieldEntry === "string" ? fieldEntry : fieldEntry.name;
-  const readOnly = typeof fieldEntry === "object" ? fieldEntry.readOnly : false;
-  const label = labelFor(name);
-  return `
-    <div class="layout-edit-field" 
-         draggable="true" 
-         ondragstart="layoutDragStart(event, ${sIdx}, '${columnKey}', ${fIdx})"
-         ondragover="layoutAllowDrop(event)"
-         ondragenter="layoutFieldDragEnter(event)"
-         ondragleave="layoutFieldDragLeave(event)"
-         ondrop="layoutDropOnField(event, ${sIdx}, '${columnKey}', ${fIdx})"
-         data-field-name="${name}">
-      <span class="layout-field-drag-handle">${utilityIconSvg("sort")}</span>
-      <div class="layout-field-info">
-        <span class="layout-field-label">${escapeHtml(label)}</span>
-        <span class="layout-field-name">${escapeHtml(name)}${readOnly ? ' (Read Only)' : ''}</span>
-      </div>
-      <button class="layout-field-remove" onclick="removeFieldFromLayout(${sIdx}, '${columnKey}', ${fIdx})" title="Remove Field">
-        &times;
-      </button>
-    </div>
-  `;
-}
-
-function changeSectionLayout(sIdx, value) {
-  const cols = parseInt(value, 10);
-  const section = editingLayoutData[sIdx];
-  section.columns = cols;
-  
-  if (cols === 1) {
-    section.leftFields = [...(section.leftFields || []), ...(section.rightFields || [])];
-    section.rightFields = [];
-  } else {
-    // Split alternating
-    const left = [];
-    const right = [];
-    (section.leftFields || []).forEach((f, idx) => {
-      if (idx % 2 === 0) left.push(f);
-      else right.push(f);
-    });
-    section.leftFields = left;
-    section.rightFields = right;
-  }
-  reRenderLayoutEditor();
-}
-
-function updateSectionTitle(sIdx, newTitle) {
-  if (editingLayoutData && editingLayoutData[sIdx]) {
-    editingLayoutData[sIdx].title = newTitle || "Information";
-  }
-}
-
-function moveSection(sIdx, direction) {
-  if (!editingLayoutData) return;
-  const targetIdx = sIdx + direction;
-  if (targetIdx < 0 || targetIdx >= editingLayoutData.length) return;
-  
-  const temp = editingLayoutData[sIdx];
-  editingLayoutData[sIdx] = editingLayoutData[targetIdx];
-  editingLayoutData[targetIdx] = temp;
-  
-  reRenderLayoutEditor();
-}
-
-function deleteLayoutSection(sIdx) {
-  if (!editingLayoutData) return;
-  
-  editingLayoutData.splice(sIdx, 1);
-  
-  if (editingLayoutData.length === 0) {
-    editingLayoutData.push({ title: "Information", columns: 2, leftFields: [], rightFields: [] });
-  }
-  
-  reRenderLayoutEditor();
-}
-
-function removeFieldFromLayout(sIdx, columnKey, fIdx) {
-  if (!editingLayoutData) return;
-  const colArray = columnKey === "left" ? "leftFields" : "rightFields";
-  editingLayoutData[sIdx][colArray].splice(fIdx, 1);
-  reRenderLayoutEditor();
-}
-
-function addFieldToSectionFromSidebar(fieldName) {
-  if (!editingLayoutData) return;
-  if (!editingLayoutData[0].leftFields) {
-    editingLayoutData[0].leftFields = [];
-  }
-  editingLayoutData[0].leftFields.push(fieldName);
-  reRenderLayoutEditor();
-}
-
-function addNewLayoutSection() {
-  showAddSectionModal();
-}
-
-function showAddSectionModal() {
-  // Remove any existing section modal first
-  const existing = $("addSectionModalOverlay");
-  if (existing) existing.remove();
-
-  // Create overlay element
-  const overlay = document.createElement("div");
-  overlay.id = "addSectionModalOverlay";
-  overlay.className = "overlay open";
-  overlay.style.zIndex = "9999";
-
-  // Make clicking on overlay close the modal
-  overlay.addEventListener("click", (e) => {
-    if (e.target === overlay) {
-      closeAddSectionModal();
-    }
-  });
-
-  overlay.innerHTML = `
-    <div class="modal modal-sm" style="display: flex; flex-direction: column;">
-      <div class="modal-head">
-        <div class="modal-title-group">
-          <div class="modal-obj-icon">📁</div>
-          <h2>Add New Section</h2>
-        </div>
-        <button class="close-btn" onclick="closeAddSectionModal()">
-          <svg viewBox="0 0 20 20" width="18" height="18" fill="currentColor">
-            <path fill-rule="evenodd"
-              d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z"
-              clip-rule="evenodd" />
-          </svg>
-        </button>
-      </div>
-      <div class="modal-body">
-        <div class="form-group" style="margin-bottom: 20px;">
-          <label style="display: block; font-weight: 600; margin-bottom: 8px; font-size: 13px;">Section Name</label>
-          <input type="text" id="newSectionNameInput" class="layout-search-input" value="New Section" style="width: 100%;">
-        </div>
-      </div>
-      <div class="modal-foot">
-        <button class="btn btn-ghost" style="margin-right: 8px;" onclick="closeAddSectionModal()">Cancel</button>
-        <button class="btn btn-primary" onclick="confirmAddNewSection()">Add Section</button>
-      </div>
-    </div>
-  `;
-
-  document.body.appendChild(overlay);
-  
-  // Focus and select the text
-  setTimeout(() => {
-    const input = $("newSectionNameInput");
-    if (input) {
-      input.focus();
-      input.select();
-      
-      // Allow pressing Enter to submit
-      input.addEventListener("keydown", (e) => {
-        if (e.key === "Enter") {
-          confirmAddNewSection();
-        }
-      });
-    }
-  }, 50);
-}
-
-function closeAddSectionModal() {
-  const overlay = $("addSectionModalOverlay");
-  if (overlay) overlay.remove();
-}
-
-function confirmAddNewSection() {
-  const input = $("newSectionNameInput");
-  if (!input) return;
-  const title = input.value.trim();
-  if (!title) {
-    toast("Section name cannot be empty", "err");
+function switchCustomTab(regionName, activeIdx) {
+  if (typeof activeIdx === 'string' && activeIdx.includes('-')) {
+    switchCustomTabNew(regionName, activeIdx);
     return;
   }
-  
-  if (editingLayoutData) {
-    editingLayoutData.push({ title: title, columns: 2, leftFields: [], rightFields: [] });
-    reRenderLayoutEditor();
-  }
-  
-  closeAddSectionModal();
-}
-
-function isFieldInLayout(fieldName) {
-  if (!editingLayoutData) return false;
-  return editingLayoutData.some(section => {
-    const leftMatch = (section.leftFields || []).some(f => (typeof f === 'string' ? f : f.name) === fieldName);
-    const rightMatch = (section.rightFields || []).some(f => (typeof f === 'string' ? f : f.name) === fieldName);
-    return leftMatch || rightMatch;
+  const contents = document.querySelectorAll(`.custom-tab-content-${regionName}`);
+  contents.forEach((el, idx) => {
+    el.style.display = idx === activeIdx ? 'block' : 'none';
   });
-}
-
-// Drag and Drop handlers
-function layoutDragStartFromSidebar(event, fieldName) {
-  event.dataTransfer.setData("text/plain", JSON.stringify({
-    source: "sidebar",
-    fieldName: fieldName
-  }));
-  event.dataTransfer.effectAllowed = "move";
-}
-
-function layoutDragStart(event, sectionIdx, columnKey, fieldIdx) {
-  event.dataTransfer.setData("text/plain", JSON.stringify({
-    source: "canvas",
-    sectionIdx: sectionIdx,
-    columnKey: columnKey,
-    fieldIdx: fieldIdx
-  }));
-  event.dataTransfer.effectAllowed = "move";
-}
-
-function layoutAllowDrop(event) {
-  event.preventDefault();
-}
-
-function layoutDragEnter(event) {
-  event.preventDefault();
-  event.currentTarget.classList.add("drag-over");
-}
-
-function layoutDragLeave(event) {
-  event.currentTarget.classList.remove("drag-over");
-}
-
-function layoutFieldDragEnter(event) {
-  event.preventDefault();
-  event.stopPropagation();
-  event.currentTarget.classList.add("drag-over");
-}
-
-function layoutFieldDragLeave(event) {
-  event.stopPropagation();
-  event.currentTarget.classList.remove("drag-over");
-}
-
-function layoutDropOnColumn(event, targetSectionIdx, targetColumnKey) {
-  event.preventDefault();
-  event.stopPropagation();
   
-  // Clear highlights
-  document.querySelectorAll(".layout-edit-field, .layout-edit-column").forEach(el => el.classList.remove("drag-over"));
-  
-  const dataStr = event.dataTransfer.getData("text/plain");
-  if (!dataStr) return;
-  
-  try {
-    const data = JSON.parse(dataStr);
-    const targetColArray = targetColumnKey === "left" ? "leftFields" : "rightFields";
-    
-    if (data.source === "sidebar") {
-      const fieldName = data.fieldName;
-      if (!isFieldInLayout(fieldName)) {
-        if (!editingLayoutData[targetSectionIdx][targetColArray]) {
-          editingLayoutData[targetSectionIdx][targetColArray] = [];
-        }
-        editingLayoutData[targetSectionIdx][targetColArray].push(fieldName);
-        reRenderLayoutEditor();
-      }
-    } else if (data.source === "canvas") {
-      const sourceSecIdx = data.sectionIdx;
-      const sourceColKey = data.columnKey;
-      const sourceFieldIdx = data.fieldIdx;
-      
-      const sourceColArray = sourceColKey === "left" ? "leftFields" : "rightFields";
-      const fieldObj = editingLayoutData[sourceSecIdx][sourceColArray][sourceFieldIdx];
-      
-      editingLayoutData[sourceSecIdx][sourceColArray].splice(sourceFieldIdx, 1);
-      
-      if (!editingLayoutData[targetSectionIdx][targetColArray]) {
-        editingLayoutData[targetSectionIdx][targetColArray] = [];
-      }
-      editingLayoutData[targetSectionIdx][targetColArray].push(fieldObj);
-      
-      reRenderLayoutEditor();
-    }
-  } catch (e) {
-    console.error(e);
-  }
-}
-
-function layoutDropOnField(event, targetSectionIdx, targetColumnKey, targetFieldIdx) {
-  event.preventDefault();
-  event.stopPropagation();
-  
-  // Clear highlights
-  document.querySelectorAll(".layout-edit-field, .layout-edit-column").forEach(el => el.classList.remove("drag-over"));
-  
-  const dataStr = event.dataTransfer.getData("text/plain");
-  if (!dataStr) return;
-  
-  try {
-    const data = JSON.parse(dataStr);
-    const targetColArray = targetColumnKey === "left" ? "leftFields" : "rightFields";
-    
-    if (data.source === "sidebar") {
-      const fieldName = data.fieldName;
-      if (!isFieldInLayout(fieldName)) {
-        if (!editingLayoutData[targetSectionIdx][targetColArray]) {
-          editingLayoutData[targetSectionIdx][targetColArray] = [];
-        }
-        editingLayoutData[targetSectionIdx][targetColArray].splice(targetFieldIdx, 0, fieldName);
-        reRenderLayoutEditor();
-      }
-    } else if (data.source === "canvas") {
-      const sourceSecIdx = data.sectionIdx;
-      const sourceColKey = data.columnKey;
-      const sourceFieldIdx = data.fieldIdx;
-      
-      const sourceColArray = sourceColKey === "left" ? "leftFields" : "rightFields";
-      const fieldObj = editingLayoutData[sourceSecIdx][sourceColArray][sourceFieldIdx];
-      
-      editingLayoutData[sourceSecIdx][sourceColArray].splice(sourceFieldIdx, 1);
-      
-      let insertIdx = targetFieldIdx;
-      if (sourceSecIdx === targetSectionIdx && sourceColKey === targetColumnKey && sourceFieldIdx < targetFieldIdx) {
-        insertIdx = targetFieldIdx - 1;
-      }
-      
-      if (!editingLayoutData[targetSectionIdx][targetColArray]) {
-        editingLayoutData[targetSectionIdx][targetColArray] = [];
-      }
-      editingLayoutData[targetSectionIdx][targetColArray].splice(insertIdx, 0, fieldObj);
-      
-      reRenderLayoutEditor();
-    }
-  } catch (e) {
-    console.error(e);
-  }
-}
-
-function setupAvailableFieldsFilter() {
-  const searchInput = $("layoutFieldSearch");
-  if (!searchInput) return;
-  
-  // Restore current search query
-  searchInput.value = layoutFieldSearchQuery || "";
-  
-  const applyFilter = (query) => {
-    const q = query.toLowerCase().trim();
-    document.querySelectorAll("#availableFieldsList .available-field-item").forEach(item => {
-      const name = item.dataset.fieldName.toLowerCase();
-      const label = item.dataset.fieldLabel.toLowerCase();
-      if (name.includes(q) || label.includes(q)) {
-        item.style.display = "flex";
-      } else {
-        item.style.display = "none";
-      }
-    });
-  };
-
-  // Run the filter immediately on render
-  applyFilter(layoutFieldSearchQuery);
-
-  searchInput.addEventListener("input", (e) => {
-    layoutFieldSearchQuery = e.target.value;
-    applyFilter(layoutFieldSearchQuery);
-  });
-}
-
-function reRenderLayoutEditor() {
-  if (!detailRecordState) return;
-  
-  // 1. Save scroll positions
-  const canvasScroll = $("canvasSections") ? $("canvasSections").scrollTop : 0;
-  const sidebarScroll = $("availableFieldsList") ? $("availableFieldsList").scrollTop : 0;
-  
-  // 2. Re-render Layout Editor HTML inside stable body
-  const body = $("layoutEditorModalBody");
-  if (body) {
-    body.innerHTML = renderLayoutEditorBodyHtml(detailRecordState.objectName);
-  }
-  
-  // 3. Restore scroll positions immediately & with a safe timeout
-  const canvasEl = $("canvasSections");
-  const sidebarEl = $("availableFieldsList");
-  if (canvasEl) canvasEl.scrollTop = canvasScroll;
-  if (sidebarEl) sidebarEl.scrollTop = sidebarScroll;
-  
-  setTimeout(() => {
-    const cEl = $("canvasSections");
-    const sEl = $("availableFieldsList");
-    if (cEl) cEl.scrollTop = canvasScroll;
-    if (sEl) sEl.scrollTop = sidebarScroll;
-  }, 0);
-  
-  // 4. Initialize available fields search
-  setupAvailableFieldsFilter();
-}
-
-async function saveCustomLayout() {
-  if (!detailRecordState || !editingLayoutData) return;
-  const objectName = detailRecordState.objectName;
-  
-  try {
-    const res = await api(`/api/portal/layouts/${objectName}`, {
-      method: 'POST',
-      body: JSON.stringify({ layout: editingLayoutData })
-    });
-    if (res && res.success) {
-      DB_LAYOUT_CACHE[objectName] = editingLayoutData;
-      toast("Layout saved successfully!", "success");
+  const headers = document.querySelectorAll(`.custom-tab-header[data-region="${regionName}"]`);
+  headers.forEach((el, idx) => {
+    if (idx === activeIdx) {
+      el.classList.add('active');
+      el.style.borderBottom = '3px solid var(--accent)';
+      el.style.color = 'var(--accent)';
+      el.style.fontWeight = '700';
     } else {
-      toast("Failed to save layout to database", "err");
-    }
-  } catch (err) {
-    console.error("Failed to save custom layout:", err);
-    toast("Network error saving layout", "err");
-  }
-  
-  isEditingLayout = false;
-  editingLayoutData = null;
-  
-  // Re-render record detail view
-  restoreStandardDetailView();
-}
-
-function cancelCustomLayout() {
-  isEditingLayout = false;
-  editingLayoutData = null;
-  restoreStandardDetailView();
-}
-
-async function resetCustomLayoutToDefault() {
-  if (!detailRecordState) return;
-  const objectName = detailRecordState.objectName;
-  
-  if (confirm("Are you sure you want to reset layout to standard Salesforce default?")) {
-    try {
-      const res = await api(`/api/portal/layouts/${objectName}`, {
-        method: 'DELETE'
-      });
-      if (res && res.success) {
-        delete DB_LAYOUT_CACHE[objectName];
-        toast("Layout reset to default", "success");
-      } else {
-        toast("Failed to reset layout", "err");
-      }
-    } catch (err) {
-      console.error("Failed to reset layout:", err);
-      toast("Network error resetting layout", "err");
-    }
-    
-    isEditingLayout = false;
-    editingLayoutData = null;
-    restoreStandardDetailView();
-  }
-}
-
-function restoreStandardDetailView() {
-  if (!detailRecordState) return;
-  
-  // Close the modal layout editor overlay if it exists
-  const overlay = $("layoutEditorModalOverlay");
-  if (overlay) overlay.remove();
-  
-  const { objectName, record, fields } = detailRecordState;
-  
-  const displayFields = fields
-    .filter(
-      (field) =>
-        record[field.name] !== null &&
-        record[field.name] !== undefined &&
-        field.name !== "attributes",
-    )
-    .slice(0, 80);
-    
-  // Re-render Details Tab
-  $("recordDetailsPanel").innerHTML = `
-    <div id="detailsContent">
-      ${renderConfiguredDetailSections(objectName, record, fields, displayFields)}
-    </div>
-  `;
-}
-
-/* ── Customize Compact Layout Modal & Supabase Persistence ───────── */
-let compactLayoutDraft = [];
-
-async function openCustomizeCompactLayoutModal() {
-  if (!detailRecordState) return;
-  const objectName = detailRecordState.objectName;
-  
-  // Load current custom compact fields as draft
-  compactLayoutDraft = [...getCustomCompactFields(objectName)];
-  
-  // Open modal
-  const existing = $("compactLayoutModalOverlay");
-  if (existing) existing.remove();
-
-  const overlay = document.createElement("div");
-  overlay.id = "compactLayoutModalOverlay";
-  overlay.className = "overlay open";
-  overlay.style.zIndex = "9999";
-  
-  overlay.addEventListener("click", (e) => {
-    if (e.target === overlay) {
-      closeCompactLayoutModal();
+      el.classList.remove('active');
+      el.style.borderBottom = '3px solid transparent';
+      el.style.color = 'var(--text-2)';
+      el.style.fontWeight = '600';
     }
   });
-
-  overlay.innerHTML = `
-    <div class="modal modal-sm" style="display: flex; flex-direction: column; max-width: 500px; padding: 0;">
-      <div class="modal-head">
-        <div class="modal-title-group">
-          <div class="modal-obj-icon">⚙️</div>
-          <h2>Customize Compact Layout</h2>
-        </div>
-        <button class="close-btn" onclick="closeCompactLayoutModal()">
-          <svg viewBox="0 0 20 20" width="18" height="18" fill="currentColor">
-            <path fill-rule="evenodd"
-              d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z"
-              clip-rule="evenodd" />
-          </svg>
-        </button>
-      </div>
-      <div class="modal-body" style="display: flex; gap: 15px; height: 350px; overflow: hidden; padding: 15px;">
-        <div style="flex: 1; display: flex; flex-direction: column; border-right: 1px solid var(--border-color, #e0e0e0); padding-right: 15px;">
-          <h4 style="font-size: 13px; font-weight: 600; margin-bottom: 8px;">Selected Fields</h4>
-          <div id="compactSelectedFields" style="flex: 1; overflow-y: auto;">
-            ${renderCompactSelectedFieldsHtml()}
-          </div>
-        </div>
-        <div style="flex: 1; display: flex; flex-direction: column;">
-          <h4 style="font-size: 13px; font-weight: 600; margin-bottom: 8px;">Available Fields</h4>
-          <input type="text" id="compactFieldSearch" placeholder="Search..." class="layout-search-input" style="margin-bottom: 8px; font-size: 12px; padding: 6px 10px;">
-          <div id="compactAvailableFields" style="flex: 1; overflow-y: auto;">
-            ${renderCompactAvailableFieldsHtml(objectName)}
-          </div>
-        </div>
-      </div>
-      <div class="modal-foot">
-        <button class="btn btn-ghost" style="margin-right: auto;" onclick="resetCompactLayoutToDefault()">Reset to Default</button>
-        <button class="btn btn-ghost" style="margin-right: 8px;" onclick="closeCompactLayoutModal()">Cancel</button>
-        <button class="btn btn-primary" onclick="saveCompactLayout()">Save</button>
-      </div>
-    </div>
-  `;
-
-  document.body.appendChild(overlay);
-  setupCompactFieldsSearch();
 }
 
-function renderCompactSelectedFieldsHtml() {
-  if (compactLayoutDraft.length === 0) {
-    return `<div style="text-align: center; color: var(--text-muted, #706e6b); font-size: 12px; padding: 20px;">No fields selected</div>`;
-  }
-  return compactLayoutDraft.map((field, idx) => `
-    <div style="display: flex; align-items: center; justify-content: space-between; padding: 8px 10px; background: var(--bg-hover, #f3f5f9); border: 1px solid var(--border-color, #d8dde6); border-radius: 4px; margin-bottom: 6px; font-size: 12.5px;">
-      <div style="display: flex; align-items: center; gap: 6px;">
-        <div style="display: flex; flex-direction: column; gap: 2px;">
-          <button style="border: none; background: none; font-size: 10px; cursor: pointer; line-height: 1; padding: 0;" onclick="moveCompactField(${idx}, -1)" ${idx === 0 ? 'disabled' : ''}>▲</button>
-          <button style="border: none; background: none; font-size: 10px; cursor: pointer; line-height: 1; padding: 0;" onclick="moveCompactField(${idx}, 1)" ${idx === compactLayoutDraft.length - 1 ? 'disabled' : ''}>▼</button>
-        </div>
-        <span style="font-weight: 600;">${escapeHtml(labelFor(field))}</span>
-      </div>
-      <button style="border: none; background: none; color: #c23934; cursor: pointer; font-size: 16px; padding: 0 4px;" onclick="removeCompactField(${idx})">&times;</button>
-    </div>
-  `).join("");
-}
+function switchCustomTabNew(regionName, tabPath) {
+  const parts = tabPath.split('-');
+  const itemIdx = parts[0];
+  const activeSubIdx = parseInt(parts[1]);
 
-function renderCompactAvailableFieldsHtml(objectName) {
-  const allFields = detailRecordState.fields || [];
-  const selectedSet = new Set(compactLayoutDraft);
-  const available = allFields.filter(f => !selectedSet.has(f.name));
-  
-  if (available.length === 0) {
-    return `<div style="text-align: center; color: var(--text-muted, #706e6b); font-size: 12px; padding: 20px;">All fields added</div>`;
-  }
-  
-  return available.map(field => `
-    <div class="compact-available-item" 
-         style="display: flex; align-items: center; justify-content: space-between; padding: 6px 8px; background: #fff; border: 1px solid var(--border-color, #d8dde6); border-radius: 4px; margin-bottom: 6px; font-size: 12px;"
-         data-name="${field.name.toLowerCase()}"
-         data-label="${(field.label || labelFor(field.name)).toLowerCase()}">
-      <div style="display: flex; flex-direction: column;">
-        <span style="font-weight: 500;">${escapeHtml(field.label || labelFor(field.name))}</span>
-        <span style="font-size: 10px; color: var(--text-muted, #706e6b);">${escapeHtml(field.name)}</span>
-      </div>
-      <button class="btn btn-icon-only btn-ghost-link btn-sm" onclick="addCompactField('${field.name}')" title="Add Field">+</button>
-    </div>
-  `).join("");
-}
-
-function moveCompactField(idx, direction) {
-  const targetIdx = idx + direction;
-  if (targetIdx < 0 || targetIdx >= compactLayoutDraft.length) return;
-  const temp = compactLayoutDraft[idx];
-  compactLayoutDraft[idx] = compactLayoutDraft[targetIdx];
-  compactLayoutDraft[targetIdx] = temp;
-  
-  reRenderCompactModal();
-}
-
-function removeCompactField(idx) {
-  compactLayoutDraft.splice(idx, 1);
-  reRenderCompactModal();
-}
-
-function addCompactField(fieldName) {
-  compactLayoutDraft.push(fieldName);
-  reRenderCompactModal();
-}
-
-function reRenderCompactModal() {
-  const selectedContainer = $("compactSelectedFields");
-  const availableContainer = $("compactAvailableFields");
-  if (selectedContainer) selectedContainer.innerHTML = renderCompactSelectedFieldsHtml();
-  if (availableContainer) availableContainer.innerHTML = renderCompactAvailableFieldsHtml(detailRecordState.objectName);
-  setupCompactFieldsSearch();
-}
-
-function setupCompactFieldsSearch() {
-  const searchInput = $("compactFieldSearch");
-  if (!searchInput) return;
-  searchInput.addEventListener("input", (e) => {
-    const q = e.target.value.toLowerCase().trim();
-    document.querySelectorAll("#compactAvailableFields .compact-available-item").forEach(item => {
-      const name = item.dataset.name;
-      const label = item.dataset.label;
-      if (name.includes(q) || label.includes(q)) {
-        item.style.display = "flex";
-      } else {
-        item.style.display = "none";
-      }
-    });
-  });
-}
-
-function closeCompactLayoutModal() {
-  const overlay = $("compactLayoutModalOverlay");
-  if (overlay) overlay.remove();
-}
-
-async function saveCompactLayout() {
-  if (!detailRecordState) return;
-  const objectName = detailRecordState.objectName;
-  
-  try {
-    const res = await api(`/api/portal/compact-layouts/${objectName}`, {
-      method: 'POST',
-      body: JSON.stringify({ fields: compactLayoutDraft })
-    });
-    if (res && res.success) {
-      COMPACT_LAYOUT_CACHE[objectName] = compactLayoutDraft;
-      toast("Compact layout saved successfully!", "success");
-      closeCompactLayoutModal();
-      
-      // Refresh details page header by re-rendering
-      refreshRecordDetailPageHeader();
+  const headers = document.querySelectorAll(`.custom-tab-header[data-region="${regionName}"][data-index^="${itemIdx}-"]`);
+  headers.forEach(h => {
+    const idx = parseInt(h.getAttribute('data-index').split('-')[1]);
+    if (idx === activeSubIdx) {
+      h.classList.add('active');
+      h.style.borderBottom = '3px solid var(--accent)';
+      h.style.color = 'var(--accent)';
+      h.style.fontWeight = '700';
     } else {
-      toast("Failed to save compact layout", "err");
+      h.classList.remove('active');
+      h.style.borderBottom = '3px solid transparent';
+      h.style.color = 'var(--text-2)';
+      h.style.fontWeight = '600';
     }
-  } catch (err) {
-    console.error(err);
-    toast("Network error saving compact layout", "err");
-  }
-}
+  });
 
-async function resetCompactLayoutToDefault() {
-  if (!detailRecordState) return;
-  const objectName = detailRecordState.objectName;
-  
-  if (confirm("Reset compact layout to default?")) {
-    try {
-      const res = await api(`/api/portal/compact-layouts/${objectName}`, {
-        method: 'DELETE'
-      });
-      if (res && res.success) {
-        delete COMPACT_LAYOUT_CACHE[objectName];
-        toast("Compact layout reset to default", "success");
-        closeCompactLayoutModal();
-        refreshRecordDetailPageHeader();
-      } else {
-        toast("Failed to reset compact layout", "err");
-      }
-    } catch (err) {
-      console.error(err);
-      toast("Network error resetting compact layout", "err");
-    }
-  }
-}
-
-function refreshRecordDetailPageHeader() {
-  if (!detailRecordState) return;
-  const { objectName, record, fields } = detailRecordState;
-  
-  // Re-run getSummaryFields
-  const summaryFields = getResolvedCompactFields(objectName, fields);
-    
-  // Find record-summary container and replace its contents
-  const summaryContainer = document.querySelector(".record-summary");
-  if (summaryContainer) {
-    summaryContainer.innerHTML = `
-      ${summaryFields
-        .map(
-          (field) => `
-        <div>
-          <span>${escapeHtml(labelFor(field))}</span>
-          <strong>${formatValue(field, getValue(record, field), record)}</strong>
-        </div>
-      `,
-        )
-        .join("")}
-    `;
-  }
+  const contents = document.querySelectorAll(`.custom-tab-content-${regionName}-${itemIdx}`);
+  contents.forEach(c => {
+    const subIdx = parseInt(c.id.split('-').pop());
+    c.style.display = subIdx === activeSubIdx ? 'block' : 'none';
+  });
 }

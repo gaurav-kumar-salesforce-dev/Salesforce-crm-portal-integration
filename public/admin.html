@@ -1622,6 +1622,511 @@
     }
     .user-name-text { font-weight: 600; color: var(--text-primary); font-size: 13px; }
     .user-email-text { font-size: 11px; color: var(--text-muted); margin-top: 1px; }
+    /* ── OBJECT MANAGER ───────────────────────────────── */
+    .om-detail-container {
+      display: flex;
+      gap: 24px;
+      align-items: stretch;
+      margin-top: 16px;
+    }
+    .om-detail-sidebar {
+      width: 240px;
+      min-width: 240px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      display: flex;
+      flex-direction: column;
+      padding: 12px 8px;
+    }
+    .om-sidebar-btn {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 10px 14px;
+      margin: 2px 0;
+      border-radius: var(--radius);
+      color: var(--text-secondary);
+      font-size: 13px;
+      font-weight: 500;
+      border: none;
+      background: none;
+      cursor: pointer;
+      text-align: left;
+      transition: all 0.2s ease;
+    }
+    .om-sidebar-btn:hover {
+      background: var(--surface-2);
+      color: var(--text-primary);
+    }
+    .om-sidebar-btn.active {
+      background: var(--accent-soft);
+      color: var(--accent);
+      font-weight: 600;
+    }
+    .om-detail-content {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+    }
+    .om-meta-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 20px;
+      padding: 20px;
+    }
+    .om-meta-item {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .om-meta-label {
+      font-size: 11px;
+      font-weight: 700;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+    .om-meta-value {
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--text-primary);
+    }
+
+    /* ── LAYOUT EDITOR INLINE ────────────────────────── */
+    .layout-editor-container {
+      display: flex;
+      gap: 20px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      padding: 20px;
+      height: 650px;
+    }
+    .layout-editor-sidebar {
+      width: 280px;
+      border-right: 1px solid var(--border);
+      padding-right: 20px;
+      display: flex;
+      flex-direction: column;
+      height: 100%;
+    }
+    .sidebar-header {
+      margin-bottom: 15px;
+    }
+    .sidebar-header h3 {
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--text-primary);
+      margin-bottom: 8px;
+    }
+    .layout-search-input {
+      width: 100%;
+      padding: 8px 12px;
+      border: 1.5px solid var(--border);
+      border-radius: 8px;
+      font-size: 13px;
+      background-color: var(--surface-2);
+      color: var(--text-primary);
+      outline: none;
+      transition: border-color 0.2s;
+    }
+    .layout-search-input:focus {
+      border-color: var(--accent);
+    }
+    .available-fields-list {
+      flex: 1;
+      overflow-y: auto;
+      padding-right: 5px;
+    }
+    .available-field-item {
+      padding: 10px 12px;
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      margin-bottom: 8px;
+      cursor: grab;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      transition: all 0.2s;
+    }
+    .available-field-item:hover {
+      background: var(--accent-soft);
+      border-color: var(--accent);
+      transform: translateY(-1px);
+    }
+    .available-field-item:active {
+      cursor: grabbing;
+    }
+    .field-item-label {
+      display: block;
+      font-weight: 600;
+      font-size: 12.5px;
+      color: var(--text-primary);
+    }
+    .field-item-name {
+      display: block;
+      font-size: 11px;
+      color: var(--text-muted);
+    }
+    .sidebar-empty {
+      text-align: center;
+      color: var(--text-muted);
+      padding: 20px 10px;
+      font-size: 12.5px;
+    }
+    .layout-editor-canvas {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      height: 100%;
+    }
+    .canvas-header {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 20px;
+      padding-bottom: 12px;
+      border-bottom: 1px solid var(--border);
+      justify-content: flex-end;
+    }
+    .canvas-sections {
+      flex: 1;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+      padding-right: 8px;
+    }
+    .layout-edit-section {
+      background: var(--surface-2);
+      border: 1.5px dashed var(--border-2);
+      border-radius: var(--radius);
+      padding: 16px;
+      transition: border-color 0.2s;
+    }
+    .layout-edit-section:hover {
+      border-color: var(--accent);
+    }
+    .layout-edit-section-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 12px;
+    }
+    .layout-edit-section-title-input {
+      font-weight: 600;
+      font-size: 14px;
+      color: var(--text-primary);
+      border: 1px solid transparent;
+      background: transparent;
+      padding: 4px 8px;
+      border-radius: 4px;
+      width: 60%;
+      transition: all 0.2s;
+    }
+    .layout-edit-section-title-input:hover {
+      background: rgba(0, 0, 0, 0.02);
+      border-color: var(--border);
+    }
+    .layout-edit-section-title-input:focus {
+      border-color: var(--accent);
+      background: var(--surface);
+    }
+    .section-actions {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+    .section-actions .btn-icon-only {
+      width: 28px;
+      height: 28px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 4px;
+      font-size: 11px;
+      padding: 0 !important;
+      border: none;
+      background: none;
+      cursor: pointer;
+      color: var(--text-secondary);
+    }
+    .section-actions .btn-icon-only:hover {
+      background: var(--surface-3);
+      color: var(--text-primary);
+    }
+    .layout-edit-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 12px;
+      min-height: 70px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 12px;
+      transition: background-color 0.2s;
+    }
+    .layout-edit-field {
+      padding: 10px 14px;
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      cursor: grab;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      position: relative;
+      transition: all 0.2s;
+    }
+    .layout-edit-field:hover {
+      border-color: var(--accent);
+      box-shadow: var(--shadow);
+    }
+    .layout-edit-field:active {
+      cursor: grabbing;
+    }
+    .layout-field-drag-handle {
+      color: var(--text-muted);
+      display: flex;
+      align-items: center;
+      width: 16px;
+      height: 16px;
+      flex-shrink: 0;
+      cursor: move;
+    }
+    .layout-field-drag-handle svg {
+      width: 100%;
+      height: 100%;
+      fill: currentColor;
+    }
+    .layout-field-info {
+      display: flex;
+      flex-direction: column;
+    }
+    .layout-field-label {
+      font-weight: 600;
+      font-size: 12.5px;
+      color: var(--text-primary);
+    }
+    .layout-field-name {
+      font-size: 11px;
+      color: var(--text-muted);
+    }
+    .layout-field-remove {
+      margin-left: auto;
+      background: none;
+      border: none;
+      color: var(--danger);
+      font-size: 18px;
+      cursor: pointer;
+      line-height: 1;
+      padding: 0 4px;
+      transition: color 0.2s;
+    }
+    .layout-field-remove:hover {
+      color: #a61a14;
+    }
+    .grid-empty-msg {
+      grid-column: span 2;
+      text-align: center;
+      color: var(--text-muted);
+      font-size: 12.5px;
+      padding: 20px;
+      border: 1px dashed var(--border-2);
+      border-radius: 4px;
+      background: var(--surface-2);
+    }
+    .layout-edit-field.drag-over, .layout-edit-column.drag-over {
+      border: 2px dashed var(--accent) !important;
+      background: var(--accent-soft) !important;
+    }
+
+    /* ── PAGE LAYOUT BUILDER ADDITIONS ────────────────── */
+    /* Available Field Type Badges */
+    .field-type-badge {
+      font-size: 8px;
+      font-weight: 800;
+      padding: 2.5px 5px;
+      border-radius: 3px;
+      color: #fff;
+      text-transform: uppercase;
+      margin-right: 6px;
+      display: inline-block;
+      line-height: 1;
+      vertical-align: middle;
+      font-family: 'Plus Jakarta Sans', sans-serif;
+    }
+    .badge-ref { background-color: #0176D3; } /* Lookup */
+    .badge-pkl { background-color: #2E7D32; } /* Picklist */
+    .badge-num { background-color: #E65100; } /* Number/Currency */
+    .badge-dat { background-color: #6A1B9A; } /* Date/Time */
+    .badge-txt { background-color: #546E7A; } /* Text/Other */
+
+    /* Section Actions & Header Styling */
+    .layout-edit-section {
+      transition: all 0.2s;
+    }
+    .layout-edit-section-header {
+      border-bottom: 1px solid transparent;
+      padding-bottom: 6px;
+      transition: all 0.2s;
+    }
+    .layout-edit-section.collapsed {
+      border-style: solid;
+      padding-bottom: 12px;
+      background: var(--surface);
+    }
+    .layout-edit-section.collapsed .layout-edit-columns {
+      display: none !important;
+    }
+    .section-chevron {
+      background: none;
+      border: none;
+      color: var(--text-secondary);
+      cursor: pointer;
+      font-size: 11px;
+      padding: 4px;
+      border-radius: 4px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: transform 0.2s;
+      width: 24px;
+      height: 24px;
+    }
+    .section-chevron:hover {
+      background: var(--surface-3);
+      color: var(--text-primary);
+    }
+    .layout-edit-section.collapsed .section-chevron {
+      transform: rotate(-90deg);
+    }
+
+    /* Canvas Field Configuration Indicators */
+    .field-indicators {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      margin-left: 8px;
+    }
+    .indicator-required {
+      color: var(--danger);
+      font-weight: bold;
+      font-size: 14px;
+      line-height: 1;
+    }
+    .indicator-readonly {
+      color: var(--text-muted);
+      font-size: 11px;
+      display: inline-flex;
+      align-items: center;
+    }
+
+    /* Field Hover Controls */
+    .layout-field-settings-btn {
+      opacity: 0;
+      background: none;
+      border: none;
+      color: var(--text-secondary);
+      cursor: pointer;
+      font-size: 12.5px;
+      padding: 4px;
+      border-radius: 4px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: all 0.2s;
+      margin-left: auto;
+      width: 24px;
+      height: 24px;
+    }
+    .layout-edit-field:hover .layout-field-settings-btn {
+      opacity: 1;
+    }
+    .layout-field-settings-btn:hover {
+      background: var(--surface-3);
+      color: var(--text-primary);
+    }
+    .layout-edit-field .layout-field-remove {
+      margin-left: 0; /* Align after settings button */
+    }
+
+    /* Inline Settings Panel */
+    .field-settings-popover {
+      position: absolute;
+      top: 100%;
+      right: 10px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 12px;
+      box-shadow: 0 4px 14px rgba(0,0,0,0.15);
+      z-index: 1000;
+      width: 200px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      animation: popIn 0.15s ease-out;
+    }
+    @keyframes popIn {
+      from { transform: scale(0.95); opacity: 0; }
+      to { transform: scale(1); opacity: 1; }
+    }
+    .popover-header {
+      font-weight: 600;
+      font-size: 12px;
+      color: var(--text-primary);
+      margin-bottom: 4px;
+      border-bottom: 1px solid var(--border);
+      padding-bottom: 4px;
+      text-align: left;
+    }
+    .popover-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 12px;
+      color: var(--text-secondary);
+      cursor: pointer;
+      user-select: none;
+    }
+    .popover-actions {
+      display: flex;
+      justify-content: flex-end;
+      gap: 6px;
+      margin-top: 6px;
+    }
+    
+    /* Full-screen workspace overrides for Lightning Record Page Builder */
+    body.lightning-builder-active .sidebar,
+    body.lightning-builder-active .sidebar-overlay,
+    body.lightning-builder-active .topbar {
+      display: none !important;
+    }
+    body.lightning-builder-active .main {
+      margin-left: 0 !important;
+      padding: 0 !important;
+      width: 100% !important;
+      height: 100vh !important;
+      overflow: hidden !important;
+      display: flex !important;
+      flex-direction: column !important;
+    }
+    body.lightning-builder-active .panel {
+      display: none !important;
+    }
+    body.lightning-builder-active .panel#panel-lightning-builder {
+      display: flex !important;
+      flex-direction: column !important;
+      height: 100vh !important;
+      width: 100% !important;
+      padding: 0 !important;
+      margin: 0 !important;
+      background: var(--surface);
+    }
   </style>
 </head>
 
@@ -1717,6 +2222,14 @@
   </svg>
   Public Groups
 </button>
+
+    <div class="sidebar-section">Setup</div>
+    <button class="nav-item" onclick="showPanel('object-manager')">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" />
+      </svg>
+      Object Manager
+    </button>
 
     <div class="sidebar-section">System</div>
     <button class="nav-item" onclick="showPanel('audit')">
@@ -2440,6 +2953,24 @@
   </div>
 </div>
 
+      <!-- ══ OBJECT MANAGER PANEL ══════════════════════════ -->
+      <div class="panel" id="panel-object-manager">
+        <div class="page-header">
+          <div>
+            <h1 id="omHeaderTitle">Object Manager</h1>
+            <p id="omHeaderSubtitle">Manage layouts, fields, and configurations for Salesforce objects</p>
+          </div>
+        </div>
+        <div id="omContent">
+          <!-- Dynamically loaded list view or object details -->
+        </div>
+      </div>
+
+      <!-- ══ LIGHTNING RECORD PAGE BUILDER PANEL ════════════ -->
+      <div class="panel" id="panel-lightning-builder" style="padding: 0; max-width: 100%; height: 100%;">
+        <!-- Rendered dynamically by renderRecordPageBuilder -->
+      </div>
+
       <!-- ══ AUDIT LOG PANEL ═══════════════════════════════ -->
       <div class="panel" id="panel-audit">
         <div class="page-header">
@@ -2765,6 +3296,7 @@
   <!-- Toast Stack -->
   <div class="toast-stack" id="toastStack"></div>
 
+  <script src="/client-performance.js?v=1"></script>
   <script>
     // ═══════════════════════════════════════════════════════
     // STATE
@@ -2815,7 +3347,7 @@
     let confirmCallback = null;
     let confirmLoadingLabel = 'Working...';
 
-    const SF_OBJECTS = ['Account', 'Contact', 'Opportunity', 'Lead', 'Case', 'Campaign', 'Task', 'Event'];
+    const SF_OBJECTS = ['Account', 'Contact', 'Opportunity', 'Lead', 'Case', 'Campaign', 'Quote', 'Product2', 'OpportunityLineItem', 'QuoteLineItem', 'Task', 'Event'];
 
     function getToken() { return localStorage.getItem('saasray_token'); }
 
@@ -2908,6 +3440,7 @@
     // INIT
     // ═══════════════════════════════════════════════════════
     document.addEventListener('DOMContentLoaded', async () => {
+      window.SaaSRAYPerformance?.markModuleInitialized?.('admin');
       const token = getToken();
       if (!token) { window.location.href = '/'; return; }
 
@@ -2944,6 +3477,7 @@
       await loadUsers();
       loadProfiles();
       loadPermSets();
+      handleRouting(true);
     });
 
     function renderAdminInfoCard(user) {
@@ -3049,14 +3583,56 @@
       fieldsecurity: 'Field Security', owd: 'Org-Wide Defaults',
       sharing: 'Sharing Rules', psggroups: 'Permission Set Groups',
       orgroles: 'Role Hierarchy',
-      publicgroups: 'Public Groups'
+      publicgroups: 'Public Groups',
+      'object-manager': 'Object Manager'
     };
 
     function showPanel(name) {
+      activatePanelDirect(name, false);
+    }
+
+    function activatePanelDirect(name, isPopState = false) {
+      document.body.classList.remove('lightning-builder-active');
+      if (name === 'object-manager') {
+        document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+        document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+        
+        const panelEl = $('panel-object-manager');
+        if (panelEl) panelEl.classList.add('active');
+        
+        const navBtn = document.querySelector(`button[onclick*="object-manager"]`);
+        if (navBtn) navBtn.classList.add('active');
+        
+        $('topbarTitle').textContent = 'Object Manager';
+        
+        const parts = window.location.pathname.split('/');
+        const objName = parts[3];
+        if (objName) {
+          showObjectDetail(objName, isPopState);
+        } else {
+          showObjectManagerList(isPopState);
+        }
+        
+        // Close sidebar on mobile
+        document.querySelector('.sidebar').classList.remove('open');
+        var ov = document.getElementById('sidebarOverlay');
+        if (ov) ov.classList.remove('open');
+        
+        if (!isPopState) {
+          window.history.pushState({ panel: 'object-manager' }, '', '/admin/object-manager');
+        }
+        return;
+      }
+
       document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
       document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
-      $(`panel-${name}`).classList.add('active');
-      event.currentTarget.classList.add('active');
+      
+      const panelEl = $(`panel-${name}`);
+      if (panelEl) panelEl.classList.add('active');
+      
+      const navBtn = document.querySelector(`button[onclick="showPanel('${name}')"]`);
+      if (navBtn) navBtn.classList.add('active');
+      
       $('topbarTitle').textContent = PANEL_TITLES[name] || name;
       loadPanelOnce(name);
 
@@ -3064,6 +3640,11 @@
       document.querySelector('.sidebar').classList.remove('open');
       var ov = document.getElementById('sidebarOverlay');
       if (ov) ov.classList.remove('open');
+
+      if (!isPopState) {
+        const newPath = name === 'users' ? '/admin' : `/admin/${name}`;
+        window.history.pushState({ panel: name }, '', newPath);
+      }
     }
 
     async function loadPanelOnce(name) {
@@ -5837,6 +6418,3352 @@ function deletePublicGroup(id, name) {
       $('toastStack').appendChild(el);
       requestAnimationFrame(() => el.classList.add('in'));
       setTimeout(() => { el.classList.add('out'); setTimeout(() => el.remove(), 350); }, 3500);
+    }
+
+    // ═══════════════════════════════════════════════════════
+    // OBJECT MANAGER & RELOCATED EDITORS JS
+    // ═══════════════════════════════════════════════════════
+    const ADMIN_FIELDS_CACHE = {};
+    const ADMIN_DB_LAYOUT_CACHE = {};
+    const ADMIN_COMPACT_LAYOUT_CACHE = {};
+
+    const OBJECT_DESCRIPTIONS = {
+      Account: 'Account details, billing, and customer profiles.',
+      Contact: 'Contacts associated with accounts.',
+      Opportunity: 'Sales deals, pipeline tracking, and revenue forecasting.',
+      Lead: 'Prospects, marketing contacts, and targets.',
+      Case: 'Customer support cases, issues, and tickets.',
+      Campaign: 'Marketing campaigns, events, and initiatives.',
+      Quote: 'Sales quotes, pricing, and proposal records.',
+      Product2: 'Products and services available for sales.',
+      OpportunityLineItem: 'Products, quantities, and pricing lines on opportunities.',
+      QuoteLineItem: 'Products, quantities, and pricing lines on quotes.',
+      Task: 'To-do items and action items.',
+      Event: 'Calendar events, meetings, and schedules.'
+    };
+
+    function adminUtilityIconSvg(key) {
+      const icons = {
+        trash: '<svg viewBox="0 0 20 20" width="14" height="14" fill="currentColor"><path d="M8 2a1 1 0 00-.9.6L6.4 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 000-2h-2.4l-.7-1.4A1 1 0 0012 2H8zm-1 6h2v7H7V8zm4 0h2v7h-2V8z"/></svg>',
+        sort: '<svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M7 4l4 4H8v12H6V8H3l4-4zm10 16l-4-4h3V4h2v12h3l-4 4z"/></svg>',
+        like: '<svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M8 21H4V9h4v12zm2 0V9l5-6 1.4 1.4L14.6 9H20a2 2 0 012 2l-1.2 7a3 3 0 01-3 3H10z"/></svg>',
+        refresh: '<svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M17.7 6.3A8 8 0 104 12h2a6 6 0 111.8 4.2L10 14H4v6l2.4-2.4A8 8 0 0019.9 12h-2a6 6 0 00-1.8-4.2L14 10h6V4l-2.3 2.3z"/></svg>',
+        comment: '<svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M4 5h16a2 2 0 012 2v8a2 2 0 01-2 2H9l-5 4v-4a2 2 0 01-2-2V7a2 2 0 012-2z"/></svg>',
+        chevronDown: '<svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M7.41 8.59L12 13.17l4.59-4.58L18 10l-6 6-6-6 1.41-1.41z"/></svg>',
+        settings: '<svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M19.43 12.98c.04-.32.07-.64.07-.98s-.03-.66-.07-.98l2.11-1.65c.19-.15.24-.42.12-.64l-2-3.46c-.12-.22-.39-.3-.61-.22l-2.49 1c-.52-.4-1.08-.73-1.69-.98l-.38-2.65C14.46 2.18 14.25 2 14 2h-4c-.25 0-.46.18-.49.42l-.38 2.65c-.61.25-1.17.59-1.69.98l-2.49-1c-.23-.09-.49 0-.61.22l-2 3.46c-.13.22-.07.49.12.64l2.11 1.65c-.04.32-.07.65-.07.98s.03.66.07.98l-2.11 1.65c-.19.15-.24.42-.12.64l2 3.46c.12.22.39.3.61.22l2.49-1c.52.4 1.08.73 1.69.98l.38 2.65c.03.24.24.42.49.42h4c.25 0 .46-.18.49-.42l.38-2.65c.61-.25 1.17-.59 1.69-.98l2.49 1c.23.09.49 0 .61-.22l2-3.46c.12-.22.07-.49-.12-.64l-2.11-1.65zM12 15.5c-1.93 0-3.5-1.57-3.5-3.5s1.57-3.5 3.5-3.5 3.5 1.57 3.5 3.5-1.57 3.5-3.5 3.5z"/></svg>'
+      };
+      return icons[key] || '';
+    }
+
+    async function fetchMetadata(path) {
+      const token = getToken();
+      if (window.SaaSRAYPerformance?.fetchJson) {
+        return window.SaaSRAYPerformance.fetchJson(path, {
+          headers: {
+            'Content-Type': 'application/json',
+            ...(token ? { Authorization: `Bearer ${token}` } : {})
+          }
+        });
+      }
+      return api(path);
+    }
+
+    function handleRouting(isPopState = false) {
+      const path = window.location.pathname;
+      if (path.startsWith('/admin/lightning-builder/')) {
+        const parts = path.split('/');
+        const objName = parts[3];
+        if (objName) {
+          activateLightningBuilderPanel(objName, isPopState);
+        } else {
+          activatePanelDirect('users', isPopState);
+        }
+      } else if (path.startsWith('/admin/object-manager')) {
+        activatePanelDirect('object-manager', isPopState);
+      } else {
+        const panelName = path.split('/')[2] || 'users';
+        const validPanels = ['users', 'profiles', 'permsets', 'fieldsecurity', 'owd', 'sharing', 'psggroups', 'orgroles', 'publicgroups', 'audit'];
+        const activePanel = validPanels.includes(panelName) ? panelName : 'users';
+        activatePanelDirect(activePanel, isPopState);
+      }
+    }
+
+    async function activateLightningBuilderPanel(objectName, isPopState = false) {
+      document.body.classList.add('lightning-builder-active');
+      
+      document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+      document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+      
+      const panelEl = $('panel-lightning-builder');
+      if (panelEl) panelEl.classList.add('active');
+      
+      if (!isPopState) {
+        window.history.pushState({ panel: 'lightning-builder', object: objectName }, '', `/admin/lightning-builder/${objectName}`);
+      }
+      
+      await startEditingRecordPage(objectName);
+    }
+
+    function goBackToObjectManager() {
+      if (checkAdminRecordPageHasChanges()) {
+        if (!confirm('You have unsaved changes in the Record Page Builder. Are you sure you want to discard them?')) {
+          return;
+        }
+      }
+      document.body.classList.remove('lightning-builder-active');
+      window.history.pushState({ panel: 'object-manager', object: adminRecordPageObjectName }, '', `/admin/object-manager/${adminRecordPageObjectName}`);
+      handleRouting(true);
+      setTimeout(() => {
+        showObjectDetailTab(adminRecordPageObjectName, 'record-page');
+      }, 50);
+    }
+
+    window.addEventListener('popstate', () => {
+      handleRouting(true);
+    });
+
+    function navigateToObject(objectName, event) {
+      if (event) event.preventDefault();
+      showObjectDetail(objectName, false);
+    }
+
+    function showObjectManagerList(isPopState = false) {
+      if (!isPopState) {
+        window.history.pushState({ panel: 'object-manager' }, '', '/admin/object-manager');
+      }
+      $('omHeaderTitle').textContent = 'Object Manager';
+      $('omHeaderSubtitle').textContent = 'Manage layouts, fields, and configurations for Salesforce objects';
+
+      let html = `
+        <div class="card">
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Label</th>
+                  <th>API Name</th>
+                  <th>Type</th>
+                  <th>Description</th>
+                  <th>Status</th>
+                </tr>
+              </thead>
+              <tbody>
+      `;
+
+      SF_OBJECTS.forEach(obj => {
+        const desc = OBJECT_DESCRIPTIONS[obj] || 'Salesforce standard CRM object.';
+        html += `
+          <tr>
+            <td>
+              <a href="/admin/object-manager/${obj}" onclick="navigateToObject('${obj}', event)" style="font-weight:600;color:var(--accent);text-decoration:none">
+                ${obj}
+              </a>
+            </td>
+            <td style="font-family:'JetBrains Mono',monospace;font-size:12px">${obj}</td>
+            <td>Standard Object</td>
+            <td>${desc}</td>
+            <td><span class="badge" style="background:rgba(26,127,55,0.08);color:#1A7F37">Active</span></td>
+          </tr>
+        `;
+      });
+
+      html += `
+              </tbody>
+            </table>
+          </div>
+        </div>
+      `;
+
+      $('omContent').innerHTML = html;
+    }
+
+    let activeObjectTab = 'overview';
+
+    async function showObjectDetail(objectName, isPopState = false) {
+      if (!isPopState) {
+        window.history.pushState({ panel: 'object-manager', object: objectName }, '', `/admin/object-manager/${objectName}`);
+      }
+
+      $('omHeaderTitle').innerHTML = `
+        <div style="font-size:12px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.08em;margin-bottom:4px">
+          <a href="/admin/object-manager" onclick="showObjectManagerList(false); event.preventDefault();" style="color:var(--text-muted);text-decoration:none">Object Manager</a> › ${objectName}
+        </div>
+        ${objectName}
+      `;
+      $('omHeaderSubtitle').textContent = 'Configure fields, compact layouts, page layouts, and security rules';
+
+      $('omContent').innerHTML = `
+        <div class="om-detail-container">
+          <aside class="om-detail-sidebar">
+            <button class="om-sidebar-btn ${activeObjectTab === 'overview' ? 'active' : ''}" onclick="showObjectDetailTab('${objectName}', 'overview')">Overview</button>
+            <button class="om-sidebar-btn ${activeObjectTab === 'fields' ? 'active' : ''}" onclick="showObjectDetailTab('${objectName}', 'fields')">Fields & Relationships</button>
+            <button class="om-sidebar-btn ${activeObjectTab === 'page-layouts' ? 'active' : ''}" onclick="showObjectDetailTab('${objectName}', 'page-layouts')">Page Layouts</button>
+            <button class="om-sidebar-btn ${activeObjectTab === 'compact-layouts' ? 'active' : ''}" onclick="showObjectDetailTab('${objectName}', 'compact-layouts')">Compact Layouts</button>
+            <button class="om-sidebar-btn ${activeObjectTab === 'record-page' ? 'active' : ''}" onclick="showObjectDetailTab('${objectName}', 'record-page')">Lightning Record Pages</button>
+            <button class="om-sidebar-btn ${activeObjectTab === 'list-views' ? 'active' : ''}" onclick="showObjectDetailTab('${objectName}', 'list-views')">List Views</button>
+            <button class="om-sidebar-btn" onclick="showObjectDetailTab('${objectName}', 'placeholder', 'Buttons, Links, and Actions')">Buttons, Links & Actions</button>
+            <button class="om-sidebar-btn" onclick="showObjectDetailTab('${objectName}', 'placeholder', 'Field Sets')">Field Sets</button>
+            <button class="om-sidebar-btn" onclick="showObjectDetailTab('${objectName}', 'placeholder', 'Object Limits')">Object Limits</button>
+            <button class="om-sidebar-btn" onclick="showObjectDetailTab('${objectName}', 'placeholder', 'Record Types')">Record Types</button>
+            <button class="om-sidebar-btn" onclick="showObjectDetailTab('${objectName}', 'placeholder', 'Search Layouts')">Search Layouts</button>
+          </aside>
+          <div class="om-detail-content" id="omDetailContentPane">
+            <div class="spinner" style="margin:40px auto"></div>
+          </div>
+        </div>
+      `;
+
+      showObjectDetailTab(objectName, activeObjectTab);
+    }
+
+    async function showObjectDetailTab(objectName, tabName, labelOverride = '') {
+      if (typeof checkAdminRecordPageHasChanges === 'function' && checkAdminRecordPageHasChanges()) {
+        if (!confirm('You have unsaved changes in the Record Page Builder. Are you sure you want to discard them?')) {
+          return;
+        }
+        adminRecordPageOriginalJson = JSON.stringify(adminRecordPageDraft);
+      }
+      activeObjectTab = tabName;
+      document.querySelectorAll('.om-sidebar-btn').forEach(btn => {
+        btn.classList.remove('active');
+        if (btn.textContent.trim() === labelOverride || (tabName === 'overview' && btn.textContent.trim() === 'Overview') || (tabName === 'fields' && btn.textContent.trim() === 'Fields & Relationships') || (tabName === 'page-layouts' && btn.textContent.trim() === 'Page Layouts') || (tabName === 'compact-layouts' && btn.textContent.trim() === 'Compact Layouts') || (tabName === 'record-page' && btn.textContent.trim() === 'Lightning Record Pages') || (tabName === 'list-views' && btn.textContent.trim() === 'List Views')) {
+          btn.classList.add('active');
+        }
+      });
+
+      const pane = $('omDetailContentPane');
+      if (tabName === 'placeholder') {
+        pane.innerHTML = `
+          <div class="card" style="padding:40px;text-align:center">
+            <h3 style="font-size:16px;margin-bottom:8px">${labelOverride}</h3>
+            <p style="color:var(--text-secondary);font-size:13px">This feature belongs to future phases of the Object Manager deployment. Placeholders only.</p>
+          </div>
+        `;
+        return;
+      }
+
+      pane.innerHTML = '<div class="spinner" style="margin:40px auto"></div>';
+
+      try {
+        // Fetch core data needed
+        let fields = ADMIN_FIELDS_CACHE[objectName];
+        if (!fields) {
+          const fieldsRes = await fetchMetadata(`/api/${objectName}/fields`);
+          fields = fieldsRes.fields || [];
+          ADMIN_FIELDS_CACHE[objectName] = fields;
+        }
+
+        if (tabName === 'overview') {
+          // Record Count
+          let recordCount = '—';
+          try {
+            const countRes = await api(`/api/${objectName}/count`);
+            recordCount = countRes.totalSize !== null ? countRes.totalSize.toLocaleString() : 'Hidden';
+          } catch (e) {
+            console.warn(e);
+          }
+
+          // Supabase custom structures status
+          let hasPageLayout = false;
+          try {
+            const pageRes = await api(`/api/portal/layouts/${objectName}`);
+            hasPageLayout = !!(pageRes.layout && pageRes.layout.length);
+          } catch (e) {
+            console.warn(e);
+          }
+
+          let hasCompactLayout = false;
+          try {
+            const compactRes = await api(`/api/portal/compact-layouts/${objectName}`);
+            hasCompactLayout = !!(compactRes.fields && compactRes.fields.length);
+          } catch (e) {
+            console.warn(e);
+          }
+
+          const relationships = fields.filter(f => f.referenceTo && f.referenceTo.length);
+
+          pane.innerHTML = `
+            <div class="card">
+              <div class="card-head">
+                <h3 class="card-title">Metadata Overview</h3>
+              </div>
+              <div class="om-meta-grid">
+                <div class="om-meta-item">
+                  <span class="om-meta-label">Object Label</span>
+                  <span class="om-meta-value">${objectName}</span>
+                </div>
+                <div class="om-meta-item">
+                  <span class="om-meta-label">API Name</span>
+                  <span class="om-meta-value" style="font-family:'JetBrains Mono',monospace;font-size:13px">${objectName}</span>
+                </div>
+                <div class="om-meta-item">
+                  <span class="om-meta-label">Record Count</span>
+                  <span class="om-meta-value">${recordCount}</span>
+                </div>
+                <div class="om-meta-item">
+                  <span class="om-meta-label">Number of Fields</span>
+                  <span class="om-meta-value">${fields.length}</span>
+                </div>
+                <div class="om-meta-item">
+                  <span class="om-meta-label">Relationships</span>
+                  <span class="om-meta-value">${relationships.length} fields</span>
+                </div>
+                <div class="om-meta-item">
+                  <span class="om-meta-label">Compact Layout Status</span>
+                  <span class="om-meta-value">${hasCompactLayout ? 'Active (Custom)' : 'Standard (Default)'}</span>
+                </div>
+                <div class="om-meta-item">
+                  <span class="om-meta-label">Page Layout Status</span>
+                  <span class="om-meta-value">${hasPageLayout ? 'Active (Custom)' : 'Standard (Default)'}</span>
+                </div>
+                <div class="om-meta-item">
+                  <span class="om-meta-label">Record Page Status</span>
+                  <span class="om-meta-value">Standard (Default)</span>
+                </div>
+                <div class="om-meta-item">
+                  <span class="om-meta-label">Configuration Health</span>
+                  <span class="om-meta-value">
+                    <span class="badge" style="background:rgba(26,127,55,0.08);color:#1A7F37">Healthy</span>
+                  </span>
+                </div>
+              </div>
+            </div>
+          `;
+        } else if (tabName === 'fields') {
+          pane.innerHTML = `
+            <div class="card">
+              <div class="toolbar">
+                <div class="search-box">
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                    <circle cx="11" cy="11" r="8" />
+                    <line x1="21" y1="21" x2="16.65" y2="16.65" />
+                  </svg>
+                  <input type="text" id="fieldsQuickFind" placeholder="Quick Find..." oninput="filterFieldsList()">
+                </div>
+                <div style="font-size:12px;color:var(--text-muted);margin-left:auto" id="fieldsListMeta">
+                  ${fields.length} fields
+                </div>
+              </div>
+              <div class="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Field Label</th>
+                      <th>Field Name</th>
+                      <th>Data Type</th>
+                    </tr>
+                  </thead>
+                  <tbody id="fieldsListBody">
+                    ${fields.map(f => `
+                      <tr class="field-row" data-label="${esc(f.label).toLowerCase()}" data-name="${esc(f.name).toLowerCase()}">
+                        <td style="font-weight:600">${esc(f.label)}</td>
+                        <td style="font-family:'JetBrains Mono',monospace;font-size:12px">${esc(f.name)}</td>
+                        <td style="text-transform:capitalize;font-size:12px;color:var(--text-secondary)">
+                          ${esc(f.type)}${f.referenceTo && f.referenceTo.length ? ` (${f.referenceTo.join(', ')})` : ''}
+                        </td>
+                      </tr>
+                    `).join('')}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          `;
+        } else if (tabName === 'page-layouts') {
+          let hasPageLayout = false;
+          try {
+            const pageRes = await api(`/api/portal/layouts/${objectName}`);
+            hasPageLayout = !!(pageRes.layout && pageRes.layout.length);
+          } catch (e) {
+            console.warn(e);
+          }
+
+          const statusText = hasPageLayout ? 'Active (Custom)' : 'Standard (Default)';
+
+          pane.innerHTML = `
+            <div class="card">
+              <div class="card-head">
+                <h3 class="card-title">Page Layouts</h3>
+                <button class="btn btn-ghost btn-sm" onclick="startEditingPageLayout('${objectName}')">Edit Layout</button>
+              </div>
+              <div class="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Page Layout Name</th>
+                      <th>Status</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr>
+                      <td>
+                        <a href="#" onclick="startEditingPageLayout('${objectName}'); event.preventDefault();" style="font-weight:600;color:var(--accent);text-decoration:none">
+                          ${objectName} Layout
+                        </a>
+                      </td>
+                      <td>
+                        <span class="badge" style="${hasPageLayout ? 'background:rgba(1,118,211,0.08);color:var(--accent)' : 'background:var(--surface-3);color:var(--text-secondary)'}">
+                          ${statusText}
+                        </span>
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          `;
+        } else if (tabName === 'compact-layouts') {
+          let hasCompactLayout = false;
+          try {
+            const compactRes = await api(`/api/portal/compact-layouts/${objectName}`);
+            hasCompactLayout = !!(compactRes.fields && compactRes.fields.length);
+          } catch (e) {
+            console.warn(e);
+          }
+
+          const statusText = hasCompactLayout ? 'Active (Custom)' : 'Standard (Default)';
+
+          pane.innerHTML = `
+            <div class="card">
+              <div class="card-head">
+                <h3 class="card-title">Compact Layouts</h3>
+                <button class="btn btn-ghost btn-sm" onclick="startEditingCompactLayout('${objectName}')">Edit Compact Layout</button>
+              </div>
+              <div class="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Compact Layout Name</th>
+                      <th>Status</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr>
+                      <td>
+                        <a href="#" onclick="startEditingCompactLayout('${objectName}'); event.preventDefault();" style="font-weight:600;color:var(--accent);text-decoration:none">
+                          System Default / Custom Compact Layout
+                        </a>
+                      </td>
+                      <td>
+                        <span class="badge" style="${hasCompactLayout ? 'background:rgba(1,118,211,0.08);color:var(--accent)' : 'background:var(--surface-3);color:var(--text-secondary)'}">
+                          ${statusText}
+                        </span>
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          `;
+        } else if (tabName === 'record-page') {
+          let hasRecordPage = false;
+          let layoutInfo = null;
+          try {
+            const recordPageRes = await api(`/api/portal/record-pages/${objectName}`);
+            hasRecordPage = !!(recordPageRes.layout);
+            layoutInfo = recordPageRes.layout;
+          } catch (e) {
+            console.warn(e);
+          }
+
+          const statusText = hasRecordPage ? 'Active (Custom)' : 'Standard (Default)';
+          const templateName = hasRecordPage && layoutInfo.layout ? {
+            'one-column': 'One Column',
+            'two-column': 'Two Column',
+            'header-two-column': 'Header + Two Column',
+            'header-two-column-bottom': 'Header + Two Column + Bottom'
+          }[layoutInfo.layout] || layoutInfo.layout : 'Header + Two Column + Bottom (Default)';
+          
+          const lastModified = hasRecordPage && layoutInfo.updated_at 
+            ? new Date(layoutInfo.updated_at).toLocaleString() 
+            : 'N/A';
+
+          pane.innerHTML = `
+            <div class="card">
+              <div class="card-head">
+                <h3 class="card-title">Lightning Record Pages</h3>
+                <button class="btn btn-ghost btn-sm" onclick="activateLightningBuilderPanel('${objectName}')">Edit Builder</button>
+              </div>
+              <div class="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Record Page Name</th>
+                      <th>Status</th>
+                      <th>Template</th>
+                      <th>Last Modified</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr>
+                      <td>
+                        <a href="#" onclick="activateLightningBuilderPanel('${objectName}'); event.preventDefault();" style="font-weight:600;color:var(--accent);text-decoration:none">
+                          ${objectName} Record Page Layout
+                        </a>
+                      </td>
+                      <td>
+                        <span class="badge" style="${hasRecordPage ? 'background:rgba(1,118,211,0.08);color:var(--accent)' : 'background:var(--surface-3);color:var(--text-secondary)'}">
+                          ${statusText}
+                        </span>
+                      </td>
+                      <td>${templateName}</td>
+                      <td>${lastModified}</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          `;
+        } else if (tabName === 'list-views') {
+          pane.innerHTML = `
+            <div class="card" style="padding:40px;text-align:center">
+              <h3 style="font-size:16px;margin-bottom:8px">List Views</h3>
+              <p style="color:var(--text-secondary);font-size:13px">This feature belongs to future phases of the Object Manager deployment. Placeholders only.</p>
+            </div>
+          `;
+        }
+      } catch (e) {
+        pane.innerHTML = `<div style="color:var(--danger);padding:20px;text-align:center">${esc(e.message)}</div>`;
+      }
+    }
+
+    function filterFieldsList() {
+      const q = $('fieldsQuickFind').value.toLowerCase().trim();
+      let matched = 0;
+      document.querySelectorAll('#fieldsListBody .field-row').forEach(row => {
+        const label = row.dataset.label;
+        const name = row.dataset.name;
+        if (label.includes(q) || name.includes(q)) {
+          row.style.display = '';
+          matched++;
+        } else {
+          row.style.display = 'none';
+        }
+      });
+      $('fieldsListMeta').textContent = `${matched} fields`;
+    }
+
+    // ── RELOCATED PAGE LAYOUT EDITOR ─────────────────────
+    let adminEditingLayoutData = null;
+    let adminLayoutFieldSearchQuery = '';
+    let adminLayoutObjectName = '';
+    const adminCollapsedSections = new Set();
+    let adminActiveFieldSettings = null;
+
+    function getAdminActiveLayout(objectName) {
+      if (ADMIN_DB_LAYOUT_CACHE[objectName]) {
+        return ADMIN_DB_LAYOUT_CACHE[objectName];
+      }
+      return [];
+    }
+
+    function normalizeAdminLayoutData(layout) {
+      return layout.map(section => ({
+        title: section.title || "Information",
+        columns: section.columns || 2,
+        leftFields: section.leftFields || section.fields || [],
+        rightFields: section.rightFields || []
+      }));
+    }
+
+    async function startEditingPageLayout(objectName) {
+      adminLayoutObjectName = objectName;
+      const pane = $('omDetailContentPane');
+      pane.innerHTML = '<div class="spinner" style="margin:40px auto"></div>';
+
+      try {
+        let fields = ADMIN_FIELDS_CACHE[objectName];
+        if (!fields) {
+          const fieldsRes = await fetchMetadata(`/api/${objectName}/fields`);
+          fields = fieldsRes.fields || [];
+          ADMIN_FIELDS_CACHE[objectName] = fields;
+        }
+
+        let rawLayout = [];
+        try {
+          const dbRes = await api(`/api/portal/layouts/${objectName}`);
+          rawLayout = dbRes.layout || [];
+          ADMIN_DB_LAYOUT_CACHE[objectName] = rawLayout;
+        } catch (e) {
+          console.warn(e);
+        }
+
+        if (rawLayout.length === 0) {
+          // Build basic fallback layout containing the first 10 fields
+          rawLayout = [{
+            title: 'Information',
+            columns: 2,
+            leftFields: fields.slice(0, 5).map(f => f.name),
+            rightFields: fields.slice(5, 10).map(f => f.name)
+          }];
+        }
+
+        adminEditingLayoutData = normalizeAdminLayoutData(rawLayout);
+        adminLayoutFieldSearchQuery = '';
+
+        pane.innerHTML = renderAdminLayoutEditorBodyHtml(objectName, fields);
+        setupAdminAvailableFieldsFilter();
+      } catch (e) {
+        pane.innerHTML = `<div style="color:var(--danger);padding:20px;text-align:center">${esc(e.message)}</div>`;
+      }
+    }
+
+    function renderAdminLayoutEditorBodyHtml(objectName, fields) {
+      const activeFieldNames = new Set();
+      adminEditingLayoutData.forEach(section => {
+        (section.leftFields || []).forEach(f => {
+          activeFieldNames.add(typeof f === 'string' ? f : f.name);
+        });
+        (section.rightFields || []).forEach(f => {
+          activeFieldNames.add(typeof f === 'string' ? f : f.name);
+        });
+      });
+
+      const availableFields = fields.filter(f => !activeFieldNames.has(f.name));
+
+      return `
+        <div class="layout-editor-container" style="box-shadow:none;border:1px solid var(--border);border-radius:var(--radius-lg);margin-top:0">
+          <div class="layout-editor-sidebar">
+            <div class="sidebar-header">
+              <h3>Available Fields</h3>
+              <input type="text" id="layoutFieldSearch" placeholder="Search fields..." class="layout-search-input">
+            </div>
+            <div class="available-fields-list" id="availableFieldsList">
+              ${renderAdminAvailableFieldsList(availableFields)}
+            </div>
+          </div>
+          <div class="layout-editor-canvas">
+            <div class="canvas-header">
+              <button class="btn btn-primary btn-sm" onclick="adminSaveCustomLayout()">${adminUtilityIconSvg("like")} Save Layout</button>
+              <button class="btn btn-ghost btn-sm" onclick="showObjectDetailTab('${objectName}', 'page-layouts')">Cancel</button>
+              <button class="btn btn-ghost btn-danger-link btn-sm" onclick="adminResetCustomLayoutToDefault()">${adminUtilityIconSvg("refresh")} Reset to Default</button>
+              <button class="btn btn-ghost btn-sm" onclick="adminAddNewLayoutSection()">${adminUtilityIconSvg("comment")} + Add Section</button>
+            </div>
+            <div class="canvas-sections" id="canvasSections">
+              ${adminEditingLayoutData.map((section, sIdx) => renderAdminEditorSection(section, sIdx)).join("")}
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
+    function getFieldTypeBadge(type = "") {
+      const t = type.toLowerCase();
+      if (t === 'reference') return '<span class="field-type-badge badge-ref" title="Lookup Relation">REF</span>';
+      if (t === 'picklist' || t === 'multipicklist') return '<span class="field-type-badge badge-pkl" title="Picklist">PKL</span>';
+      if (['double', 'percent', 'currency', 'int'].includes(t)) return '<span class="field-type-badge badge-num" title="Number/Numeric">NUM</span>';
+      if (t === 'date' || t === 'datetime') return '<span class="field-type-badge badge-dat" title="Date/Time">DAT</span>';
+      return `<span class="field-type-badge badge-txt" title="${esc(type)}">${t.slice(0, 3).toUpperCase()}</span>`;
+    }
+
+    function renderAdminAvailableFieldsList(availableFields) {
+      if (availableFields.length === 0) {
+        return `<div class="sidebar-empty">All fields are on the layout</div>`;
+      }
+      return availableFields.map(field => `
+        <div class="available-field-item" 
+             draggable="true" 
+             ondragstart="adminLayoutDragStartFromSidebar(event, '${field.name}')"
+             data-field-name="${field.name}"
+             data-field-label="${field.label}">
+          <div>
+            <div style="display:flex;align-items:center;margin-bottom:2px">
+              ${getFieldTypeBadge(field.type)}
+              <span class="field-item-label">${esc(field.label)}</span>
+            </div>
+            <span class="field-item-name" style="padding-left:32px">${esc(field.name)}</span>
+          </div>
+          <button class="btn btn-icon-only btn-ghost-link" onclick="adminAddFieldToSectionFromSidebar('${field.name}')" title="Add to Section">+</button>
+        </div>
+      `).join("");
+    }
+
+    function renderAdminEditorSection(section, sIdx) {
+      const cols = section.columns || 2;
+      const isCollapsed = adminCollapsedSections.has(sIdx);
+      return `
+        <div class="layout-edit-section ${isCollapsed ? 'collapsed' : ''}" data-section-index="${sIdx}">
+          <div class="layout-edit-section-header">
+            <div style="display:flex;align-items:center;flex:1">
+              <button class="section-chevron" onclick="adminToggleSectionCollapse(${sIdx})" title="${isCollapsed ? 'Expand' : 'Collapse'}">
+                <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="3">
+                  <path d="M6 9l6 6 6-6" />
+                </svg>
+              </button>
+              <input type="text" class="layout-edit-section-title-input" value="${esc(section.title)}" onchange="adminUpdateSectionTitle(${sIdx}, this.value)">
+            </div>
+            <div class="section-actions">
+              <select class="filter-select" onchange="adminChangeSectionLayout(${sIdx}, this.value)" style="padding:4px 8px;font-size:12px;height:auto">
+                <option value="2" ${cols === 2 ? 'selected' : ''}>2 Columns</option>
+                <option value="1" ${cols === 1 ? 'selected' : ''}>1 Column</option>
+              </select>
+              <button class="btn btn-icon-only" onclick="adminMoveSection(${sIdx}, -1)" ${sIdx === 0 ? 'disabled' : ''} title="Move Section Up">▲</button>
+              <button class="btn btn-icon-only" onclick="adminMoveSection(${sIdx}, 1)" ${sIdx === adminEditingLayoutData.length - 1 ? 'disabled' : ''} title="Move Section Down">▼</button>
+              <button class="btn btn-icon-only" onclick="adminDuplicateLayoutSection(${sIdx})" title="Duplicate Section">
+                <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.5">
+                  <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
+                  <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+                </svg>
+              </button>
+              <button class="btn btn-icon-only" style="color:var(--danger)" onclick="adminDeleteLayoutSection(${sIdx})" title="Delete Section">${adminUtilityIconSvg("trash")}</button>
+            </div>
+          </div>
+          ${cols === 1 
+            ? `
+            <div class="layout-edit-columns cols-1">
+              <div class="layout-edit-column" 
+                   data-column="left"
+                   ondragover="adminLayoutAllowDrop(event)"
+                   ondragenter="adminLayoutDragEnter(event)"
+                   ondragleave="adminLayoutDragLeave(event)"
+                   ondrop="adminLayoutDropOnColumn(event, ${sIdx}, 'left')"
+                   style="display: flex; flex-direction: column; gap: 8px; min-height: 80px; padding: 8px; border: 1px dashed transparent; border-radius: 6px; transition: all 0.2s;">
+                ${(section.leftFields || []).map((fieldEntry, fIdx) => renderAdminEditorField(fieldEntry, sIdx, 'left', fIdx)).join("")}
+                ${(section.leftFields || []).length === 0 ? '<div class="grid-empty-msg">Drag fields here or add from sidebar</div>' : ''}
+              </div>
+            </div>
+            ` 
+            : `
+            <div class="layout-edit-columns cols-2" style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
+              <div class="layout-edit-column" 
+                   data-column="left"
+                   ondragover="adminLayoutAllowDrop(event)"
+                   ondragenter="adminLayoutDragEnter(event)"
+                   ondragleave="adminLayoutDragLeave(event)"
+                   ondrop="adminLayoutDropOnColumn(event, ${sIdx}, 'left')"
+                   style="display: flex; flex-direction: column; gap: 8px; min-height: 80px; padding: 8px; border: 1px dashed transparent; border-radius: 6px; transition: all 0.2s;">
+                ${(section.leftFields || []).map((fieldEntry, fIdx) => renderAdminEditorField(fieldEntry, sIdx, 'left', fIdx)).join("")}
+                ${(section.leftFields || []).length === 0 ? '<div class="grid-empty-msg">Drag fields here</div>' : ''}
+              </div>
+              <div class="layout-edit-column" 
+                   data-column="right"
+                   ondragover="adminLayoutAllowDrop(event)"
+                   ondragenter="adminLayoutDragEnter(event)"
+                   ondragleave="adminLayoutDragLeave(event)"
+                   ondrop="adminLayoutDropOnColumn(event, ${sIdx}, 'right')"
+                   style="display: flex; flex-direction: column; gap: 8px; min-height: 80px; padding: 8px; border: 1px dashed transparent; border-radius: 6px; transition: all 0.2s;">
+                ${(section.rightFields || []).map((fieldEntry, fIdx) => renderAdminEditorField(fieldEntry, sIdx, 'right', fIdx)).join("")}
+                ${(section.rightFields || []).length === 0 ? '<div class="grid-empty-msg">Drag fields here</div>' : ''}
+              </div>
+            </div>
+            `
+          }
+        </div>
+      `;
+    }
+
+    function renderAdminEditorField(fieldEntry, sIdx, columnKey, fIdx) {
+      const name = typeof fieldEntry === "string" ? fieldEntry : fieldEntry.name;
+      const label = getFieldLabel(name);
+      const fields = ADMIN_FIELDS_CACHE[adminLayoutObjectName] || [];
+      const fieldMeta = fields.find(f => f.name === name) || {};
+      
+      const layoutRequired = typeof fieldEntry === "object" ? Boolean(fieldEntry.required) : false;
+      const layoutReadOnly = typeof fieldEntry === "object" ? Boolean(fieldEntry.readOnly) : false;
+      
+      const isRequired = layoutRequired || (fieldMeta.nillable === false && fieldMeta.type !== 'boolean');
+      const isReadOnly = layoutReadOnly || (fieldMeta.updateable === false && fieldMeta.createable === false);
+      const isDescribeReadOnly = fieldMeta.updateable === false && fieldMeta.createable === false;
+
+      let indicatorsHtml = '';
+      if (isRequired) {
+        indicatorsHtml += `<span class="indicator-required" title="Required">*</span>`;
+      }
+      if (isReadOnly) {
+        indicatorsHtml += `<span class="indicator-readonly" title="Read Only">🔒</span>`;
+      }
+
+      const isSettingsOpen = adminActiveFieldSettings && 
+                             adminActiveFieldSettings.sIdx === sIdx && 
+                             adminActiveFieldSettings.columnKey === columnKey && 
+                             adminActiveFieldSettings.fIdx === fIdx;
+
+      return `
+        <div class="layout-edit-field" 
+             draggable="true" 
+             ondragstart="adminLayoutDragStart(event, ${sIdx}, '${columnKey}', ${fIdx})"
+             ondragover="adminLayoutAllowDrop(event)"
+             ondragenter="adminLayoutFieldDragEnter(event)"
+             ondragleave="adminLayoutFieldDragLeave(event)"
+             ondrop="adminLayoutDropOnField(event, ${sIdx}, '${columnKey}', ${fIdx})"
+             data-field-name="${name}"
+             style="position:relative">
+          <span class="layout-field-drag-handle">${adminUtilityIconSvg("sort")}</span>
+          <div class="layout-field-info">
+            <div style="display:flex;align-items:center;gap:4px">
+              <span class="layout-field-label">${esc(label)}</span>
+              <div class="field-indicators">${indicatorsHtml}</div>
+            </div>
+            <span class="layout-field-name">${esc(name)}</span>
+          </div>
+          
+          <button class="layout-field-settings-btn" onclick="adminToggleFieldSettings(event, ${sIdx}, '${columnKey}', ${fIdx})" title="Properties">⚙️</button>
+          
+          ${isSettingsOpen ? `
+            <div class="field-settings-popover" onclick="event.stopPropagation()">
+              <div class="popover-header">Field Properties</div>
+              <label class="popover-row">
+                <input type="checkbox" id="prop-required" ${isRequired ? 'checked' : ''} ${fieldMeta.nillable === false ? 'disabled' : ''} onchange="adminUpdateFieldProperty(${sIdx}, '${columnKey}', ${fIdx}, 'required', this.checked)">
+                Required
+              </label>
+              <label class="popover-row">
+                <input type="checkbox" id="prop-readonly" ${isReadOnly ? 'checked' : ''} ${isDescribeReadOnly || isRequired ? 'disabled' : ''} onchange="adminUpdateFieldProperty(${sIdx}, '${columnKey}', ${fIdx}, 'readOnly', this.checked)">
+                Read-Only
+              </label>
+              <div class="popover-actions">
+                <button class="btn btn-primary btn-sm" onclick="adminCloseFieldSettings(event)" style="padding:2px 8px;font-size:11px;height:auto">Done</button>
+              </div>
+            </div>
+          ` : ''}
+          
+          <button class="layout-field-remove" onclick="adminRemoveFieldFromLayout(${sIdx}, '${columnKey}', ${fIdx})" title="Remove Field">&times;</button>
+        </div>
+      `;
+    }
+
+    function getFieldLabel(fieldName) {
+      const fields = ADMIN_FIELDS_CACHE[adminLayoutObjectName] || [];
+      const f = fields.find(field => field.name === fieldName);
+      return f ? f.label : fieldName.replace(/([A-Z])/g, ' $1').trim();
+    }
+
+    function adminLayoutDragStartFromSidebar(event, fieldName) {
+      event.dataTransfer.setData("text/plain", JSON.stringify({
+        source: "sidebar",
+        fieldName: fieldName
+      }));
+      event.dataTransfer.effectAllowed = "move";
+    }
+
+    function adminLayoutDragStart(event, sectionIdx, columnKey, fieldIdx) {
+      event.dataTransfer.setData("text/plain", JSON.stringify({
+        source: "canvas",
+        sectionIdx: sectionIdx,
+        columnKey: columnKey,
+        fieldIdx: fieldIdx
+      }));
+      event.dataTransfer.effectAllowed = "move";
+    }
+
+    function adminLayoutAllowDrop(event) {
+      event.preventDefault();
+    }
+
+    function adminLayoutDragEnter(event) {
+      event.preventDefault();
+      event.currentTarget.classList.add("drag-over");
+    }
+
+    function adminLayoutDragLeave(event) {
+      event.currentTarget.classList.remove("drag-over");
+    }
+
+    function adminLayoutFieldDragEnter(event) {
+      event.preventDefault();
+      event.stopPropagation();
+      event.currentTarget.classList.add("drag-over");
+    }
+
+    function adminLayoutFieldDragLeave(event) {
+      event.stopPropagation();
+      event.currentTarget.classList.remove("drag-over");
+    }
+
+    function adminLayoutDropOnColumn(event, targetSectionIdx, targetColumnKey) {
+      event.preventDefault();
+      event.stopPropagation();
+      document.querySelectorAll(".layout-edit-field, .layout-edit-column").forEach(el => el.classList.remove("drag-over"));
+      
+      const dataStr = event.dataTransfer.getData("text/plain");
+      if (!dataStr) return;
+
+      try {
+        const data = JSON.parse(dataStr);
+        const targetColArray = targetColumnKey === "left" ? "leftFields" : "rightFields";
+
+        if (data.source === "sidebar") {
+          const fieldName = data.fieldName;
+          if (!adminEditingLayoutData[targetSectionIdx][targetColArray]) {
+            adminEditingLayoutData[targetSectionIdx][targetColArray] = [];
+          }
+          adminEditingLayoutData[targetSectionIdx][targetColArray].push(fieldName);
+          adminReRenderLayoutEditor();
+        } else if (data.source === "canvas") {
+          const sourceSecIdx = data.sectionIdx;
+          const sourceColKey = data.columnKey;
+          const sourceFieldIdx = data.fieldIdx;
+          const sourceColArray = sourceColKey === "left" ? "leftFields" : "rightFields";
+
+          const fieldObj = adminEditingLayoutData[sourceSecIdx][sourceColArray][sourceFieldIdx];
+          adminEditingLayoutData[sourceSecIdx][sourceColArray].splice(sourceFieldIdx, 1);
+
+          if (!adminEditingLayoutData[targetSectionIdx][targetColArray]) {
+            adminEditingLayoutData[targetSectionIdx][targetColArray] = [];
+          }
+          adminEditingLayoutData[targetSectionIdx][targetColArray].push(fieldObj);
+          adminReRenderLayoutEditor();
+        }
+      } catch (e) {
+        console.error(e);
+      }
+    }
+
+    function adminLayoutDropOnField(event, targetSectionIdx, targetColumnKey, targetFieldIdx) {
+      event.preventDefault();
+      event.stopPropagation();
+      document.querySelectorAll(".layout-edit-field, .layout-edit-column").forEach(el => el.classList.remove("drag-over"));
+      
+      const dataStr = event.dataTransfer.getData("text/plain");
+      if (!dataStr) return;
+
+      try {
+        const data = JSON.parse(dataStr);
+        const targetColArray = targetColumnKey === "left" ? "leftFields" : "rightFields";
+
+        if (data.source === "sidebar") {
+          const fieldName = data.fieldName;
+          if (!adminEditingLayoutData[targetSectionIdx][targetColArray]) {
+            adminEditingLayoutData[targetSectionIdx][targetColArray] = [];
+          }
+          adminEditingLayoutData[targetSectionIdx][targetColArray].splice(targetFieldIdx, 0, fieldName);
+          adminReRenderLayoutEditor();
+        } else if (data.source === "canvas") {
+          const sourceSecIdx = data.sectionIdx;
+          const sourceColKey = data.columnKey;
+          const sourceFieldIdx = data.fieldIdx;
+          const sourceColArray = sourceColKey === "left" ? "leftFields" : "rightFields";
+
+          const fieldObj = adminEditingLayoutData[sourceSecIdx][sourceColArray][sourceFieldIdx];
+          adminEditingLayoutData[sourceSecIdx][sourceColArray].splice(sourceFieldIdx, 1);
+
+          let insertIdx = targetFieldIdx;
+          if (sourceSecIdx === targetSectionIdx && sourceColKey === targetColumnKey && sourceFieldIdx < targetFieldIdx) {
+            insertIdx = targetFieldIdx - 1;
+          }
+
+          if (!adminEditingLayoutData[targetSectionIdx][targetColArray]) {
+            adminEditingLayoutData[targetSectionIdx][targetColArray] = [];
+          }
+          adminEditingLayoutData[targetSectionIdx][targetColArray].splice(insertIdx, 0, fieldObj);
+          adminReRenderLayoutEditor();
+        }
+      } catch (e) {
+        console.error(e);
+      }
+    }
+
+    function adminRemoveFieldFromLayout(sIdx, colKey, fIdx) {
+      const colArray = colKey === 'left' ? 'leftFields' : 'rightFields';
+      adminEditingLayoutData[sIdx][colArray].splice(fIdx, 1);
+      adminReRenderLayoutEditor();
+    }
+
+    function adminAddFieldToSectionFromSidebar(fieldName) {
+      if (!adminEditingLayoutData.length) return;
+      const targetSec = adminEditingLayoutData[0];
+      targetSec.leftFields = targetSec.leftFields || [];
+      targetSec.leftFields.push(fieldName);
+      adminReRenderLayoutEditor();
+    }
+
+    function adminUpdateSectionTitle(sIdx, value) {
+      adminEditingLayoutData[sIdx].title = value;
+    }
+
+    function adminChangeSectionLayout(sIdx, value) {
+      adminEditingLayoutData[sIdx].columns = parseInt(value, 10);
+      adminReRenderLayoutEditor();
+    }
+
+    function adminMoveSection(sIdx, direction) {
+      const targetIdx = sIdx + direction;
+      if (targetIdx < 0 || targetIdx >= adminEditingLayoutData.length) return;
+      const temp = adminEditingLayoutData[sIdx];
+      adminEditingLayoutData[sIdx] = adminEditingLayoutData[targetIdx];
+      adminEditingLayoutData[targetIdx] = temp;
+      adminReRenderLayoutEditor();
+    }
+
+    function adminDeleteLayoutSection(sIdx) {
+      if (confirm('Delete this layout section? All fields inside will be returned to the available fields list.')) {
+        adminEditingLayoutData.splice(sIdx, 1);
+        adminReRenderLayoutEditor();
+      }
+    }
+
+    function adminAddNewLayoutSection() {
+      adminEditingLayoutData.push({
+        title: 'New Section',
+        columns: 2,
+        leftFields: [],
+        rightFields: []
+      });
+      adminReRenderLayoutEditor();
+    }
+
+    function adminToggleSectionCollapse(sIdx) {
+      if (adminCollapsedSections.has(sIdx)) {
+        adminCollapsedSections.delete(sIdx);
+      } else {
+        adminCollapsedSections.add(sIdx);
+      }
+      adminReRenderLayoutEditor();
+    }
+
+    function adminDuplicateLayoutSection(sIdx) {
+      const srcSec = adminEditingLayoutData[sIdx];
+      const clone = {
+        title: srcSec.title + " (Copy)",
+        columns: srcSec.columns || 2,
+        leftFields: (srcSec.leftFields || []).map(f => typeof f === 'string' ? f : { ...f }),
+        rightFields: (srcSec.rightFields || []).map(f => typeof f === 'string' ? f : { ...f })
+      };
+      adminEditingLayoutData.splice(sIdx + 1, 0, clone);
+      adminReRenderLayoutEditor();
+      toast('Section duplicated!', 'ok');
+    }
+
+    function adminToggleFieldSettings(event, sIdx, columnKey, fIdx) {
+      event.preventDefault();
+      event.stopPropagation();
+      if (adminActiveFieldSettings && adminActiveFieldSettings.sIdx === sIdx && adminActiveFieldSettings.columnKey === columnKey && adminActiveFieldSettings.fIdx === fIdx) {
+        adminActiveFieldSettings = null;
+      } else {
+        adminActiveFieldSettings = { sIdx, columnKey, fIdx };
+      }
+      adminReRenderLayoutEditor();
+    }
+
+    function adminCloseFieldSettings(event) {
+      if (event) {
+        event.preventDefault();
+        event.stopPropagation();
+      }
+      adminActiveFieldSettings = null;
+      adminReRenderLayoutEditor();
+    }
+
+    function adminUpdateFieldProperty(sIdx, columnKey, fIdx, prop, checked) {
+      const colArray = columnKey === "left" ? "leftFields" : "rightFields";
+      let fieldEntry = adminEditingLayoutData[sIdx][colArray][fIdx];
+      
+      // Convert to object if it was a string
+      if (typeof fieldEntry === "string") {
+        fieldEntry = { name: fieldEntry, required: false, readOnly: false };
+      }
+      
+      fieldEntry[prop] = checked;
+      
+      // Salesforce logic: Required and Read-Only are mutually exclusive
+      if (prop === 'required' && checked) {
+        fieldEntry.readOnly = false;
+        const roCb = document.getElementById('prop-readonly');
+        if (roCb) {
+          roCb.checked = false;
+          roCb.disabled = true;
+        }
+      } else if (prop === 'required' && !checked) {
+        const roCb = document.getElementById('prop-readonly');
+        if (roCb) {
+          roCb.disabled = false;
+        }
+      }
+      
+      if (prop === 'readOnly' && checked) {
+        fieldEntry.required = false;
+        const reqCb = document.getElementById('prop-required');
+        if (reqCb) {
+          reqCb.checked = false;
+          reqCb.disabled = true;
+        }
+      } else if (prop === 'readOnly' && !checked) {
+        const reqCb = document.getElementById('prop-required');
+        if (reqCb) {
+          const fields = ADMIN_FIELDS_CACHE[adminLayoutObjectName] || [];
+          const fieldMeta = fields.find(f => f.name === fieldEntry.name) || {};
+          if (fieldMeta.nillable === false) {
+            reqCb.disabled = true;
+          } else {
+            reqCb.disabled = false;
+          }
+        }
+      }
+
+      adminEditingLayoutData[sIdx][colArray][fIdx] = fieldEntry;
+    }
+
+    // Close settings popovers when clicking elsewhere
+    document.addEventListener('click', () => {
+      if (adminActiveFieldSettings) {
+        adminActiveFieldSettings = null;
+        adminReRenderLayoutEditor();
+      }
+    });
+
+    function adminReRenderLayoutEditor() {
+      const canvasScroll = $("canvasSections") ? $("canvasSections").scrollTop : 0;
+      const sidebarScroll = $("availableFieldsList") ? $("availableFieldsList").scrollTop : 0;
+      const pane = $('omDetailContentPane');
+      
+      const fields = ADMIN_FIELDS_CACHE[adminLayoutObjectName] || [];
+      pane.innerHTML = renderAdminLayoutEditorBodyHtml(adminLayoutObjectName, fields);
+
+      const canvasEl = $("canvasSections");
+      const sidebarEl = $("availableFieldsList");
+      if (canvasEl) canvasEl.scrollTop = canvasScroll;
+      if (sidebarEl) sidebarEl.scrollTop = sidebarScroll;
+
+      setTimeout(() => {
+        const cEl = $("canvasSections");
+        const sEl = $("availableFieldsList");
+        if (cEl) cEl.scrollTop = canvasScroll;
+        if (sEl) sEl.scrollTop = sidebarScroll;
+      }, 0);
+
+      setupAdminAvailableFieldsFilter();
+    }
+
+    function setupAdminAvailableFieldsFilter() {
+      const searchInput = $("layoutFieldSearch");
+      if (!searchInput) return;
+
+      searchInput.value = adminLayoutFieldSearchQuery || "";
+      const applyFilter = (query) => {
+        const q = query.toLowerCase().trim();
+        document.querySelectorAll("#availableFieldsList .available-field-item").forEach(item => {
+          const name = item.dataset.fieldName.toLowerCase();
+          const label = item.dataset.fieldLabel.toLowerCase();
+          if (name.includes(q) || label.includes(q)) {
+            item.style.display = "flex";
+          } else {
+            item.style.display = "none";
+          }
+        });
+      };
+
+      applyFilter(adminLayoutFieldSearchQuery);
+      searchInput.addEventListener("input", (e) => {
+        adminLayoutFieldSearchQuery = e.target.value;
+        applyFilter(adminLayoutFieldSearchQuery);
+      });
+    }
+
+    async function adminSaveCustomLayout() {
+      try {
+        const res = await api(`/api/portal/layouts/${adminLayoutObjectName}`, {
+          method: 'POST',
+          body: JSON.stringify({ layout: adminEditingLayoutData })
+        });
+        if (res && res.success) {
+          ADMIN_DB_LAYOUT_CACHE[adminLayoutObjectName] = adminEditingLayoutData;
+          toast('Layout saved successfully!', 'ok');
+          showObjectDetailTab(adminLayoutObjectName, 'page-layouts');
+        } else {
+          toast('Failed to save layout', 'err');
+        }
+      } catch (err) {
+        console.error(err);
+        toast('Error saving layout', 'err');
+      }
+    }
+
+    async function adminResetCustomLayoutToDefault() {
+      if (confirm('Are you sure you want to reset layout to standard Salesforce default?')) {
+        try {
+          const res = await api(`/api/portal/layouts/${adminLayoutObjectName}`, {
+            method: 'DELETE'
+          });
+          if (res && res.success) {
+            delete ADMIN_DB_LAYOUT_CACHE[adminLayoutObjectName];
+            toast('Layout reset to default', 'ok');
+            showObjectDetailTab(adminLayoutObjectName, 'page-layouts');
+          } else {
+            toast('Failed to reset layout', 'err');
+          }
+        } catch (err) {
+          console.error(err);
+          toast('Error resetting layout', 'err');
+        }
+      }
+    }
+
+    // ── RELOCATED COMPACT LAYOUT EDITOR ──────────────────
+    let adminCompactLayoutDraft = [];
+    let adminCompactObjectName = '';
+
+    async function startEditingCompactLayout(objectName) {
+      adminCompactObjectName = objectName;
+      const pane = $('omDetailContentPane');
+      pane.innerHTML = '<div class="spinner" style="margin:40px auto"></div>';
+
+      try {
+        let fields = ADMIN_FIELDS_CACHE[objectName];
+        if (!fields) {
+          const fieldsRes = await fetchMetadata(`/api/${objectName}/fields`);
+          fields = fieldsRes.fields || [];
+          ADMIN_FIELDS_CACHE[objectName] = fields;
+        }
+
+        let customFields = [];
+        try {
+          const dbRes = await api(`/api/portal/compact-layouts/${objectName}`);
+          customFields = dbRes.fields || [];
+          ADMIN_COMPACT_LAYOUT_CACHE[objectName] = customFields;
+        } catch (e) {
+          console.warn(e);
+        }
+
+        if (customFields.length === 0) {
+          // Standard defaults fallback: first 4 fields
+          customFields = fields.slice(0, 4).map(f => f.name);
+        }
+
+        adminCompactLayoutDraft = [...customFields];
+        pane.innerHTML = renderAdminCompactEditorHtml(objectName, fields);
+        adminSetupCompactFieldsSearch();
+      } catch (e) {
+        pane.innerHTML = `<div style="color:var(--danger);padding:20px;text-align:center">${esc(e.message)}</div>`;
+      }
+    }
+
+    function renderAdminCompactEditorHtml(objectName, fields) {
+      return `
+        <div class="layout-editor-container" style="display:flex;gap:20px;height:450px;box-shadow:none;border:1px solid var(--border);border-radius:var(--radius-lg)">
+          <div style="flex:1;display:flex;flex-direction:column;border-right:1px solid var(--border);padding-right:20px;height:100%">
+            <h4 style="font-size:13px;font-weight:600;margin-bottom:12px;color:var(--text-primary)">Selected Fields</h4>
+            <div id="compactSelectedFields" style="flex:1;overflow-y:auto">
+              ${renderAdminCompactSelectedFieldsHtml()}
+            </div>
+          </div>
+          <div style="flex:1;display:flex;flex-direction:column;height:100%">
+            <h4 style="font-size:13px;font-weight:600;margin-bottom:8px;color:var(--text-primary)">Available Fields</h4>
+            <input type="text" id="compactFieldSearch" placeholder="Search fields..." class="layout-search-input" style="margin-bottom:12px;font-size:12px;padding:6px 10px">
+            <div id="compactAvailableFields" style="flex:1;overflow-y:auto">
+              ${renderAdminCompactAvailableFieldsHtml(objectName, fields)}
+            </div>
+          </div>
+        </div>
+        <div style="display:flex;justify-content:flex-end;gap:10px;margin-top:16px">
+          <button class="btn btn-primary" onclick="adminSaveCompactLayout()">Save Compact Layout</button>
+          <button class="btn btn-ghost" onclick="showObjectDetailTab('${objectName}', 'compact-layouts')">Cancel</button>
+          <button class="btn btn-ghost" style="color:var(--danger)" onclick="adminResetCompactLayoutToDefault()">Reset to Default</button>
+        </div>
+      `;
+    }
+
+    function renderAdminCompactSelectedFieldsHtml() {
+      if (adminCompactLayoutDraft.length === 0) {
+        return `<div style="text-align:center;color:var(--text-muted);font-size:12px;padding:20px">No fields selected</div>`;
+      }
+      return adminCompactLayoutDraft.map((field, idx) => `
+        <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 10px;background:var(--surface-2);border:1px solid var(--border);border-radius:var(--radius);margin-bottom:6px;font-size:12.5px">
+          <div style="display:flex;align-items:center;gap:6px">
+            <div style="display:flex;flex-direction:column;gap:2px">
+              <button style="border:none;background:none;font-size:10px;cursor:pointer;line-height:1;padding:0;color:var(--text-secondary)" onclick="adminMoveCompactField(${idx}, -1)" ${idx === 0 ? 'disabled' : ''}>▲</button>
+              <button style="border:none;background:none;font-size:10px;cursor:pointer;line-height:1;padding:0;color:var(--text-secondary)" onclick="adminMoveCompactField(${idx}, 1)" ${idx === adminCompactLayoutDraft.length - 1 ? 'disabled' : ''}>▼</button>
+            </div>
+            <span style="font-weight:600;color:var(--text-primary)">${esc(getFieldLabel(field))}</span>
+          </div>
+          <button style="border:none;background:none;color:var(--danger);cursor:pointer;font-size:16px;padding:0 4px" onclick="adminRemoveCompactField(${idx})">&times;</button>
+        </div>
+      `).join("");
+    }
+
+    function renderAdminCompactAvailableFieldsHtml(objectName, fields) {
+      const selectedSet = new Set(adminCompactLayoutDraft);
+      const available = fields.filter(f => !selectedSet.has(f.name));
+
+      if (available.length === 0) {
+        return `<div style="text-align:center;color:var(--text-muted);font-size:12px;padding:20px">All fields added</div>`;
+      }
+
+      return available.map(field => `
+        <div class="compact-available-item" 
+             style="display:flex;align-items:center;justify-content:space-between;padding:6px 8px;background:var(--surface-2);border:1px solid var(--border);border-radius:var(--radius);margin-bottom:6px;font-size:12px"
+             data-name="${field.name.toLowerCase()}"
+             data-label="${field.label.toLowerCase()}">
+          <div style="display:flex;flex-direction:column">
+            <span style="font-weight:500;color:var(--text-primary)">${esc(field.label)}</span>
+            <span style="font-size:10px;color:var(--text-muted)">${esc(field.name)}</span>
+          </div>
+          <button class="btn btn-icon-only btn-ghost-link btn-sm" onclick="adminAddCompactField('${field.name}')" title="Add Field">+</button>
+        </div>
+      `).join("");
+    }
+
+    function adminMoveCompactField(idx, direction) {
+      const targetIdx = idx + direction;
+      if (targetIdx < 0 || targetIdx >= adminCompactLayoutDraft.length) return;
+      const temp = adminCompactLayoutDraft[idx];
+      adminCompactLayoutDraft[idx] = adminCompactLayoutDraft[targetIdx];
+      adminCompactLayoutDraft[targetIdx] = temp;
+      adminReRenderCompactModal();
+    }
+
+    function adminRemoveCompactField(idx) {
+      adminCompactLayoutDraft.splice(idx, 1);
+      adminReRenderCompactModal();
+    }
+
+    function adminAddCompactField(fieldName) {
+      adminCompactLayoutDraft.push(fieldName);
+      adminReRenderCompactModal();
+    }
+
+    function adminReRenderCompactModal() {
+      const selectedContainer = $("compactSelectedFields");
+      const availableContainer = $("compactAvailableFields");
+      const fields = ADMIN_FIELDS_CACHE[adminCompactObjectName] || [];
+      if (selectedContainer) selectedContainer.innerHTML = renderAdminCompactSelectedFieldsHtml();
+      if (availableContainer) availableContainer.innerHTML = renderAdminCompactAvailableFieldsHtml(adminCompactObjectName, fields);
+      adminSetupCompactFieldsSearch();
+    }
+
+    function adminSetupCompactFieldsSearch() {
+      const searchInput = $("compactFieldSearch");
+      if (!searchInput) return;
+      searchInput.addEventListener("input", (e) => {
+        const q = e.target.value.toLowerCase().trim();
+        document.querySelectorAll("#compactAvailableFields .compact-available-item").forEach(item => {
+          const name = item.dataset.name;
+          const label = item.dataset.label;
+          if (name.includes(q) || label.includes(q)) {
+            item.style.display = "flex";
+          } else {
+            item.style.display = "none";
+          }
+        });
+      });
+    }
+
+    async function adminSaveCompactLayout() {
+      try {
+        const res = await api(`/api/portal/compact-layouts/${adminCompactObjectName}`, {
+          method: 'POST',
+          body: JSON.stringify({ fields: adminCompactLayoutDraft })
+        });
+        if (res && res.success) {
+          ADMIN_COMPACT_LAYOUT_CACHE[adminCompactObjectName] = adminCompactLayoutDraft;
+          toast('Compact layout saved successfully!', 'ok');
+          showObjectDetailTab(adminCompactObjectName, 'compact-layouts');
+        } else {
+          toast('Failed to save compact layout', 'err');
+        }
+      } catch (err) {
+        console.error(err);
+        toast('Error saving compact layout', 'err');
+      }
+    }
+
+    async function adminResetCompactLayoutToDefault() {
+      if (confirm('Reset compact layout to default?')) {
+        try {
+          const res = await api(`/api/portal/compact-layouts/${adminCompactObjectName}`, {
+            method: 'DELETE'
+          });
+          if (res && res.success) {
+            delete ADMIN_COMPACT_LAYOUT_CACHE[adminCompactObjectName];
+            toast('Compact layout reset to default', 'ok');
+            showObjectDetailTab(adminCompactObjectName, 'compact-layouts');
+          } else {
+            toast('Failed to reset compact layout', 'err');
+          }
+        } catch (err) {
+          console.error(err);
+          toast('Error resetting compact layout', 'err');
+        }
+      }
+    }
+
+    // ── LIGHTNING RECORD PAGE BUILDER ──────────────────
+    let adminRecordPageDraft = null;
+    let adminRecordPageObjectName = '';
+    let adminRecordPageSelectedComponent = null;
+    let adminRecordPagePreviewMode = false;
+    let adminRecordPageOriginalJson = '';
+    let adminPageLayoutSections = [];
+    let adminCompactLayoutFields = [];
+    let adminObjectChildRelationships = [];
+    let adminActiveRelatedListConfigKey = '';
+    let childObjectFieldsCache = {};
+
+    async function loadChildObjectFields(childObjectName) {
+      if (childObjectFieldsCache[childObjectName]) return childObjectFieldsCache[childObjectName];
+      try {
+        const res = await fetchMetadata(`/api/${childObjectName}/fields`);
+        childObjectFieldsCache[childObjectName] = res.fields || [];
+        return childObjectFieldsCache[childObjectName];
+      } catch (e) {
+        console.error('Error fetching child fields:', e);
+        return [];
+      }
+    }
+
+    function checkAdminRecordPageHasChanges() {
+      if (!adminRecordPageOriginalJson) return false;
+      return JSON.stringify(adminRecordPageDraft) !== adminRecordPageOriginalJson;
+    }
+
+    window.addEventListener('beforeunload', (e) => {
+      if (typeof checkAdminRecordPageHasChanges === 'function' && checkAdminRecordPageHasChanges()) {
+        e.preventDefault();
+        e.returnValue = 'You have unsaved changes in the Record Page Builder. Are you sure you want to leave?';
+        return e.returnValue;
+      }
+    });
+
+    const ADMIN_RECORD_PAGE_COMPONENTS = [
+      { name: 'compact-layout', label: 'Compact Layout', desc: 'Highlights panel displaying key fields.' },
+      { name: 'details', label: 'Details', desc: 'Object record fields and sections.' },
+      { name: 'related-lists', label: 'Related Lists', desc: 'Related record tables.' },
+      { name: 'activity', label: 'Activity', desc: 'Activity timeline and tasks.' },
+      { name: 'chatter', label: 'Chatter', desc: 'Collaborative feed and posts.' },
+      { name: 'related-list-single', label: 'Related List (Single)', desc: 'A single, configurable related list for a child object.' }
+    ];
+
+    async function startEditingRecordPage(objectName) {
+      adminRecordPageObjectName = objectName;
+      adminRecordPagePreviewMode = false;
+      adminRecordPageSelectedComponent = null;
+      adminActiveRelatedListConfigKey = '';
+      const pane = $('panel-lightning-builder');
+      pane.innerHTML = '<div class="spinner" style="margin:40px auto"></div>';
+
+      try {
+        const [fieldsRes, layoutRes, compactRes, pageRes, relsRes] = await Promise.all([
+          ADMIN_FIELDS_CACHE[objectName] ? Promise.resolve({ fields: ADMIN_FIELDS_CACHE[objectName] }) : fetchMetadata(`/api/${objectName}/fields`),
+          api(`/api/portal/layouts/${objectName}`).catch(() => ({ layout: null })),
+          api(`/api/portal/compact-layouts/${objectName}`).catch(() => ({ fields: null })),
+          api(`/api/portal/record-pages/${objectName}`).catch(() => ({ layout: null })),
+          api(`/api/${objectName}/child-relationships`).catch(() => ({ relationships: [] }))
+        ]);
+
+        const fields = fieldsRes.fields || [];
+        ADMIN_FIELDS_CACHE[objectName] = fields;
+        
+        adminPageLayoutSections = layoutRes.layout || [];
+        adminCompactLayoutFields = compactRes.fields || [];
+        adminObjectChildRelationships = relsRes.relationships || [];
+
+        let rawPage = pageRes.layout || null;
+
+        if (!rawPage) {
+          rawPage = {
+            layout: 'header-two-column-bottom',
+            regions: {
+              header: ['compact-layout'],
+              left: ['details'],
+              right: ['activity', 'chatter'],
+              bottom: ['related-lists']
+            }
+          };
+        }
+
+        adminRecordPageDraft = {
+          layout: rawPage.layout || 'header-two-column-bottom',
+          regions: {}
+        };
+
+        const defaultRegions = ['header', 'left', 'right', 'bottom', 'main'];
+        defaultRegions.forEach(r => {
+          const rawComps = rawPage.regions?.[r] || [];
+          adminRecordPageDraft.regions[r] = rawComps.map(c => {
+            const resolved = typeof c === 'string' ? { name: c, title: '', collapsed: false, visible: true } : {
+              name: c.name,
+              title: c.title || '',
+              collapsed: !!c.collapsed,
+              visible: c.visible !== false,
+              relatedLists: c.relatedLists || null,
+              config: c.config || null
+            };
+            
+            if (resolved.name === 'related-lists' && !resolved.relatedLists) {
+              resolved.relatedLists = adminObjectChildRelationships.map(rel => {
+                const standardFields = {
+                  Contact: ["Name", "Title", "Email", "Phone"],
+                  Opportunity: ["Name", "StageName", "Amount", "CloseDate"],
+                  Case: ["CaseNumber", "Subject", "Status", "Priority"],
+                  Quote: ["Name", "QuoteNumber", "Status", "GrandTotal"],
+                  Product2: ["Name", "ProductCode", "Family", "IsActive"],
+                  OpportunityLineItem: ["Product2.Name", "Quantity", "UnitPrice", "TotalPrice"],
+                  QuoteLineItem: ["LineNumber", "Product2.Name", "Quantity", "TotalPrice"]
+                }[rel.childSObject] || ["Name"];
+                
+                return {
+                  key: rel.relationshipName.toLowerCase(),
+                  objectName: rel.childSObject,
+                  relationshipName: rel.relationshipName,
+                  field: rel.field,
+                  title: rel.relationshipName,
+                  enabled: ["Contacts", "Opportunities", "Cases", "Quotes", "Products", "OpportunityLineItems", "QuoteLineItems"].includes(rel.relationshipName),
+                  fields: standardFields,
+                  limit: 5,
+                  sortBy: 'CreatedDate',
+                  sortDir: 'DESC',
+                  showNew: true,
+                  showViewAll: true,
+                  showEdit: true,
+                  showDelete: true
+                };
+              });
+            }
+            return resolved;
+          });
+        });
+
+        adminRecordPageOriginalJson = JSON.stringify(adminRecordPageDraft);
+
+        const childObjectsToLoad = new Set();
+        defaultRegions.forEach(r => {
+          const comps = adminRecordPageDraft.regions[r] || [];
+          comps.forEach(c => {
+            if (c && c.name === 'related-list-single' && c.config && c.config.childObject) {
+              childObjectsToLoad.add(c.config.childObject);
+            }
+          });
+        });
+
+        if (childObjectsToLoad.size > 0) {
+          Promise.all(Array.from(childObjectsToLoad).map(obj => loadChildObjectFields(obj))).then(() => {
+            renderRecordPageBuilder();
+          }).catch(err => {
+            console.error('Error preloading child fields:', err);
+            renderRecordPageBuilder();
+          });
+        } else {
+          renderRecordPageBuilder();
+        }
+      } catch (e) {
+        pane.innerHTML = `<div style="color:var(--danger);padding:20px;text-align:center">${esc(e.message)}</div>`;
+      }
+    }
+
+    function getSimulatedFieldValue(field) {
+      const name = field.name;
+      const type = field.type;
+      if (type === 'phone' || name.toLowerCase().includes('phone')) return '(555) 123-4567';
+      if (type === 'email' || name.toLowerCase().includes('email')) return 'info@company.com';
+      if (type === 'url' || name.toLowerCase().includes('website')) return 'https://www.company.com';
+      if (type === 'currency' || name === 'Amount' || name === 'AnnualRevenue') return '$10,000,000';
+      if (type === 'percent' || name.toLowerCase().includes('percent') || name === 'Probability') return '60%';
+      if (type === 'date' || type === 'datetime') return '2026-06-27';
+      if (type === 'boolean') return 'True';
+      if (name === 'Industry') return 'Technology';
+      if (name === 'Rating') return 'Hot';
+      if (name === 'Status' || name === 'StageName') return 'In Progress';
+      if (name === 'Type') return 'Customer - Direct';
+      return `[Sample ${field.label}]`;
+    }
+
+    function getAdminRelatedListConfigs(objectName) {
+      const allConfigs = {
+        Account: [
+          { key: "contacts", objectName: "Contact", title: "Contacts", fields: ["Name", "Title", "Email", "Phone"] },
+          { key: "opportunities", objectName: "Opportunity", title: "Opportunities", fields: ["Name", "StageName", "Amount", "CloseDate"] },
+          { key: "cases", objectName: "Case", title: "Cases", fields: ["CaseNumber", "Subject", "Status", "Priority"] },
+          { key: "quotes", objectName: "Quote", title: "Quotes", fields: ["Name", "QuoteNumber", "Status", "GrandTotal"] }
+        ],
+        Contact: [
+          { key: "cases", objectName: "Case", title: "Cases", fields: ["CaseNumber", "Subject", "Status", "Priority"] }
+        ],
+        Lead: [],
+        Opportunity: [
+          { key: "quotes", objectName: "Quote", title: "Quotes", fields: ["Name", "QuoteNumber", "Status", "GrandTotal"] },
+          { key: "opportunityProducts", objectName: "OpportunityLineItem", title: "Products", fields: ["Product2.Name", "Quantity", "UnitPrice", "TotalPrice", "ServiceDate"] }
+        ],
+        Quote: [
+          { key: "quoteLineItems", objectName: "QuoteLineItem", title: "Quote Line Items", fields: ["LineNumber", "Product2.Name", "Quantity", "UnitPrice", "TotalPrice"] }
+        ],
+        Case: [],
+        Campaign: [
+          { key: "campaignmembers", objectName: "CampaignMember", title: "Campaign Members", fields: ["Name", "Email", "Phone", "Status"] }
+        ],
+        User: []
+      };
+      return allConfigs[objectName] || [];
+    }
+
+    function renderLiveComponentBody(cName, objectName, compData = {}) {
+      const fieldsMeta = ADMIN_FIELDS_CACHE[objectName] || [];
+      
+      if (cName === 'compact-layout') {
+        const standardCompactFields = {
+          Account: ["Type", "Industry", "Phone", "BillingCity"],
+          Contact: ["Title", "Email", "Phone", "AccountId"],
+          Lead: ["Company", "Status", "Email", "Phone"],
+          Opportunity: ["StageName", "Amount", "CloseDate", "Probability"],
+          Case: ["Status", "Priority", "Type", "CreatedDate"],
+          Campaign: ["Type", "Status", "StartDate", "EndDate"],
+          Quote: ["QuoteNumber", "Status", "ExpirationDate", "GrandTotal"],
+          Product2: ["ProductCode", "Family", "IsActive"],
+          OpportunityLineItem: ["Opportunity.Name", "Product2.Name", "Quantity", "TotalPrice"],
+          QuoteLineItem: ["Quote.Name", "Product2.Name", "Quantity", "TotalPrice"],
+          User: ["Email", "Username", "Title"]
+        }[objectName] || [];
+
+        const fieldsList = adminCompactLayoutFields && adminCompactLayoutFields.length > 0 ? adminCompactLayoutFields : standardCompactFields;
+        const resolvedFields = fieldsList.map(name => fieldsMeta.find(f => f.name === name)).filter(Boolean);
+
+        return `
+          <div style="background: var(--surface); border: 1px solid var(--border); border-radius: 6px; box-shadow: var(--shadow-sm); padding: 16px 20px; display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 16px;">
+            ${resolvedFields.map(f => `
+              <div style="display: flex; flex-direction: column; min-width: 0; padding-right: 16px;">
+                <span style="font-size: 11px; text-transform: uppercase; color: var(--text-secondary); font-weight: 700; letter-spacing: 0.05em; margin-bottom: 6px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${esc(f.label)}</span>
+                <strong style="font-size: 13px; color: var(--text-primary); font-weight: 600; line-height: 1.4; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${esc(getSimulatedFieldValue(f))}</strong>
+              </div>
+            `).join('')}
+            ${resolvedFields.length === 0 ? `<div style="color: var(--text-secondary); font-style: italic; font-size: 12px;">No compact layout fields configured</div>` : ''}
+          </div>
+        `;
+      } else if (cName === 'details') {
+        let sections = adminPageLayoutSections || [];
+        if (sections.length === 0) {
+          sections = [{
+            title: 'Information',
+            columns: 2,
+            leftFields: fieldsMeta.slice(0, 5).map(f => f.name),
+            rightFields: fieldsMeta.slice(5, 10).map(f => f.name)
+          }];
+        }
+
+        const normalizedSections = normalizeAdminLayoutData(sections);
+
+        return normalizedSections.map(section => {
+          const renderFieldCell = (fieldName) => {
+            if (!fieldName) return '<div style="flex:1;"></div>';
+            const fName = typeof fieldName === 'string' ? fieldName : fieldName.name;
+            const fMeta = fieldsMeta.find(f => f.name === fName);
+            if (!fMeta) return '<div style="flex:1;"></div>';
+            
+            const isRequired = typeof fieldName === 'object' ? !!fieldName.required : false;
+            const isReadOnly = typeof fieldName === 'object' ? !!fieldName.readOnly : false;
+            
+            return `
+              <div style="border: 1px solid var(--border); border-radius: 4px; padding: 10px 12px; background: var(--surface-2); min-width: 0; display: flex; flex-direction: column;">
+                <span style="font-size: 11px; font-weight: 700; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.4px; margin-bottom: 5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+                  ${isRequired ? '<span style="color:var(--danger);margin-right:2px;">*</span>' : ''}
+                  ${esc(fMeta.label)}
+                  ${isReadOnly ? ' 🔒' : ''}
+                </span>
+                <span style="font-size: 13.5px; color: var(--text-primary); font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+                  ${esc(getSimulatedFieldValue(fMeta))}
+                </span>
+              </div>
+            `;
+          };
+
+          return `
+            <div style="margin-bottom: 16px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); overflow: hidden; box-shadow: var(--shadow-sm);">
+              <div style="padding: 12px 16px; background: var(--surface-2); border-bottom: 1px solid var(--border); font-size: 12px; font-weight: 700; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.5px; display: flex; align-items: center; gap: 6px;">
+                <span style="display: inline-flex; fill: currentColor; width: 12px; height: 12px;">${adminUtilityIconSvg("chevronDown")}</span>
+                <span>${esc(section.title)}</span>
+              </div>
+              <div style="padding: 16px;">
+                ${section.columns === 1 
+                  ? `<div style="display: grid; grid-template-columns: 1fr; gap: 12px;">
+                       ${(section.leftFields || []).map(f => renderFieldCell(f)).join('')}
+                     </div>`
+                  : `<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
+                       <div style="display: flex; flex-direction: column; gap: 12px;">
+                         ${(section.leftFields || []).map(f => renderFieldCell(f)).join('')}
+                       </div>
+                       <div style="display: flex; flex-direction: column; gap: 12px;">
+                         ${(section.rightFields || []).map(f => renderFieldCell(f)).join('')}
+                       </div>
+                     </div>`
+                }
+              </div>
+            </div>
+          `;
+        }).join('');
+      } else if (cName === 'related-lists') {
+        const configs = (compData.relatedLists || []).filter(c => c.enabled);
+        if (configs.length === 0) {
+          return `
+            <div style="border: 1px solid var(--border); border-radius: 6px; padding: 24px; text-align: center; color: var(--text-muted); background: var(--surface);">
+              <h3 style="font-size: 14px; font-weight: 600;">No related lists enabled</h3>
+              <p style="font-size: 12px; margin-top: 4px;">Configure and enable related lists in the right sidebar properties.</p>
+            </div>
+          `;
+        }
+        
+        return configs.map(config => {
+          const showNew = config.showNew !== false;
+          const showViewAll = config.showViewAll !== false;
+          return `
+            <div style="background: var(--surface); border: 1px solid var(--border); border-radius: 6px; box-shadow: var(--shadow-sm); overflow: hidden; margin-bottom: 16px;">
+              <div style="padding: 12px 16px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; background: var(--surface-2);">
+                <h3 style="margin: 0; font-size: 13px; font-weight: 700; color: var(--text-primary); text-transform: uppercase; letter-spacing: 0.5px;">${esc(config.title || config.relationshipName)} (2)</h3>
+                ${showNew ? `<button class="btn btn-ghost btn-sm" disabled style="padding: 4px 8px; font-size: 11px; opacity: 0.6;">New</button>` : ''}
+              </div>
+              <div style="overflow-x: auto; padding: 8px 16px;">
+                <table style="width: 100%; border-collapse: collapse; font-size: 13px; text-align: left;">
+                  <thead>
+                    <tr style="border-bottom: 1px solid var(--border); color: var(--text-secondary);">
+                      ${(config.fields || ['Name']).map(f => `<th style="padding: 6px 8px; font-size: 11px; text-transform: uppercase;">${esc(f)}</th>`).join('')}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr style="border-bottom: 1px solid var(--border);">
+                      ${(config.fields || ['Name']).map((f, i) => `<td style="padding: 8px; color: ${i === 0 ? 'var(--accent)' : 'var(--text-primary)'}; font-weight: ${i === 0 ? '600' : 'normal'};">${i === 0 ? `[Sample ${f} 1]` : `[Sample ${f}]`}</td>`).join('')}
+                    </tr>
+                    <tr>
+                      ${(config.fields || ['Name']).map((f, i) => `<td style="padding: 8px; color: ${i === 0 ? 'var(--accent)' : 'var(--text-primary)'}; font-weight: ${i === 0 ? '600' : 'normal'};">${i === 0 ? `[Sample ${f} 2]` : `[Sample ${f}]`}</td>`).join('')}
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+              ${showViewAll ? `
+                <div style="padding: 8px 16px; border-top: 1px solid var(--border); text-align: center; font-size: 11px; font-weight: 600;">
+                  <a href="#" onclick="event.preventDefault()" style="color: var(--accent); text-decoration: none;">View All</a>
+                </div>
+              ` : ''}
+            </div>
+          `;
+        }).join('');
+      } else if (cName === 'related-list-single') {
+        const config = compData.config || {};
+        if (!config.childObject || !config.relationshipName) {
+          return `
+            <div style="border: 1px solid var(--border); border-radius: 6px; padding: 24px; text-align: center; color: var(--text-muted); background: var(--surface);">
+              <h3 style="font-size: 14px; font-weight: 600;">Related List - Single</h3>
+              <p style="font-size: 12px; margin-top: 4px;">Configure this widget in the right sidebar properties.</p>
+            </div>
+          `;
+        }
+
+        const showNew = config.showNew !== false;
+        const showViewAll = config.showViewAll !== false;
+        const fields = config.fields || ['Name'];
+        
+        const detailFields = fields.filter(f => f !== 'Name' && f !== 'CaseNumber' && f !== 'Id');
+        const showViewAllLink = showViewAll;
+        
+        const previewItemsHtml = [1, 2].map(num => {
+          const primaryLabel = fields.includes('CaseNumber') ? 'CaseNumber' : 'Name';
+          const primaryVal = `[Sample ${primaryLabel} ${num}]`;
+          
+          const fieldsHtml = detailFields.map(f => {
+            return `
+              <div style="display: grid; grid-template-columns: 80px 1fr; gap: 8px; margin-bottom: 4px; font-size: 12px; line-height: 1.4;">
+                <span style="color: var(--text-secondary); font-weight: 500;">${esc(f)}:</span>
+                <span style="color: var(--text-primary); font-weight: 400; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">[Sample ${esc(f)}]</span>
+              </div>
+            `;
+          }).join('');
+
+          const iconChild = config.childObject || 'Contact';
+
+          return `
+            <div class="related-card-item" style="padding: 12px 16px; border-bottom: 1px solid var(--border);">
+              <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px;">
+                <div style="display: flex; align-items: center; gap: 8px;">
+                  <div style="transform: scale(0.7); transform-origin: center; display: inline-flex; width: 24px; height: 24px; align-items: center; justify-content: center;">
+                    <span class="object-icon object-icon-${iconChild.toLowerCase()}" aria-hidden="true">
+                      ${iconChild.toLowerCase() === 'contact' ? '<svg viewBox="0 0 24 24"><path d="M12 12.2a3.9 3.9 0 100-7.8 3.9 3.9 0 000 7.8zM5 20a7 7 0 0114 0H5zm3.4-6.8a6.7 6.7 0 007.2 0 8.9 8.9 0 00-7.2 0z"/></svg>' : '<svg viewBox="0 0 24 24"><path d="M5 20V8.2L12 5l7 3.2V20h-5v-5h-4v5H5zm2-2h2v-3H7v3zm0-5h2v-2H7v2zm4 0h2v-2h-2v2zm4 0h2v-2h-2v2zm0 5h2v-3h-2v3zM8.3 9h7.4L12 7.3 8.3 9z"/></svg>'}
+                    </span>
+                  </div>
+                  <span style="color: var(--accent); font-size: 13px; font-weight: 600; cursor: pointer;">
+                    ${esc(primaryVal)}
+                  </span>
+                </div>
+                <button class="btn btn-icon-only btn-ghost-link" disabled style="padding: 2px; font-size: 12px; color: var(--text-muted); opacity: 0.5;">
+                  ▼
+                </button>
+              </div>
+              <div style="padding-left: 32px;">
+                ${fieldsHtml}
+              </div>
+            </div>
+          `;
+        }).join('');
+
+        return `
+          <div style="background: var(--surface); border: 1px solid var(--border); border-radius: 6px; box-shadow: var(--shadow-sm); overflow: hidden; margin-bottom: 16px;">
+            <div style="padding: 12px 16px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; background: var(--surface-2);">
+              <h3 style="margin: 0; font-size: 13px; font-weight: 700; color: var(--text-primary); text-transform: uppercase; letter-spacing: 0.5px;">${esc(config.title || config.relationshipName)} (2)</h3>
+              ${showNew ? `<button class="btn btn-ghost btn-sm" disabled style="padding: 4px 8px; font-size: 11px; opacity: 0.6;">New</button>` : ''}
+            </div>
+            <div style="display: flex; flex-direction: column; background: var(--surface);">
+              ${previewItemsHtml}
+            </div>
+            ${showViewAllLink ? `
+              <div style="padding: 10px 16px; border-top: 1px solid var(--border); text-align: center; background: var(--surface-2);">
+                <a href="#" onclick="event.preventDefault()" style="color: var(--accent); text-decoration: none; font-size: 12px; font-weight: 600;">View All</a>
+              </div>
+            ` : ''}
+          </div>
+        `;
+      } else if (cName === 'activity') {
+        return `
+          <div style="background: var(--surface); border: 1px solid var(--border); border-radius: 6px; box-shadow: var(--shadow-sm); overflow: hidden; padding: 16px; margin-bottom: 16px; display: flex; flex-direction: column; gap: 12px;">
+            <div style="border-bottom: 1px solid var(--border); padding-bottom: 12px; display: flex; justify-content: space-between; align-items: center;">
+              <h3 style="margin: 0; font-size: 13px; font-weight: 700; color: var(--text-primary); text-transform: uppercase; letter-spacing: 0.5px;">Activity Timeline</h3>
+            </div>
+            
+            <div style="display: flex; gap: 10px; margin-bottom: 8px;">
+              <div style="width: 32px; height: 32px; border-radius: 50%; background: #0176d3; color: white; display: flex; align-items: center; justify-content: center; font-size: 14px; cursor: default;" title="New Task">📝</div>
+              <div style="width: 32px; height: 32px; border-radius: 50%; background: #1b96ff; color: white; display: flex; align-items: center; justify-content: center; font-size: 14px; cursor: default;" title="Log a Call">📞</div>
+              <div style="width: 32px; height: 32px; border-radius: 50%; background: #3c97dd; color: white; display: flex; align-items: center; justify-content: center; font-size: 14px; cursor: default;" title="New Event">📅</div>
+              <div style="width: 32px; height: 32px; border-radius: 50%; background: #f2cf5b; color: white; display: flex; align-items: center; justify-content: center; font-size: 14px; cursor: default;" title="Email">✉️</div>
+            </div>
+
+            <div style="font-size: 11px; color: var(--text-secondary); border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); padding: 8px 0; display: flex; justify-content: space-between; align-items: center;">
+              <span>Filters: All time &bull; All activities &bull; All types</span>
+              <span style="cursor: default;">⚙️</span>
+            </div>
+
+            <div style="font-size: 11px; display: flex; gap: 8px; color: var(--accent);">
+              <span style="font-weight: 600; cursor: default;">Refresh</span>
+              <span style="color: var(--text-secondary);">&bull;</span>
+              <span style="font-weight: 600; cursor: default;">Expand All</span>
+              <span style="color: var(--text-secondary);">&bull;</span>
+              <span style="font-weight: 600; cursor: default;">Collapse All</span>
+            </div>
+            
+            <div style="display: flex; flex-direction: column; gap: 12px; margin-top: 8px;">
+              <div style="font-size: 11px; font-weight: 700; text-transform: uppercase; color: var(--text-secondary); border-bottom: 1px solid var(--border); padding-bottom: 4px;">Upcoming & Overdue</div>
+              <div style="display: flex; gap: 12px; align-items: flex-start; padding: 4px 0;">
+                <div style="width: 24px; height: 24px; border-radius: 50%; background: rgba(1, 118, 211, 0.08); color: var(--accent); display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 700;">T</div>
+                <div style="flex: 1;">
+                  <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <strong style="font-size: 13px; color: var(--text-primary);">Follow up on presentation</strong>
+                    <span style="font-size: 11px; color: var(--text-secondary);">Today</span>
+                  </div>
+                  <p style="font-size: 12px; color: var(--text-secondary); margin-top: 2px;">Assigned to Admin User</p>
+                </div>
+              </div>
+              
+              <div style="font-size: 11px; font-weight: 700; text-transform: uppercase; color: var(--text-secondary); border-bottom: 1px solid var(--border); padding-bottom: 4px; margin-top: 8px;">June 2026</div>
+              <div style="display: flex; gap: 12px; align-items: flex-start; padding: 4px 0;">
+                <div style="width: 24px; height: 24px; border-radius: 50%; background: rgba(46, 204, 113, 0.08); color: #2ecc71; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 700;">C</div>
+                <div style="flex: 1;">
+                  <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <strong style="font-size: 13px; color: var(--text-primary);">Initial discovery call</strong>
+                    <span style="font-size: 11px; color: var(--text-secondary);">2 days ago</span>
+                  </div>
+                  <p style="font-size: 12px; color: var(--text-secondary); margin-top: 2px;">Discussed requirements and timeline.</p>
+                </div>
+              </div>
+            </div>
+          </div>
+        `;
+      } else if (cName === 'chatter') {
+        return `
+          <div style="background: var(--surface); border: 1px solid var(--border); border-radius: 6px; box-shadow: var(--shadow); overflow: hidden; padding: 16px; margin-bottom: 16px;">
+            <div style="border-bottom: 1px solid var(--border); padding-bottom: 12px; margin-bottom: 16px;">
+              <h3 style="margin: 0; font-size: 13px; font-weight: 700; color: var(--text-primary); text-transform: uppercase; letter-spacing: 0.5px;">Chatter Feed</h3>
+            </div>
+            
+            <div style="border: 1px solid var(--border); border-radius: 6px; background: var(--surface); overflow: hidden; margin-bottom: 16px;">
+              <div style="display: flex; background: var(--surface-2); border-bottom: 1px solid var(--border); padding: 0 8px;">
+                <div style="padding: 10px 12px; border-bottom: 2px solid var(--accent); color: var(--accent); font-weight: 600; font-size: 12px;">Post</div>
+                <div style="padding: 10px 12px; color: var(--text-secondary); font-size: 12px;">Poll</div>
+              </div>
+              <div style="padding: 12px;">
+                <textarea placeholder="Share an update with this ${esc(objectName.toLowerCase())}..." style="width: 100%; min-height: 50px; border: none; outline: none; font-size: 13px; resize: none; background: transparent;" disabled></textarea>
+              </div>
+              <div style="display: flex; justify-content: flex-end; padding: 8px 12px; border-top: 1px solid rgba(0,0,0,0.03); background: var(--surface-2);">
+                <button class="btn btn-primary btn-sm" disabled style="opacity: 0.6; padding: 4px 12px; font-size: 12px;">Share</button>
+              </div>
+            </div>
+            
+            <div style="display: flex; gap: 12px; align-items: flex-start; padding: 8px 0;">
+              <div style="width: 28px; height: 28px; border-radius: 50%; background: var(--accent); color: #fff; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 700; user-select: none;">A</div>
+              <div style="flex: 1;">
+                <div style="font-size: 13px;"><strong style="color: var(--text-primary);">Admin User</strong> posted an update</div>
+                <div style="font-size: 11px; color: var(--text-muted); margin-bottom: 4px;">Just now</div>
+                <p style="font-size: 13px; color: var(--text-primary); background: var(--bg-secondary); padding: 8px 12px; border-radius: 6px; margin-top: 4px;">Created a custom page layout configuration for this object.</p>
+              </div>
+            </div>
+          </div>
+        `;
+      }
+      return '';
+    }
+
+    function renderRecordPageCanvasHtml() {
+      const template = adminRecordPageDraft.layout;
+      
+      const renderRegion = (regionName, label) => {
+        const comps = adminRecordPageDraft.regions[regionName] || [];
+        return `
+          <div class="builder-region-box" 
+               data-region="${regionName}"
+               ondragover="builderDragOver(event)"
+               ondragenter="builderDragEnter(event)"
+               ondragleave="builderDragLeave(event)"
+               ondrop="builderDrop(event, '${regionName}')"
+               style="border: 2px dashed var(--border-2); border-radius: 8px; background: rgba(255, 255, 255, 0.4); padding: 12px; min-height: 120px; display: flex; flex-direction: column; gap: 12px; transition: all 0.2s;">
+            <div style="font-size: 11px; font-weight: 700; text-transform: uppercase; color: var(--text-secondary); margin-bottom: 4px; display: flex; justify-content: space-between; align-items: center; user-select: none;">
+              <span>${label}</span>
+              <span style="font-size: 9px; color: var(--text-muted);">${comps.length} / 5</span>
+            </div>
+            ${comps.map((compObj, idx) => {
+              const compInfo = ADMIN_RECORD_PAGE_COMPONENTS.find(item => item.name === compObj.name);
+              const isSelected = adminRecordPageSelectedComponent && adminRecordPageSelectedComponent.name === compObj.name && adminRecordPageSelectedComponent.region === regionName && adminRecordPageSelectedComponent.index === idx;
+              const displayTitle = compObj.title || (compInfo ? compInfo.label : compObj.name);
+              const isCollapsed = !!compObj.collapsed;
+              const isVisible = compObj.visible !== false;
+
+              return `
+                <div class="placed-component-card ${isSelected ? 'selected' : ''}"
+                     draggable="true"
+                     ondragstart="builderDragStartFromCanvas(event, '${compObj.name}', '${regionName}', ${idx})"
+                     onclick="builderSelectComponent(event, '${compObj.name}', '${regionName}', ${idx})"
+                     style="background: var(--surface); border: 2px solid ${isSelected ? 'var(--accent)' : 'var(--border)'}; box-shadow: var(--shadow); border-radius: 8px; cursor: grab; transition: border-color 0.2s; position: relative; opacity: ${isVisible ? '1' : '0.5'};">
+                  
+                  <div style="padding: 8px 12px; border-bottom: 1px solid var(--border); background: var(--surface-2); display: flex; justify-content: space-between; align-items: center; border-top-left-radius: 6px; border-top-right-radius: 6px; user-select: none;">
+                    <div style="display: flex; align-items: center; gap: 8px; pointer-events: none;">
+                      <span style="fill: var(--text-secondary); display: flex;">${adminUtilityIconSvg("sort")}</span>
+                      <strong style="font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-secondary); font-weight: 700;">
+                        ${compInfo ? compInfo.label : compObj.name}
+                        ${!isVisible ? ' (Hidden)' : ''}
+                        ${isCollapsed ? ' (Collapsed)' : ''}
+                      </strong>
+                    </div>
+                    <button class="btn btn-icon-only btn-ghost-link" 
+                            onclick="builderRemoveComponent('${compObj.name}', '${regionName}', event)" 
+                            title="Remove Component" 
+                            style="padding: 2px; height: auto; min-height: 0; font-size: 16px; border: none; background: transparent; cursor: pointer;">
+                      ×
+                    </button>
+                  </div>
+                  
+                  <div style="padding: 16px; pointer-events: none; display: ${isCollapsed ? 'none' : 'block'};">
+                    <div style="display: none;" class="live-preview-title">${esc(displayTitle)}</div>
+                    ${renderLiveComponentBody(compObj.name, adminRecordPageObjectName, compObj)}
+                  </div>
+                  ${isCollapsed ? `
+                    <div style="padding: 12px 16px; color: var(--text-muted); font-size: 12px; font-style: italic; pointer-events: none; background: var(--surface-2); border-bottom-left-radius: 6px; border-bottom-right-radius: 6px;">
+                      Component is collapsed by default.
+                    </div>
+                  ` : ''}
+                </div>
+              `;
+            }).join('')}
+            ${comps.length === 0 ? `
+              <div class="drag-hint-empty" style="flex: 1; display: flex; align-items: center; justify-content: center; color: var(--text-muted); font-size: 12px; padding: 24px; user-select: none; pointer-events: none; border: 2px dashed rgba(0,0,0,0.05); border-radius: 6px;">
+                Drag components here
+              </div>
+            ` : ''}
+          </div>
+        `;
+      };
+
+      if (template === 'one-column') {
+        return `
+          <div style="display: flex; flex-direction: column; gap: 16px;">
+            ${renderRegion('main', 'Main Region')}
+          </div>
+        `;
+      } else if (template === 'two-column') {
+        return `
+          <div style="display: grid; grid-template-columns: minmax(0, 2fr) minmax(280px, 1fr); gap: 16px;">
+            ${renderRegion('left', 'Left Column')}
+            ${renderRegion('right', 'Right Column')}
+          </div>
+        `;
+      } else if (template === 'header-two-column') {
+        return `
+          <div style="display: flex; flex-direction: column; gap: 16px;">
+            ${renderRegion('header', 'Header Region')}
+            <div style="display: grid; grid-template-columns: minmax(0, 2fr) minmax(280px, 1fr); gap: 16px;">
+              ${renderRegion('left', 'Left Column')}
+              ${renderRegion('right', 'Right Column')}
+            </div>
+          </div>
+        `;
+      } else {
+        return `
+          <div style="display: flex; flex-direction: column; gap: 16px;">
+            ${renderRegion('header', 'Header Region')}
+            <div style="display: grid; grid-template-columns: minmax(0, 2fr) minmax(280px, 1fr); gap: 16px;">
+              ${renderRegion('left', 'Left Column')}
+              ${renderRegion('right', 'Right Column')}
+            </div>
+            ${renderRegion('bottom', 'Bottom Region')}
+          </div>
+        `;
+      }
+    }
+
+    function renderRecordPagePreviewHtml() {
+      const template = adminRecordPageDraft.layout;
+      const objectName = adminRecordPageObjectName;
+      
+      const renderComponentPreview = (compObj, isTabbedChild = false) => {
+        if (compObj.visible === false) return '';
+        const compInfo = ADMIN_RECORD_PAGE_COMPONENTS.find(item => item.name === compObj.name);
+        const displayTitle = compObj.title || (compInfo ? compInfo.label : compObj.name);
+        const isCollapsed = !!compObj.collapsed;
+        
+        if (isTabbedChild) {
+          return renderLiveComponentBody(compObj.name, objectName, compObj);
+        }
+
+        const chevronSvg = `<svg viewBox="0 0 20 20" width="14" height="14" fill="currentColor" style="display: block; transition: transform 0.2s;"><path fill-rule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clip-rule="evenodd"/></svg>`;
+
+        if (compObj.name === 'compact-layout') {
+          return `
+            <div class="record-hero card" style="margin-bottom: 16px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); box-shadow: var(--shadow-sm); overflow: hidden;">
+              ${compObj.title ? `
+                <div style="padding: 12px 20px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; background: var(--surface-2);">
+                  <h3 style="margin: 0; font-size: 14px; font-weight: 600; color: var(--text-primary);">${esc(displayTitle)}</h3>
+                </div>
+              ` : ''}
+              <div class="record-summary" style="display: ${isCollapsed ? 'none' : 'grid'};">
+                ${renderLiveComponentBody(compObj.name, objectName, compObj)}
+              </div>
+            </div>
+          `;
+        } else if (compObj.name === 'details') {
+          return `
+            <div class="card record-details-card" style="background: var(--surface); border: 1px solid var(--border); border-radius: 6px; box-shadow: var(--shadow-sm); overflow: hidden; margin-bottom: 16px;">
+              <div style="padding: 12px 20px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; background: var(--surface-2);">
+                <h3 style="margin: 0; font-size: 14px; font-weight: 600; color: var(--text-primary);">${esc(displayTitle)}</h3>
+                <div style="display: flex; align-items: center; gap: 12px;">
+                  <button class="btn btn-ghost btn-sm" style="padding: 4px; display: flex; align-items: center; justify-content: center; border: none; background: transparent; cursor: pointer; transform: ${isCollapsed ? 'rotate(-90deg)' : 'none'}; transition: transform 0.2s;" onclick="const body = this.closest('.card').querySelector('.card-body'); body.style.display = body.style.display === 'none' ? '' : 'none'; this.style.transform = body.style.display === 'none' ? 'rotate(-90deg)' : 'none';">
+                    ${chevronSvg}
+                  </button>
+                </div>
+              </div>
+              <div class="card-body" style="padding: 20px; display: ${isCollapsed ? 'none' : 'block'};" id="detailsContent">
+                ${renderLiveComponentBody(compObj.name, objectName, compObj)}
+              </div>
+            </div>
+          `;
+        } else if (compObj.name === 'related-lists') {
+          return `
+            <div class="card record-related-card" style="background: var(--surface); border: 1px solid var(--border); border-radius: 6px; box-shadow: var(--shadow-sm); overflow: hidden; margin-bottom: 16px;">
+              <div style="padding: 12px 20px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; background: var(--surface-2);">
+                <h3 style="margin: 0; font-size: 14px; font-weight: 600; color: var(--text-primary);">${esc(displayTitle)}</h3>
+                <button class="btn btn-ghost btn-sm" style="padding: 4px; display: flex; align-items: center; justify-content: center; border: none; background: transparent; cursor: pointer; transform: ${isCollapsed ? 'rotate(-90deg)' : 'none'}; transition: transform 0.2s;" onclick="const body = this.closest('.card').querySelector('.card-body'); body.style.display = body.style.display === 'none' ? '' : 'none'; this.style.transform = body.style.display === 'none' ? 'rotate(-90deg)' : 'none';">
+                  ${chevronSvg}
+                </button>
+              </div>
+              <div class="card-body" style="display: ${isCollapsed ? 'none' : 'block'};">
+                ${renderLiveComponentBody(compObj.name, objectName, compObj)}
+              </div>
+            </div>
+          `;
+        } else if (compObj.name === 'activity') {
+          return `
+            <div class="card record-activity-card" style="background: var(--surface); border: 1px solid var(--border); border-radius: 6px; box-shadow: var(--shadow-sm); overflow: hidden; margin-bottom: 16px;">
+              <div style="padding: 12px 20px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; background: var(--surface-2);">
+                <h3 style="margin: 0; font-size: 14px; font-weight: 600; color: var(--text-primary);">${esc(displayTitle)}</h3>
+                <div style="display: flex; align-items: center; gap: 12px;">
+                  <button class="cell-button-link" style="font-size: 12px; color: var(--accent); background: none; border: none; cursor: pointer; padding: 0;">Refresh</button>
+                  <button class="btn btn-ghost btn-sm" style="padding: 4px; display: flex; align-items: center; justify-content: center; border: none; background: transparent; cursor: pointer; transform: ${isCollapsed ? 'rotate(-90deg)' : 'none'}; transition: transform 0.2s;" onclick="const body = this.closest('.card').querySelector('.card-body'); body.style.display = body.style.display === 'none' ? '' : 'none'; this.style.transform = body.style.display === 'none' ? 'rotate(-90deg)' : 'none';">
+                    ${chevronSvg}
+                  </button>
+                </div>
+              </div>
+              <div class="card-body" style="padding: 20px; display: ${isCollapsed ? 'none' : 'block'};">
+                ${renderLiveComponentBody(compObj.name, objectName, compObj)}
+              </div>
+            </div>
+          `;
+        } else if (compObj.name === 'chatter') {
+          return `
+            <div class="card record-chatter-card" style="background: var(--surface); border: 1px solid var(--border); border-radius: 6px; box-shadow: var(--shadow-sm); overflow: hidden; margin-bottom: 16px;">
+              <div style="padding: 12px 20px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; background: var(--surface-2);">
+                <h3 style="margin: 0; font-size: 14px; font-weight: 600; color: var(--text-primary);">${esc(displayTitle)}</h3>
+                <button class="btn btn-ghost btn-sm" style="padding: 4px; display: flex; align-items: center; justify-content: center; border: none; background: transparent; cursor: pointer; transform: ${isCollapsed ? 'rotate(-90deg)' : 'none'}; transition: transform 0.2s;" onclick="const body = this.closest('.card').querySelector('.card-body'); body.style.display = body.style.display === 'none' ? '' : 'none'; this.style.transform = body.style.display === 'none' ? 'rotate(-90deg)' : 'none';">
+                  ${chevronSvg}
+                </button>
+              </div>
+              <div class="card-body" style="padding: 20px; display: ${isCollapsed ? 'none' : 'block'};">
+                ${renderLiveComponentBody(compObj.name, objectName, compObj)}
+              </div>
+            </div>
+          `;
+        }
+        return '';
+      };
+      
+      const renderRegionPreview = (regionName) => {
+        const comps = adminRecordPageDraft.regions[regionName] || [];
+        const resolved = comps.map(c => {
+          if (typeof c === 'string') {
+            return { name: c, title: '', collapsed: false, visible: true };
+          }
+          return {
+            name: c.name,
+            title: c.title || '',
+            collapsed: !!c.collapsed,
+            visible: c.visible !== false,
+            config: c.config || null,
+            relatedLists: c.relatedLists || null
+          };
+        }).filter(c => c.visible);
+
+        if (resolved.length === 0) return '';
+
+        const hasRelatedLists = resolved.some(c => c.name === 'related-lists');
+        const hasDetails = resolved.some(c => c.name === 'details');
+        const groupLeftTabs = hasRelatedLists && hasDetails;
+
+        const hasActivity = resolved.some(c => c.name === 'activity');
+        const hasChatter = resolved.some(c => c.name === 'chatter');
+        const groupRightTabs = hasActivity && hasChatter;
+
+        const itemsToRender = [];
+        let i = 0;
+        while (i < resolved.length) {
+          const comp = resolved[i];
+          if (groupLeftTabs && (comp.name === 'related-lists' || comp.name === 'details')) {
+            const otherName = comp.name === 'related-lists' ? 'details' : 'related-lists';
+            const otherIdx = resolved.findIndex((c, idx) => idx > i && c.name === otherName);
+            if (otherIdx !== -1) {
+              const otherComp = resolved[otherIdx];
+              itemsToRender.push({
+                type: 'tab-container',
+                components: [comp, otherComp],
+                originalIndices: [i, otherIdx]
+              });
+              resolved.splice(otherIdx, 1);
+              i++;
+              continue;
+            }
+          }
+          
+          if (groupRightTabs && (comp.name === 'activity' || comp.name === 'chatter')) {
+            const otherName = comp.name === 'activity' ? 'chatter' : 'activity';
+            const otherIdx = resolved.findIndex((c, idx) => idx > i && c.name === otherName);
+            if (otherIdx !== -1) {
+              const otherComp = resolved[otherIdx];
+              itemsToRender.push({
+                type: 'tab-container',
+                components: [comp, otherComp],
+                originalIndices: [i, otherIdx]
+              });
+              resolved.splice(otherIdx, 1);
+              i++;
+              continue;
+            }
+          }
+
+          itemsToRender.push({
+            type: 'single',
+            component: comp,
+            index: i
+          });
+          i++;
+        }
+
+        return itemsToRender.map((item, itemIdx) => {
+          if (item.type === 'tab-container') {
+            const headersHtml = item.components.map((comp, idx) => {
+              const compLabel = {
+                'related-lists': 'Related',
+                'details': 'Details',
+                'activity': 'Activity',
+                'chatter': 'Chatter'
+              }[comp.name] || comp.name;
+
+              const activeClass = idx === 0 ? 'active' : '';
+              const borderStyle = idx === 0 
+                ? 'border-bottom: 3px solid var(--accent); color: var(--accent); font-weight: 700;' 
+                : 'border-bottom: 3px solid transparent; color: var(--text-muted);';
+
+              return `
+                <li class="custom-preview-tab-header ${activeClass}" 
+                    data-region="${regionName}" 
+                    data-index="${itemIdx}-${idx}" 
+                    onclick="switchCustomPreviewTab('${regionName}', '${itemIdx}-${idx}')" 
+                    style="padding: 10px 4px; font-size: 13.5px; font-weight: 600; cursor: pointer; transition: all 0.2s; ${borderStyle}">
+                  ${esc(compLabel)}
+                </li>
+              `;
+            }).join('');
+
+            const contentsHtml = item.components.map((comp, idx) => {
+              const displayStyle = idx === 0 ? 'display: block;' : 'display: none;';
+              const componentHtml = renderComponentPreview(comp, true);
+
+              return `
+                <div class="custom-preview-tab-content-${regionName}-${itemIdx}" id="preview-tab-content-${regionName}-${itemIdx}-${idx}" style="${displayStyle}">
+                  ${componentHtml}
+                </div>
+              `;
+            }).join('');
+
+            return `
+              <div class="card custom-tab-container" style="background: var(--surface); border: 1px solid var(--border); border-radius: 6px; box-shadow: var(--shadow-sm); overflow: hidden; margin-bottom: 16px;">
+                <ul class="custom-tab-nav" style="display: flex; gap: 24px; border-bottom: 1px solid var(--border); margin: 0; padding: 0 20px; list-style: none; background: transparent;">
+                  ${headersHtml}
+                </ul>
+                <div class="custom-tab-contents" style="padding: 20px;">
+                  ${contentsHtml}
+                </div>
+              </div>
+            `;
+          } else {
+            return renderComponentPreview(item.component, false);
+          }
+        }).join('');
+      };
+
+      let gridHtml = '';
+      if (template === 'one-column') {
+        gridHtml = `
+          <div style="display: flex; flex-direction: column; gap: 16px;">
+            ${renderRegionPreview('main')}
+          </div>
+        `;
+      } else if (template === 'two-column') {
+        gridHtml = `
+          <div style="display: grid; grid-template-columns: minmax(0, 2fr) minmax(280px, 1fr); gap: 16px;">
+            <div style="display: flex; flex-direction: column; gap: 16px;">
+              ${renderRegionPreview('left')}
+            </div>
+            <div style="display: flex; flex-direction: column; gap: 16px;">
+              ${renderRegionPreview('right')}
+            </div>
+          </div>
+        `;
+      } else if (template === 'header-two-column') {
+        gridHtml = `
+          <div style="display: flex; flex-direction: column; gap: 16px;">
+            <div style="display: flex; flex-direction: column; gap: 16px;">
+              ${renderRegionPreview('header')}
+            </div>
+            <div style="display: grid; grid-template-columns: minmax(0, 2fr) minmax(280px, 1fr); gap: 16px;">
+              <div style="display: flex; flex-direction: column; gap: 16px;">
+                ${renderRegionPreview('left')}
+              </div>
+              <div style="display: flex; flex-direction: column; gap: 16px;">
+                ${renderRegionPreview('right')}
+              </div>
+            </div>
+          </div>
+        `;
+      } else {
+        gridHtml = `
+          <div style="display: flex; flex-direction: column; gap: 16px;">
+            <div style="display: flex; flex-direction: column; gap: 16px;">
+              ${renderRegionPreview('header')}
+            </div>
+            <div style="display: grid; grid-template-columns: minmax(0, 2fr) minmax(280px, 1fr); gap: 16px;">
+              <div style="display: flex; flex-direction: column; gap: 16px;">
+                ${renderRegionPreview('left')}
+              </div>
+              <div style="display: flex; flex-direction: column; gap: 16px;">
+                ${renderRegionPreview('right')}
+              </div>
+            </div>
+            <div style="display: flex; flex-direction: column; gap: 16px;">
+              ${renderRegionPreview('bottom')}
+            </div>
+          </div>
+        `;
+      }
+
+      return `
+        <div style="padding: 12px 20px; background: #0176D3; color: white; display: flex; justify-content: space-between; align-items: center; border-radius: 8px 8px 0 0; margin-bottom: 16px; box-shadow: var(--shadow);">
+          <div style="display: flex; align-items: center; gap: 10px;">
+            <span style="font-weight: 700; font-size: 14px; text-transform: uppercase; letter-spacing: 0.5px;">Live Preview Mode</span>
+            <span style="font-size: 12px; background: rgba(255,255,255,0.2); padding: 2px 6px; border-radius: 4px;">Read Only</span>
+          </div>
+          <button class="btn btn-secondary btn-sm" onclick="builderTogglePreviewMode()" style="background: white; color: #0176D3; border: none; font-weight: 600; padding: 6px 12px; border-radius: 4px; cursor: pointer; transition: all 0.2s;">Close Preview</button>
+        </div>
+        
+        <div style="background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 18px 20px; box-shadow: var(--shadow); display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+          <div style="display: flex; align-items: center; gap: 12px;">
+            <div style="width: 32px; height: 32px; border-radius: 4px; background: var(--accent); color: white; display: flex; align-items: center; justify-content: center; font-weight: bold; font-size: 16px;">
+              ${objectName.slice(0, 1)}
+            </div>
+            <div>
+              <div style="font-size: 11px; color: var(--text-secondary); text-transform: uppercase; font-weight: 600;">${esc(objectName)}</div>
+              <h1 style="font-size: 18px; font-weight: 700; color: var(--text-primary); margin: 0; line-height: 1.2;">[Simulated ${esc(objectName)} Record]</h1>
+            </div>
+          </div>
+          <div style="display: flex; gap: 8px;">
+            <button class="btn btn-ghost btn-sm" style="opacity: 0.6; cursor: default;" disabled>Back</button>
+            <button class="btn btn-primary btn-sm" style="opacity: 0.6; cursor: default;" disabled>Edit</button>
+          </div>
+        </div>
+
+        <div style="flex: 1;">
+          ${gridHtml}
+        </div>
+      `;
+    }
+
+    function renderRecordPageBuilder() {
+      const pane = $('panel-lightning-builder');
+      if (!pane) return;
+      const objectName = adminRecordPageObjectName;
+      
+      const placedComponents = new Set();
+      Object.keys(adminRecordPageDraft.regions).forEach(r => {
+        (adminRecordPageDraft.regions[r] || []).forEach(compObj => {
+          placedComponents.add(compObj.name);
+        });
+      });
+
+      const componentLibraryHtml = ADMIN_RECORD_PAGE_COMPONENTS.map(comp => {
+        const inUse = comp.name === 'related-list-single' ? false : placedComponents.has(comp.name);
+        return `
+          <div class="builder-component-item ${inUse ? 'in-use' : ''}"
+               draggable="${!inUse}"
+               ondragstart="builderDragStart(event, '${comp.name}')"
+               style="background: ${inUse ? 'var(--surface-3)' : 'var(--surface)'}; 
+                      border: 1px solid var(--border); 
+                      border-radius: 6px; 
+                      padding: 10px; 
+                      cursor: ${inUse ? 'not-allowed' : 'grab'}; 
+                      opacity: ${inUse ? '0.6' : '1'}; 
+                      transition: all 0.2s;"
+               title="${inUse ? 'Already placed on canvas' : comp.desc}">
+            <div style="font-size: 13px; font-weight: 600; color: var(--text-primary); margin-bottom: 2px;">${comp.label}</div>
+            <div style="font-size: 11px; color: var(--text-secondary); line-height: 1.3;">${comp.desc}</div>
+            ${inUse ? `<div style="font-size: 10px; color: var(--accent); font-weight: 600; margin-top: 4px; display: flex; align-items: center; gap: 4px;">Added to page</div>` : ''}
+          </div>
+        `;
+      }).join('');
+
+      let sidebarRightHtml = '';
+      if (adminRecordPageSelectedComponent) {
+        const regionList = adminRecordPageDraft.regions[adminRecordPageSelectedComponent.region] || [];
+        const compData = regionList[adminRecordPageSelectedComponent.index];
+        const comp = ADMIN_RECORD_PAGE_COMPONENTS.find(item => item.name === compData.name);
+
+        if (compData.name === 'related-lists') {
+          const lists = compData.relatedLists || [];
+          const activeConfig = lists.find(l => l.key === adminActiveRelatedListConfigKey);
+          const childFields = activeConfig ? (childObjectFieldsCache[activeConfig.objectName] || []) : [];
+
+          let listsConfigMarkup = lists.map((config, idx) => {
+            const isCurrentActive = config.key === adminActiveRelatedListConfigKey;
+            return `
+              <div style="background: var(--surface); border: 1px solid ${isCurrentActive ? 'var(--accent)' : 'var(--border)'}; border-radius: 6px; padding: 10px; display: flex; flex-direction: column; gap: 8px;">
+                <div style="display: flex; align-items: center; justify-content: space-between; gap: 6px;">
+                  <div style="display: flex; align-items: center; gap: 6px; flex: 1; min-width: 0;">
+                    <input type="checkbox" 
+                           ${config.enabled ? 'checked' : ''} 
+                           onchange="toggleRelatedListEnabled('${config.key}', this.checked)"
+                           style="cursor: pointer;">
+                    <span style="font-size: 12.5px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-primary); cursor: pointer;" onclick="selectRelatedListToEdit('${config.key}')">
+                      ${esc(config.relationshipName)}
+                    </span>
+                  </div>
+                  <div style="display: flex; align-items: center; gap: 2px;">
+                    <button class="btn btn-icon-only btn-ghost-link" 
+                            onclick="moveRelatedList('${config.key}', -1)" 
+                            ${idx === 0 ? 'disabled' : ''} 
+                            title="Move Up" 
+                            style="padding: 2px; font-size: 10px; border:none; background:transparent;">▲</button>
+                    <button class="btn btn-icon-only btn-ghost-link" 
+                            onclick="moveRelatedList('${config.key}', 1)" 
+                            ${idx === lists.length - 1 ? 'disabled' : ''} 
+                            title="Move Down" 
+                            style="padding: 2px; font-size: 10px; border:none; background:transparent;">▼</button>
+                    <button class="btn btn-ghost btn-sm" 
+                            onclick="selectRelatedListToEdit('${config.key}')" 
+                            style="padding: 2px 6px; font-size: 11px;">
+                      ${isCurrentActive ? 'Editing' : 'Config'}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            `;
+          }).join('');
+
+          let activeEditorMarkup = '';
+          if (activeConfig) {
+            activeEditorMarkup = `
+              <div style="margin-top: 12px; border-top: 1px solid var(--border); padding-top: 12px; display: flex; flex-direction: column; gap: 12px;">
+                <div style="font-size: 11px; font-weight: 700; text-transform: uppercase; color: var(--text-secondary);">
+                  Editing: ${esc(activeConfig.relationshipName)}
+                </div>
+                
+                <div>
+                  <label class="form-label" style="font-size: 11px; font-weight: 700; text-transform: uppercase; color: var(--text-secondary); margin-bottom: 4px; display: block;">List Label Override</label>
+                  <input type="text" 
+                         value="${esc(activeConfig.title || '')}" 
+                         placeholder="${esc(activeConfig.relationshipName)}" 
+                         class="form-ctrl" 
+                         oninput="updateRelatedListConfigProperty('${activeConfig.key}', 'title', this.value)"
+                         style="font-size: 13px; padding: 6px 10px; border-radius: 6px; border: 1px solid var(--border-2); background: var(--surface);">
+                </div>
+                
+                <div>
+                  <label class="form-label" style="font-size: 11px; font-weight: 700; text-transform: uppercase; color: var(--text-secondary); margin-bottom: 4px; display: block;">Records Limit</label>
+                  <select class="form-ctrl" 
+                          onchange="updateRelatedListConfigProperty('${activeConfig.key}', 'limit', Number(this.value))"
+                          style="font-size: 13px; padding: 6px 10px; border-radius: 6px; border: 1px solid var(--border-2); background: var(--surface);">
+                    <option value="5" ${activeConfig.limit === 5 ? 'selected' : ''}>5</option>
+                    <option value="10" ${activeConfig.limit === 10 ? 'selected' : ''}>10</option>
+                    <option value="25" ${activeConfig.limit === 25 ? 'selected' : ''}>25</option>
+                    <option value="50" ${activeConfig.limit === 50 ? 'selected' : ''}>50</option>
+                    <option value="100" ${activeConfig.limit === 100 ? 'selected' : ''}>100</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label class="form-label" style="font-size: 11px; font-weight: 700; text-transform: uppercase; color: var(--text-secondary); margin-bottom: 4px; display: block;">Default Sort</label>
+                  <div style="display: flex; gap: 8px;">
+                    <select class="form-ctrl" 
+                            onchange="updateRelatedListConfigProperty('${activeConfig.key}', 'sortBy', this.value)"
+                            style="flex: 2; font-size: 13px; padding: 6px 10px; border-radius: 6px; border: 1px solid var(--border-2); background: var(--surface);">
+                      <option value="CreatedDate" ${activeConfig.sortBy === 'CreatedDate' ? 'selected' : ''}>Created Date</option>
+                      <option value="LastModifiedDate" ${activeConfig.sortBy === 'LastModifiedDate' ? 'selected' : ''}>Modified Date</option>
+                      <option value="Name" ${activeConfig.sortBy === 'Name' ? 'selected' : ''}>Name</option>
+                      ${childFields.filter(f => f.name !== 'CreatedDate' && f.name !== 'LastModifiedDate' && f.name !== 'Name').map(f => `
+                        <option value="${esc(f.name)}" ${activeConfig.sortBy === f.name ? 'selected' : ''}>${esc(f.label)}</option>
+                      `).join('')}
+                    </select>
+                    <select class="form-ctrl" 
+                            onchange="updateRelatedListConfigProperty('${activeConfig.key}', 'sortDir', this.value)"
+                            style="flex: 1; font-size: 13px; padding: 6px 10px; border-radius: 6px; border: 1px solid var(--border-2); background: var(--surface);">
+                      <option value="ASC" ${activeConfig.sortDir === 'ASC' ? 'selected' : ''}>ASC</option>
+                      <option value="DESC" ${activeConfig.sortDir === 'DESC' ? 'selected' : ''}>DESC</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div>
+                  <label class="form-label" style="font-size: 11px; font-weight: 700; text-transform: uppercase; color: var(--text-secondary); margin-bottom: 4px; display: block;">Show Actions</label>
+                  <div style="display: flex; flex-direction: column; gap: 6px; padding: 4px 0;">
+                    <div style="display: flex; align-items: center; gap: 8px;">
+                      <input type="checkbox" id="actShowNew" ${activeConfig.showNew !== false ? 'checked' : ''} onchange="updateRelatedListConfigProperty('${activeConfig.key}', 'showNew', this.checked)">
+                      <label for="actShowNew" style="font-size: 12px; font-weight: 600; cursor: pointer;">New Button</label>
+                    </div>
+                    <div style="display: flex; align-items: center; gap: 8px;">
+                      <input type="checkbox" id="actShowViewAll" ${activeConfig.showViewAll !== false ? 'checked' : ''} onchange="updateRelatedListConfigProperty('${activeConfig.key}', 'showViewAll', this.checked)">
+                      <label for="actShowViewAll" style="font-size: 12px; font-weight: 600; cursor: pointer;">View All Link</label>
+                    </div>
+                    <div style="display: flex; align-items: center; gap: 8px;">
+                      <input type="checkbox" id="actShowEdit" ${activeConfig.showEdit !== false ? 'checked' : ''} onchange="updateRelatedListConfigProperty('${activeConfig.key}', 'showEdit', this.checked)">
+                      <label for="actShowEdit" style="font-size: 12px; font-weight: 600; cursor: pointer;">Edit Row Action</label>
+                    </div>
+                    <div style="display: flex; align-items: center; gap: 8px;">
+                      <input type="checkbox" id="actShowDelete" ${activeConfig.showDelete !== false ? 'checked' : ''} onchange="updateRelatedListConfigProperty('${activeConfig.key}', 'showDelete', this.checked)">
+                      <label for="actShowDelete" style="font-size: 12px; font-weight: 600; cursor: pointer;">Delete Row Action</label>
+                    </div>
+                  </div>
+                </div>
+
+                <div>
+                  <label class="form-label" style="font-size: 11px; font-weight: 700; text-transform: uppercase; color: var(--text-secondary); margin-bottom: 4px; display: block;">Visible Columns</label>
+                  <div style="max-height: 180px; overflow-y: auto; border: 1px solid var(--border-2); border-radius: 6px; padding: 8px; background: var(--surface); display: flex; flex-direction: column; gap: 6px;">
+                    ${childFields.length === 0 ? '<span style="font-size: 11px; color: var(--text-muted); font-style: italic;">Loading fields...</span>' : childFields.map(f => {
+                      const isChecked = (activeConfig.fields || []).includes(f.name);
+                      return `
+                        <div style="display: flex; align-items: center; gap: 8px;">
+                          <input type="checkbox" id="col-${esc(f.name)}" ${isChecked ? 'checked' : ''} onchange="updateRelatedListConfigColumn('${activeConfig.key}', '${esc(f.name)}', this.checked)">
+                          <label for="col-${esc(f.name)}" style="font-size: 12px; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${esc(f.label)}</label>
+                        </div>
+                      `;
+                    }).join('')}
+                  </div>
+                </div>
+              </div>
+            `;
+          }
+
+          sidebarRightHtml = `
+            <div style="display: flex; flex-direction: column; gap: 16px;">
+              <div style="border-bottom: 1px solid var(--border); padding-bottom: 10px;">
+                <h4 style="margin: 0; font-size: 14px; font-weight: 700; color: var(--text-primary);">Related List Builder</h4>
+              </div>
+              
+              <div>
+                <label class="form-label" style="font-size: 11px; font-weight: 700; text-transform: uppercase; color: var(--text-secondary); margin-bottom: 4px; display: block;">Display Label</label>
+                <input type="text" value="Related Lists" class="form-ctrl" disabled style="background: var(--surface-2); font-size: 13px; padding: 6px 10px; border-radius: 6px; border: 1px solid var(--border);">
+              </div>
+              
+              <div>
+                <label class="form-label" style="font-size: 11px; font-weight: 700; text-transform: uppercase; color: var(--text-secondary); margin-bottom: 4px; display: block;">Component Title</label>
+                <input type="text" 
+                       id="propCompTitle" 
+                       value="${esc(compData.title || '')}" 
+                       placeholder="Related Lists" 
+                       class="form-ctrl" 
+                       oninput="updateSelectedComponentProperty('title', this.value)"
+                       style="font-size: 13px; padding: 6px 10px; border-radius: 6px; border: 1px solid var(--border-2); background: var(--surface);">
+              </div>
+
+              <div>
+                <label class="form-label" style="font-size: 11px; font-weight: 700; text-transform: uppercase; color: var(--text-secondary); margin-bottom: 4px; display: block;">Available Related Lists</label>
+                <div style="display: flex; flex-direction: column; gap: 8px; max-height: 240px; overflow-y: auto; border: 1px solid var(--border-2); border-radius: 6px; padding: 8px; background: var(--surface-2);">
+                  ${listsConfigMarkup}
+                  ${lists.length === 0 ? '<div style="font-size:12px;color:var(--text-muted);font-style:italic;text-align:center;padding:12px;">No child relationships discovered</div>' : ''}
+                </div>
+              </div>
+
+              ${activeEditorMarkup}
+
+              <div style="margin-top: 16px; border-top: 1px solid var(--border); padding-top: 16px; display: flex; flex-direction: column; gap: 8px;">
+                <button class="btn btn-ghost btn-danger-link btn-sm" 
+                        style="width: 100%; text-align: center; display: block;"
+                        onclick="builderRemoveComponent('${compData.name}', '${adminRecordPageSelectedComponent.region}', event)">
+                  Remove Component
+                </button>
+                <button class="btn btn-ghost btn-sm" 
+                        style="width: 100%; text-align: center;"
+                        onclick="builderClearSelection()">
+                  Deselect Component
+                </button>
+              </div>
+            </div>
+          `;
+        } else if (compData.name === 'related-list-single') {
+          const config = compData.config || {};
+          const childFields = config.childObject ? (childObjectFieldsCache[config.childObject] || []) : [];
+
+          let fieldsCheckboxes = '<span style="font-size: 11px; color: var(--text-muted); font-style: italic;">Select a related list first</span>';
+          if (config.childObject) {
+            fieldsCheckboxes = childFields.length === 0 
+              ? '<span style="font-size: 11px; color: var(--text-muted); font-style: italic;">Loading fields...</span>' 
+              : childFields.map(f => {
+                  const isChecked = (config.fields || []).includes(f.name);
+                  return `
+                    <div style="display: flex; align-items: center; gap: 8px;">
+                      <input type="checkbox" id="single-col-${esc(f.name)}" ${isChecked ? 'checked' : ''} onchange="toggleSelectedComponentConfigField('${esc(f.name)}', this.checked)">
+                      <label for="single-col-${esc(f.name)}" style="font-size: 12px; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${esc(f.label)}</label>
+                    </div>
+                  `;
+                }).join('');
+          }
+
+          sidebarRightHtml = `
+            <div style="display: flex; flex-direction: column; gap: 16px;">
+              <div style="border-bottom: 1px solid var(--border); padding-bottom: 10px;">
+                <h4 style="margin: 0; font-size: 14px; font-weight: 700; color: var(--text-primary);">Related List - Single</h4>
+              </div>
+              
+              <div>
+                <label class="form-label" style="font-size: 11px; font-weight: 700; text-transform: uppercase; color: var(--text-secondary); margin-bottom: 4px; display: block;">Parent Record</label>
+                <input type="text" value="Use This ${esc(adminRecordPageObjectName)}" class="form-ctrl" disabled style="background: var(--surface-2); font-size: 13px; padding: 6px 10px; border-radius: 6px; border: 1px solid var(--border);">
+              </div>
+
+              <div>
+                <label class="form-label" style="font-size: 11px; font-weight: 700; text-transform: uppercase; color: var(--text-secondary); margin-bottom: 4px; display: block;">Related List <span style="color:var(--accent)">*</span></label>
+                <select class="form-ctrl" 
+                        onchange="builderSelectRelatedListRelationship(this.value)"
+                        style="font-size: 13px; padding: 6px 10px; border-radius: 6px; border: 1px solid var(--border-2); background: var(--surface);">
+                  <option value="">-- Select Child Relationship --</option>
+                  ${adminObjectChildRelationships.map(rel => `
+                    <option value="${esc(rel.relationshipName)}" ${config.relationshipName === rel.relationshipName ? 'selected' : ''}>
+                      ${esc(rel.relationshipName)} (${esc(rel.childSObject)})
+                    </option>
+                  `).join('')}
+                </select>
+              </div>
+              
+              <div>
+                <label class="form-label" style="font-size: 11px; font-weight: 700; text-transform: uppercase; color: var(--text-secondary); margin-bottom: 4px; display: block;">List Title</label>
+                <input type="text" 
+                       value="${esc(config.title || '')}" 
+                       placeholder="${esc(config.relationshipName || 'Related List')}" 
+                       class="form-ctrl" 
+                       oninput="updateSelectedComponentConfigProperty('title', this.value)"
+                       style="font-size: 13px; padding: 6px 10px; border-radius: 6px; border: 1px solid var(--border-2); background: var(--surface);">
+              </div>
+
+              <div>
+                <label class="form-label" style="font-size: 11px; font-weight: 700; text-transform: uppercase; color: var(--text-secondary); margin-bottom: 4px; display: block;">Records Limit</label>
+                <select class="form-ctrl" 
+                        onchange="updateSelectedComponentConfigProperty('limit', Number(this.value))"
+                        style="font-size: 13px; padding: 6px 10px; border-radius: 6px; border: 1px solid var(--border-2); background: var(--surface);">
+                  <option value="5" ${config.limit === 5 ? 'selected' : ''}>5</option>
+                  <option value="10" ${config.limit === 10 ? 'selected' : ''}>10</option>
+                  <option value="25" ${config.limit === 25 ? 'selected' : ''}>25</option>
+                  <option value="50" ${config.limit === 50 ? 'selected' : ''}>50</option>
+                </select>
+              </div>
+
+              <div>
+                <label class="form-label" style="font-size: 11px; font-weight: 700; text-transform: uppercase; color: var(--text-secondary); margin-bottom: 4px; display: block;">Default Sort</label>
+                <div style="display: flex; gap: 8px;">
+                  <select class="form-ctrl" 
+                          onchange="updateSelectedComponentConfigProperty('sortBy', this.value)"
+                          style="flex: 2; font-size: 13px; padding: 6px 10px; border-radius: 6px; border: 1px solid var(--border-2); background: var(--surface);">
+                    <option value="CreatedDate" ${config.sortBy === 'CreatedDate' ? 'selected' : ''}>Created Date</option>
+                    <option value="LastModifiedDate" ${config.sortBy === 'LastModifiedDate' ? 'selected' : ''}>Modified Date</option>
+                    <option value="Name" ${config.sortBy === 'Name' ? 'selected' : ''}>Name</option>
+                    ${childFields.filter(f => f.name !== 'CreatedDate' && f.name !== 'LastModifiedDate' && f.name !== 'Name').map(f => `
+                      <option value="${esc(f.name)}" ${config.sortBy === f.name ? 'selected' : ''}>${esc(f.label)}</option>
+                    `).join('')}
+                  </select>
+                  <select class="form-ctrl" 
+                          onchange="updateSelectedComponentConfigProperty('sortDir', this.value)"
+                          style="flex: 1; font-size: 13px; padding: 6px 10px; border-radius: 6px; border: 1px solid var(--border-2); background: var(--surface);">
+                    <option value="ASC" ${config.sortDir === 'ASC' ? 'selected' : ''}>ASC</option>
+                    <option value="DESC" ${config.sortDir === 'DESC' ? 'selected' : ''}>DESC</option>
+                  </select>
+                </div>
+              </div>
+
+              <div>
+                <label class="form-label" style="font-size: 11px; font-weight: 700; text-transform: uppercase; color: var(--text-secondary); margin-bottom: 4px; display: block;">Show Actions</label>
+                <div style="display: flex; flex-direction: column; gap: 6px; padding: 4px 0;">
+                  <div style="display: flex; align-items: center; gap: 8px;">
+                    <input type="checkbox" id="singleShowNew" ${config.showNew !== false ? 'checked' : ''} onchange="updateSelectedComponentConfigProperty('showNew', this.checked)">
+                    <label for="singleShowNew" style="font-size: 12px; font-weight: 600; cursor: pointer;">New Button</label>
+                  </div>
+                  <div style="display: flex; align-items: center; gap: 8px;">
+                    <input type="checkbox" id="singleShowViewAll" ${config.showViewAll !== false ? 'checked' : ''} onchange="updateSelectedComponentConfigProperty('showViewAll', this.checked)">
+                    <label for="singleShowViewAll" style="font-size: 12px; font-weight: 600; cursor: pointer;">View All Link</label>
+                  </div>
+                </div>
+              </div>
+
+              <div>
+                <label class="form-label" style="font-size: 11px; font-weight: 700; text-transform: uppercase; color: var(--text-secondary); margin-bottom: 4px; display: block;">Visible Columns</label>
+                <div style="max-height: 180px; overflow-y: auto; border: 1px solid var(--border-2); border-radius: 6px; padding: 8px; background: var(--surface); display: flex; flex-direction: column; gap: 6px;">
+                  ${fieldsCheckboxes}
+                </div>
+              </div>
+
+              <div style="margin-top: 16px; border-top: 1px solid var(--border); padding-top: 16px; display: flex; flex-direction: column; gap: 8px;">
+                <button class="btn btn-ghost btn-danger-link btn-sm" 
+                        style="width: 100%; text-align: center; display: block;"
+                        onclick="builderRemoveComponent('${compData.name}', '${adminRecordPageSelectedComponent.region}', event)">
+                  Remove Component
+                </button>
+                <button class="btn btn-ghost btn-sm" 
+                        style="width: 100%; text-align: center;"
+                        onclick="builderClearSelection()">
+                  Deselect Component
+                </button>
+              </div>
+            </div>
+          `;
+        } else {
+          sidebarRightHtml = `
+            <div style="display: flex; flex-direction: column; gap: 16px;">
+              <div style="border-bottom: 1px solid var(--border); padding-bottom: 10px;">
+                <h4 style="margin: 0; font-size: 14px; font-weight: 700; color: var(--text-primary);">Component Properties</h4>
+              </div>
+              
+              <div>
+                <label class="form-label" style="font-size: 11px; font-weight: 700; text-transform: uppercase; color: var(--text-secondary); margin-bottom: 4px; display: block;">Display Label</label>
+                <input type="text" value="${esc(comp ? comp.label : compData.name)}" class="form-ctrl" disabled style="background: var(--surface-2); font-size: 13px; padding: 6px 10px; border-radius: 6px; border: 1px solid var(--border);">
+              </div>
+              
+              <div>
+                <label class="form-label" style="font-size: 11px; font-weight: 700; text-transform: uppercase; color: var(--text-secondary); margin-bottom: 4px; display: block;">Component Title</label>
+                <input type="text" 
+                       id="propCompTitle" 
+                       value="${esc(compData.title || '')}" 
+                       placeholder="Override default title..." 
+                       class="form-ctrl" 
+                       oninput="updateSelectedComponentProperty('title', this.value)"
+                       style="font-size: 13px; padding: 6px 10px; border-radius: 6px; border: 1px solid var(--border-2); background: var(--surface);">
+              </div>
+              
+              <div>
+                <label class="form-label" style="font-size: 11px; font-weight: 700; text-transform: uppercase; color: var(--text-secondary); margin-bottom: 4px; display: block;">Region</label>
+                <input type="text" value="${esc(adminRecordPageSelectedComponent.region)}" class="form-ctrl" disabled style="background: var(--surface-2); font-size: 13px; padding: 6px 10px; border-radius: 6px; border: 1px solid var(--border);">
+              </div>
+              
+              <div style="display: flex; align-items: center; gap: 8px; margin-top: 4px;">
+                <input type="checkbox" 
+                       id="propCompCollapsed" 
+                       ${compData.collapsed ? 'checked' : ''} 
+                       onchange="updateSelectedComponentProperty('collapsed', this.checked)"
+                       style="cursor: pointer;">
+                <label for="propCompCollapsed" style="font-size: 12px; font-weight: 600; color: var(--text-primary); cursor: pointer; user-select: none;">Collapsed by Default</label>
+              </div>
+              
+              <div style="display: flex; align-items: center; gap: 8px; margin-top: 4px;">
+                <input type="checkbox" 
+                       id="propCompVisible" 
+                       ${compData.visible !== false ? 'checked' : ''} 
+                       onchange="updateSelectedComponentProperty('visible', this.checked)"
+                       style="cursor: pointer;">
+                <label for="propCompVisible" style="font-size: 12px; font-weight: 600; color: var(--text-primary); cursor: pointer; user-select: none;">Visible</label>
+              </div>
+
+              <div style="margin-top: 16px; border-top: 1px solid var(--border); padding-top: 16px; display: flex; flex-direction: column; gap: 8px;">
+                <button class="btn btn-ghost btn-danger-link btn-sm" 
+                        style="width: 100%; text-align: center; display: block;"
+                        onclick="builderRemoveComponent('${compData.name}', '${adminRecordPageSelectedComponent.region}', event)">
+                  Remove Component
+                </button>
+                <button class="btn btn-ghost btn-sm" 
+                        style="width: 100%; text-align: center;"
+                        onclick="builderClearSelection()">
+                  Deselect Component
+                </button>
+              </div>
+            </div>
+          `;
+        }
+      } else {
+        sidebarRightHtml = `
+          <div style="display: flex; flex-direction: column; gap: 16px;">
+            <div style="border-bottom: 1px solid var(--border); padding-bottom: 10px;">
+              <h4 style="margin: 0; font-size: 14px; font-weight: 700; color: var(--text-primary);">Page Layout Properties</h4>
+            </div>
+            <div>
+              <label class="form-label" style="font-size: 12px; font-weight: 600; color: var(--text-secondary); margin-bottom: 8px; display: block;">Page Template</label>
+              <select class="form-ctrl" 
+                      onchange="builderSwitchTemplate(this.value)" 
+                      style="font-size: 13px; padding: 6px 10px; border-radius: 6px; border-color: var(--border-2); background: var(--surface);">
+                <option value="one-column" ${adminRecordPageDraft.layout === 'one-column' ? 'selected' : ''}>One Column</option>
+                <option value="two-column" ${adminRecordPageDraft.layout === 'two-column' ? 'selected' : ''}>Two Column</option>
+                <option value="header-two-column" ${adminRecordPageDraft.layout === 'header-two-column' ? 'selected' : ''}>Header + Two Column</option>
+                <option value="header-two-column-bottom" ${adminRecordPageDraft.layout === 'header-two-column-bottom' ? 'selected' : ''}>Header + Two Column + Bottom</option>
+              </select>
+            </div>
+            <div style="margin-top: 10px; font-size: 12px; color: var(--text-secondary); line-height: 1.4;">
+              <strong style="color: var(--text-primary); display: block; margin-bottom: 4px;">Template Description:</strong>
+              ${
+                {
+                  'one-column': 'A single full-width column layout.',
+                  'two-column': 'A double column layout featuring a main column and a side column.',
+                  'header-two-column': 'A full-width header region with a double column layout below.',
+                  'header-two-column-bottom': 'A full-width header region, a double column layout in the middle, and a full-width bottom region.'
+                }[adminRecordPageDraft.layout]
+              }
+            </div>
+          </div>
+        `;
+      }
+
+      const templateBadgeMap = {
+        'one-column': 'One Column',
+        'two-column': 'Two Column',
+        'header-two-column': 'Header + Two Column',
+        'header-two-column-bottom': 'Header + Two Column + Bottom'
+      };
+
+      const hasChanges = checkAdminRecordPageHasChanges();
+
+      pane.innerHTML = `
+        <div class="record-page-builder-container" style="display: flex; flex-direction: column; height: 100vh; width: 100%; background: var(--surface); overflow: hidden;">
+          <div class="builder-toolbar" style="display: flex; justify-content: space-between; align-items: center; padding: 12px 20px; border-bottom: 1px solid var(--border); background: var(--bg-secondary); flex-shrink: 0; height: 56px;">
+            <div style="display: flex; align-items: center; gap: 16px;">
+              <button class="btn btn-ghost btn-sm" onclick="goBackToObjectManager()" style="display: inline-flex; align-items: center; gap: 6px; font-weight: 600; padding: 6px 12px; border-radius: 4px; border: 1px solid var(--border); background: var(--surface);">
+                &larr; Back to Object Manager
+              </button>
+              <h3 style="margin: 0; font-size: 15px; font-weight: 600; color: var(--text-primary);">${objectName} Record Page Layout</h3>
+              <span class="badge" id="builderTemplateBadge" style="background: rgba(1, 118, 211, 0.08); color: var(--accent); padding: 4px 8px; border-radius: 4px; font-size: 12px; font-weight: 500;">
+                ${templateBadgeMap[adminRecordPageDraft.layout] || adminRecordPageDraft.layout}
+              </span>
+            </div>
+            <div style="display: flex; gap: 8px;">
+              <button class="btn btn-ghost btn-sm" onclick="builderTogglePreviewMode()" id="builderPreviewBtn" style="display: inline-flex; align-items: center; gap: 6px;">
+                ${adminRecordPagePreviewMode ? 'Edit Layout' : 'Preview'}
+              </button>
+              <button class="btn btn-ghost btn-sm" onclick="builderResetLayout()" style="display: inline-flex; align-items: center; gap: 6px;">
+                Reset Layout
+              </button>
+              <button class="btn btn-ghost btn-sm" onclick="goBackToObjectManager()">Cancel</button>
+              <button class="btn btn-primary btn-sm" 
+                      id="recordPageSaveBtn" 
+                      onclick="builderSaveLayout()" 
+                      ${hasChanges ? '' : 'disabled'} 
+                      style="opacity: ${hasChanges ? '1' : '0.5'}; cursor: ${hasChanges ? 'pointer' : 'default'};">
+                Save
+              </button>
+            </div>
+          </div>
+          
+          <div class="builder-workspace" style="display: flex; flex: 1; overflow: hidden; height: calc(100vh - 56px);">
+            <div class="builder-sidebar-left" style="width: 18%; min-width: 180px; max-width: 240px; border-right: 1px solid var(--border); display: ${adminRecordPagePreviewMode ? 'none' : 'flex'}; flex-direction: column; background: var(--bg-secondary); flex-shrink: 0; height: 100%; overflow: hidden;">
+              <div style="padding: 12px 16px; border-bottom: 1px solid var(--border); font-size: 12px; font-weight: 700; text-transform: uppercase; color: var(--text-muted); letter-spacing: 0.05em;">
+                Standard Components
+              </div>
+              <div class="builder-component-list" id="builderComponentLibrary" style="padding: 16px; display: flex; flex-direction: column; gap: 10px; overflow-y: auto; flex: 1;">
+                ${componentLibraryHtml}
+              </div>
+            </div>
+            
+            <div class="builder-canvas-container" style="flex: 1; padding: 24px; overflow-y: auto; background: var(--surface-2); display: flex; flex-direction: column; gap: 16px; height: 100%;">
+              ${adminRecordPagePreviewMode ? renderRecordPagePreviewHtml() : renderRecordPageCanvasHtml()}
+            </div>
+            
+            <div class="builder-sidebar-right" id="builderSidebarRight" style="width: 18%; min-width: 200px; max-width: 280px; border-left: 1px solid var(--border); display: ${adminRecordPagePreviewMode ? 'none' : 'flex'}; flex-direction: column; background: var(--bg-secondary); overflow-y: auto; padding: 16px; flex-shrink: 0; height: 100%;">
+              ${sidebarRightHtml}
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
+    function updateSelectedComponentProperty(key, value) {
+      if (!adminRecordPageSelectedComponent) return;
+      const { region, index } = adminRecordPageSelectedComponent;
+      const regionList = adminRecordPageDraft.regions[region] || [];
+      const compData = regionList[index];
+      if (compData) {
+        compData[key] = value;
+        if (key === 'title') {
+          const placedCards = document.querySelectorAll(`[data-region="${region}"] .placed-component-card`);
+          const card = placedCards[index];
+          if (card) {
+            const bodyTitleEl = card.querySelector('.live-preview-title');
+            if (bodyTitleEl) {
+              const defaultLabel = ADMIN_RECORD_PAGE_COMPONENTS.find(item => item.name === compData.name)?.label || compData.name;
+              bodyTitleEl.textContent = value || defaultLabel;
+            }
+          }
+          const hasChanges = checkAdminRecordPageHasChanges();
+          const saveBtn = document.getElementById('recordPageSaveBtn');
+          if (saveBtn) {
+            saveBtn.disabled = !hasChanges;
+            saveBtn.style.opacity = hasChanges ? '1' : '0.5';
+            saveBtn.style.cursor = hasChanges ? 'pointer' : 'default';
+          }
+        } else {
+          renderRecordPageBuilder();
+        }
+      }
+    }
+
+    function updateSelectedComponentConfigProperty(key, value) {
+      if (!adminRecordPageSelectedComponent) return;
+      const { region, index } = adminRecordPageSelectedComponent;
+      const regionList = adminRecordPageDraft.regions[region] || [];
+      const compData = regionList[index];
+      if (compData && compData.config) {
+        compData.config[key] = value;
+        
+        const hasChanges = checkAdminRecordPageHasChanges();
+        const saveBtn = document.getElementById('recordPageSaveBtn');
+        if (saveBtn) {
+          saveBtn.disabled = !hasChanges;
+          saveBtn.style.opacity = hasChanges ? '1' : '0.5';
+          saveBtn.style.cursor = hasChanges ? 'pointer' : 'default';
+        }
+        
+        renderRecordPageBuilder();
+      }
+    }
+
+    function toggleSelectedComponentConfigField(fieldName, checked) {
+      if (!adminRecordPageSelectedComponent) return;
+      const { region, index } = adminRecordPageSelectedComponent;
+      const regionList = adminRecordPageDraft.regions[region] || [];
+      const compData = regionList[index];
+      if (compData && compData.config) {
+        let currentFields = compData.config.fields || [];
+        if (checked) {
+          if (!currentFields.includes(fieldName)) {
+            currentFields.push(fieldName);
+          }
+        } else {
+          currentFields = currentFields.filter(f => f !== fieldName);
+        }
+        compData.config.fields = currentFields;
+
+        const hasChanges = checkAdminRecordPageHasChanges();
+        const saveBtn = document.getElementById('recordPageSaveBtn');
+        if (saveBtn) {
+          saveBtn.disabled = !hasChanges;
+          saveBtn.style.opacity = hasChanges ? '1' : '0.5';
+          saveBtn.style.cursor = hasChanges ? 'pointer' : 'default';
+        }
+
+        renderRecordPageBuilder();
+      }
+    }
+
+    function builderSelectRelatedListRelationship(relName) {
+      if (!adminRecordPageSelectedComponent) return;
+      const { region, index } = adminRecordPageSelectedComponent;
+      const regionList = adminRecordPageDraft.regions[region] || [];
+      const compData = regionList[index];
+      if (compData && compData.config) {
+        const rel = adminObjectChildRelationships.find(r => r.relationshipName === relName);
+        if (rel) {
+          compData.config.relationshipName = rel.relationshipName;
+          compData.config.childObject = rel.childSObject;
+          compData.config.field = rel.field;
+          compData.config.title = rel.relationshipName;
+          
+          const standardFields = {
+            Contact: ["Name", "Title", "Email", "Phone"],
+            Opportunity: ["Name", "StageName", "Amount", "CloseDate"],
+            Case: ["CaseNumber", "Subject", "Status", "Priority"],
+            Quote: ["Name", "QuoteNumber", "Status", "GrandTotal"],
+            Product2: ["Name", "ProductCode", "Family", "IsActive"],
+            OpportunityLineItem: ["Product2.Name", "Quantity", "UnitPrice", "TotalPrice"],
+            QuoteLineItem: ["LineNumber", "Product2.Name", "Quantity", "TotalPrice"]
+          }[rel.childSObject] || ["Name"];
+          
+          compData.config.fields = standardFields;
+          compData.config.sortBy = 'CreatedDate';
+          compData.config.sortDir = 'DESC';
+          
+          if (!childObjectFieldsCache[rel.childSObject]) {
+            loadChildObjectFields(rel.childSObject).then(() => {
+              renderRecordPageBuilder();
+            });
+          } else {
+            renderRecordPageBuilder();
+          }
+        } else {
+          compData.config.relationshipName = '';
+          compData.config.childObject = '';
+          compData.config.field = '';
+          compData.config.title = '';
+          compData.config.fields = ['Name'];
+          renderRecordPageBuilder();
+        }
+
+        const hasChanges = checkAdminRecordPageHasChanges();
+        const saveBtn = document.getElementById('recordPageSaveBtn');
+        if (saveBtn) {
+          saveBtn.disabled = !hasChanges;
+          saveBtn.style.opacity = hasChanges ? '1' : '0.5';
+          saveBtn.style.cursor = hasChanges ? 'pointer' : 'default';
+        }
+      }
+    }
+
+    function selectRelatedListToEdit(relKey) {
+      adminActiveRelatedListConfigKey = relKey;
+      const compData = adminRecordPageDraft.regions[adminRecordPageSelectedComponent.region][adminRecordPageSelectedComponent.index];
+      const childObj = (compData.relatedLists || []).find(l => l.key === relKey)?.objectName;
+      if (childObj && !childObjectFieldsCache[childObj]) {
+        loadChildObjectFields(childObj).then(() => {
+          renderRecordPageBuilder();
+        });
+      } else {
+        renderRecordPageBuilder();
+      }
+    }
+
+    function toggleRelatedListEnabled(relKey, enabled) {
+      const compData = adminRecordPageDraft.regions[adminRecordPageSelectedComponent.region][adminRecordPageSelectedComponent.index];
+      const list = compData.relatedLists || [];
+      const config = list.find(l => l.key === relKey);
+      if (config) {
+        config.enabled = enabled;
+        renderRecordPageBuilder();
+      }
+    }
+
+    function moveRelatedList(relKey, direction) {
+      const compData = adminRecordPageDraft.regions[adminRecordPageSelectedComponent.region][adminRecordPageSelectedComponent.index];
+      const list = compData.relatedLists || [];
+      const idx = list.findIndex(l => l.key === relKey);
+      if (idx === -1) return;
+      
+      const newIdx = idx + direction;
+      if (newIdx < 0 || newIdx >= list.length) return;
+      
+      const temp = list[idx];
+      list[idx] = list[newIdx];
+      list[newIdx] = temp;
+      
+      renderRecordPageBuilder();
+    }
+
+    function updateRelatedListConfigProperty(relKey, propKey, value) {
+      const compData = adminRecordPageDraft.regions[adminRecordPageSelectedComponent.region][adminRecordPageSelectedComponent.index];
+      const list = compData.relatedLists || [];
+      const config = list.find(l => l.key === relKey);
+      if (config) {
+        config[propKey] = value;
+        renderRecordPageBuilder();
+      }
+    }
+
+    function updateRelatedListConfigColumn(relKey, fieldName, checked) {
+      const compData = adminRecordPageDraft.regions[adminRecordPageSelectedComponent.region][adminRecordPageSelectedComponent.index];
+      const list = compData.relatedLists || [];
+      const config = list.find(l => l.key === relKey);
+      if (config) {
+        if (!config.fields) config.fields = [];
+        if (checked) {
+          if (!config.fields.includes(fieldName)) {
+            config.fields.push(fieldName);
+          }
+        } else {
+          config.fields = config.fields.filter(f => f !== fieldName);
+        }
+        renderRecordPageBuilder();
+      }
+    }
+
+    function builderDragStart(event, componentName) {
+      event.dataTransfer.setData('text/plain', JSON.stringify({ type: 'library', name: componentName }));
+    }
+
+    function builderDragStartFromCanvas(event, componentName, sourceRegion, index) {
+      event.dataTransfer.setData('text/plain', JSON.stringify({ type: 'canvas', name: componentName, region: sourceRegion, index: index }));
+    }
+
+    function builderDragOver(event) {
+      event.preventDefault();
+      const targetContainer = event.currentTarget;
+      
+      targetContainer.querySelectorAll('.drag-indicator').forEach(el => el.remove());
+      
+      const children = Array.from(targetContainer.querySelectorAll('.placed-component-card'));
+      let insertIdx = children.length;
+      
+      for (let i = 0; i < children.length; i++) {
+        const rect = children[i].getBoundingClientRect();
+        const midY = rect.top + rect.height / 2;
+        if (event.clientY < midY) {
+          insertIdx = i;
+          break;
+        }
+      }
+      
+      const indicator = document.createElement('div');
+      indicator.className = 'drag-indicator';
+      indicator.style.height = '4px';
+      indicator.style.background = 'var(--accent)';
+      indicator.style.borderRadius = '2px';
+      indicator.style.margin = '8px 0';
+      indicator.style.transition = 'all 0.2s';
+      
+      if (insertIdx < children.length) {
+        targetContainer.insertBefore(indicator, children[insertIdx]);
+      } else {
+        const dragHint = targetContainer.querySelector('.drag-hint-empty');
+        if (dragHint) {
+          targetContainer.insertBefore(indicator, dragHint);
+        } else {
+          targetContainer.appendChild(indicator);
+        }
+      }
+    }
+
+    function builderDragEnter(event) {
+      event.currentTarget.classList.add('drag-over');
+      event.currentTarget.style.borderColor = 'var(--accent)';
+      event.currentTarget.style.background = 'rgba(1, 118, 211, 0.05)';
+    }
+
+    function builderDragLeave(event) {
+      event.currentTarget.classList.remove('drag-over');
+      event.currentTarget.style.borderColor = 'var(--border-2)';
+      event.currentTarget.style.background = 'rgba(255, 255, 255, 0.4)';
+      event.currentTarget.querySelectorAll('.drag-indicator').forEach(el => el.remove());
+    }
+
+    function builderDrop(event, targetRegion) {
+      event.preventDefault();
+      event.currentTarget.classList.remove('drag-over');
+      event.currentTarget.style.borderColor = 'var(--border-2)';
+      event.currentTarget.style.background = 'rgba(255, 255, 255, 0.4)';
+      event.currentTarget.querySelectorAll('.drag-indicator').forEach(el => el.remove());
+
+      const rawData = event.dataTransfer.getData('text/plain');
+      if (!rawData) return;
+
+      try {
+        const dragData = JSON.parse(rawData);
+        
+        const children = Array.from(event.currentTarget.querySelectorAll('.placed-component-card'));
+        let insertIdx = children.length;
+        for (let i = 0; i < children.length; i++) {
+          const rect = children[i].getBoundingClientRect();
+          const midY = rect.top + rect.height / 2;
+          if (event.clientY < midY) {
+            insertIdx = i;
+            break;
+          }
+        }
+        
+        if (dragData.type === 'library') {
+          let isDuplicate = false;
+          if (dragData.name !== 'related-list-single') {
+            Object.keys(adminRecordPageDraft.regions).forEach(r => {
+              const list = adminRecordPageDraft.regions[r] || [];
+              if (list.some(c => c.name === dragData.name)) {
+                isDuplicate = true;
+              }
+            });
+          }
+
+          if (isDuplicate) {
+            toast('This component is already placed on the page.', 'err');
+            return;
+          }
+
+          if (!adminRecordPageDraft.regions[targetRegion]) {
+            adminRecordPageDraft.regions[targetRegion] = [];
+          }
+          const newComp = { name: dragData.name, title: '', collapsed: false, visible: true };
+          if (dragData.name === 'related-list-single') {
+            const uniqId = Math.random().toString(36).substring(2, 9);
+            newComp.config = {
+              parentObject: adminRecordPageObjectName,
+              childObject: '',
+              relationshipName: '',
+              field: '',
+              title: '',
+              fields: ['Name'],
+              limit: 5,
+              sortBy: 'CreatedDate',
+              sortDir: 'DESC',
+              showNew: true,
+              showViewAll: true,
+              showEdit: true,
+              showDelete: true,
+              key: `rel_single_${uniqId}`
+            };
+          }
+          adminRecordPageDraft.regions[targetRegion].splice(insertIdx, 0, newComp);
+        } else if (dragData.type === 'canvas') {
+          const srcList = adminRecordPageDraft.regions[dragData.region] || [];
+          const movedComp = srcList[dragData.index];
+          if (dragData.region === targetRegion) {
+            srcList.splice(dragData.index, 1);
+            let correctedIdx = insertIdx;
+            if (dragData.index < insertIdx) {
+              correctedIdx = Math.max(0, insertIdx - 1);
+            }
+            srcList.splice(correctedIdx, 0, movedComp);
+          } else {
+            srcList.splice(dragData.index, 1);
+            if (!adminRecordPageDraft.regions[targetRegion]) {
+              adminRecordPageDraft.regions[targetRegion] = [];
+            }
+            adminRecordPageDraft.regions[targetRegion].splice(insertIdx, 0, movedComp);
+          }
+        }
+
+        adminRecordPageSelectedComponent = null;
+        renderRecordPageBuilder();
+      } catch (e) {
+        console.error(e);
+      }
+    }
+
+    function builderSelectComponent(event, componentName, regionName, index) {
+      event.stopPropagation();
+      adminRecordPageSelectedComponent = { name: componentName, region: regionName, index: index };
+      renderRecordPageBuilder();
+    }
+
+    function builderClearSelection() {
+      adminRecordPageSelectedComponent = null;
+      adminActiveRelatedListConfigKey = '';
+      renderRecordPageBuilder();
+    }
+
+    function builderRemoveComponent(componentName, regionName, event) {
+      if (event) event.stopPropagation();
+      const list = adminRecordPageDraft.regions[regionName] || [];
+      const idx = list.findIndex(c => c.name === componentName);
+      if (idx !== -1) {
+        list.splice(idx, 1);
+      }
+      adminRecordPageSelectedComponent = null;
+      renderRecordPageBuilder();
+    }
+
+    function builderSwitchTemplate(newTemplate) {
+      const oldTemplate = adminRecordPageDraft.layout;
+      if (oldTemplate === newTemplate) return;
+
+      const activeComps = [];
+      const oldRegions = ['header', 'left', 'right', 'bottom', 'main'];
+      oldRegions.forEach(r => {
+        (adminRecordPageDraft.regions[r] || []).forEach(compObj => {
+          if (!activeComps.some(c => c.name === compObj.name)) {
+            activeComps.push(compObj);
+          }
+        });
+        adminRecordPageDraft.regions[r] = [];
+      });
+
+      adminRecordPageDraft.layout = newTemplate;
+
+      if (newTemplate === 'one-column') {
+        adminRecordPageDraft.regions.main = activeComps;
+      } else if (newTemplate === 'two-column') {
+        activeComps.forEach(compObj => {
+          if (['activity', 'chatter'].includes(compObj.name)) {
+            adminRecordPageDraft.regions.right.push(compObj);
+          } else {
+            adminRecordPageDraft.regions.left.push(compObj);
+          }
+        });
+      } else if (newTemplate === 'header-two-column') {
+        activeComps.forEach(compObj => {
+          if (compObj.name === 'compact-layout') {
+            adminRecordPageDraft.regions.header.push(compObj);
+          } else if (['activity', 'chatter'].includes(compObj.name)) {
+            adminRecordPageDraft.regions.right.push(compObj);
+          } else {
+            adminRecordPageDraft.regions.left.push(compObj);
+          }
+        });
+      } else {
+        activeComps.forEach(compObj => {
+          if (compObj.name === 'compact-layout') {
+            adminRecordPageDraft.regions.header.push(compObj);
+          } else if (compObj.name === 'related-lists') {
+            adminRecordPageDraft.regions.bottom.push(compObj);
+          } else if (['activity', 'chatter'].includes(compObj.name)) {
+            adminRecordPageDraft.regions.right.push(compObj);
+          } else {
+            adminRecordPageDraft.regions.left.push(compObj);
+          }
+        });
+      }
+
+      adminRecordPageSelectedComponent = null;
+      renderRecordPageBuilder();
+    }
+
+    function builderTogglePreviewMode() {
+      adminRecordPagePreviewMode = !adminRecordPagePreviewMode;
+      adminRecordPageSelectedComponent = null;
+      renderRecordPageBuilder();
+    }
+
+    async function builderSaveLayout() {
+      try {
+        const res = await api(`/api/portal/record-pages/${adminRecordPageObjectName}`, {
+          method: 'POST',
+          body: JSON.stringify({
+            layout: adminRecordPageDraft.layout,
+            regions: adminRecordPageDraft.regions
+          })
+        });
+        if (res && res.success) {
+          toast('Lightning Record Page saved successfully!', 'ok');
+          adminRecordPageOriginalJson = JSON.stringify(adminRecordPageDraft);
+          goBackToObjectManager();
+        } else {
+          toast('Failed to save Record Page', 'err');
+        }
+      } catch (err) {
+        console.error(err);
+        toast('Error saving Record Page', 'err');
+      }
+    }
+
+    function getDeveloperDefaultLayout(objectName) {
+      const rawPage = {
+        layout: 'header-two-column',
+        regions: {
+          header: ['compact-layout'],
+          left: ['related-lists', 'details'],
+          right: ['activity', 'chatter'],
+          bottom: []
+        }
+      };
+
+      const defaultRegions = ['header', 'left', 'right', 'bottom', 'main'];
+      const pageDraft = {
+        layout: rawPage.layout,
+        regions: {}
+      };
+
+      defaultRegions.forEach(r => {
+        const rawComps = rawPage.regions?.[r] || [];
+        pageDraft.regions[r] = rawComps.map(c => {
+          const resolved = typeof c === 'string' ? { name: c, title: '', collapsed: false, visible: true } : {
+            name: c.name,
+            title: c.title || '',
+            collapsed: !!c.collapsed,
+            visible: c.visible !== false,
+            relatedLists: c.relatedLists || null,
+            config: c.config || null
+          };
+          
+          if (resolved.name === 'related-lists' && !resolved.relatedLists) {
+            resolved.relatedLists = adminObjectChildRelationships.map(rel => {
+              const standardFields = {
+                Contact: ["Name", "Title", "Email", "Phone"],
+                Opportunity: ["Name", "StageName", "Amount", "CloseDate"],
+                Case: ["CaseNumber", "Subject", "Status", "Priority"],
+                Quote: ["Name", "QuoteNumber", "Status", "GrandTotal"],
+                Product2: ["Name", "ProductCode", "Family", "IsActive"],
+                OpportunityLineItem: ["Product2.Name", "Quantity", "UnitPrice", "TotalPrice"],
+                QuoteLineItem: ["LineNumber", "Product2.Name", "Quantity", "TotalPrice"]
+              }[rel.childSObject] || ["Name"];
+              
+              return {
+                key: rel.relationshipName.toLowerCase(),
+                objectName: rel.childSObject,
+                relationshipName: rel.relationshipName,
+                field: rel.field,
+                title: rel.relationshipName,
+                enabled: ["Contacts", "Opportunities", "Cases", "Quotes", "Products", "OpportunityLineItems", "QuoteLineItems"].includes(rel.relationshipName),
+                fields: standardFields,
+                limit: 5,
+                sortBy: 'CreatedDate',
+                sortDir: 'DESC',
+                showNew: true,
+                showViewAll: true,
+                showEdit: true,
+                showDelete: true
+              };
+            });
+          }
+          return resolved;
+        });
+      });
+      return pageDraft;
+    }
+
+    function builderResetLayout() {
+      if (confirm('Are you sure you want to discard your unsaved changes and reset the layout to the original developer default?')) {
+        adminRecordPageDraft = getDeveloperDefaultLayout(adminRecordPageObjectName);
+        adminRecordPageSelectedComponent = null;
+        renderRecordPageBuilder();
+        toast('Reset to developer default layout. Click Save to apply.', 'ok');
+      }
+    }
+
+    function switchCustomPreviewTab(regionName, activeIdx) {
+      if (typeof activeIdx === 'string' && activeIdx.includes('-')) {
+        switchCustomPreviewTabNew(regionName, activeIdx);
+        return;
+      }
+      const contents = document.querySelectorAll(`.custom-preview-tab-content-${regionName}`);
+      contents.forEach((el, idx) => {
+        el.style.display = idx === activeIdx ? 'block' : 'none';
+      });
+      
+      const headers = document.querySelectorAll(`.custom-preview-tab-header[data-region="${regionName}"]`);
+      headers.forEach((el, idx) => {
+        if (idx === activeIdx) {
+          el.classList.add('active');
+          el.style.borderBottom = '3px solid var(--accent)';
+          el.style.color = 'var(--accent)';
+          el.style.fontWeight = '700';
+        } else {
+          el.classList.remove('active');
+          el.style.borderBottom = '3px solid transparent';
+          el.style.color = 'var(--text-muted)';
+          el.style.fontWeight = '600';
+        }
+      });
+    }
+
+    function switchCustomPreviewTabNew(regionName, tabPath) {
+      const parts = tabPath.split('-');
+      const itemIdx = parts[0];
+      const activeSubIdx = parseInt(parts[1]);
+
+      const headers = document.querySelectorAll(`.custom-preview-tab-header[data-region="${regionName}"][data-index^="${itemIdx}-"]`);
+      headers.forEach(h => {
+        const idx = parseInt(h.getAttribute('data-index').split('-')[1]);
+        if (idx === activeSubIdx) {
+          h.classList.add('active');
+          h.style.borderBottom = '3px solid var(--accent)';
+          h.style.color = 'var(--accent)';
+          h.style.fontWeight = '700';
+        } else {
+          h.classList.remove('active');
+          h.style.borderBottom = '3px solid transparent';
+          h.style.color = 'var(--text-muted)';
+          h.style.fontWeight = '600';
+        }
+      });
+
+      const contents = document.querySelectorAll(`.custom-preview-tab-content-${regionName}-${itemIdx}`);
+      contents.forEach(c => {
+        const subIdx = parseInt(c.id.split('-').pop());
+        c.style.display = subIdx === activeSubIdx ? 'block' : 'none';
+      });
     }
   </script>
 

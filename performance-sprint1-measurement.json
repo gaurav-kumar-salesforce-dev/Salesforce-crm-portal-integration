@@ -1,0 +1,384 @@
+{
+  "user": {
+    "id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+    "role": "system_administrator"
+  },
+  "calls": [
+    {
+      "label": "reset audit buffer",
+      "path": "/api/debug/performance-audit/reset",
+      "status": 200,
+      "ms": 1137.65,
+      "perfRequestId": "b6c255c0-7ffe-47de-8107-461c37c3804d"
+    },
+    {
+      "label": "cold /api/portal/me",
+      "path": "/api/portal/me",
+      "status": 200,
+      "ms": 2335.01,
+      "perfRequestId": "04a84c0a-a0b2-408c-9f33-c514e0192d29"
+    },
+    {
+      "label": "warm /api/portal/me",
+      "path": "/api/portal/me",
+      "status": 200,
+      "ms": 698.53,
+      "perfRequestId": "49da80bf-edd5-49bf-93d3-25d55578f1b0"
+    },
+    {
+      "label": "cache stats",
+      "path": "/api/debug/user-context-cache",
+      "status": 200,
+      "ms": 791.84,
+      "perfRequestId": "d1a4e67a-c408-407d-901a-4fca19013f1d"
+    },
+    {
+      "label": "perf report",
+      "path": "/api/debug/performance-audit",
+      "status": 200,
+      "ms": 878.93,
+      "perfRequestId": "8be12c70-601a-44dc-8abb-e2ee6662ab51"
+    }
+  ],
+  "cacheStats": {
+    "hits": 1,
+    "misses": 1,
+    "builds": 1,
+    "invalidations": 0,
+    "size": 1,
+    "hitRatio": 0.5
+  },
+  "meRequests": [
+    {
+      "totalMs": 2323.89,
+      "status": 200,
+      "counts": {
+        "supabase": 7,
+        "salesforce": 0,
+        "permission": 0,
+        "sharing": 0,
+        "layout": 0,
+        "metadata": 0,
+        "related": 0,
+        "activity": 0,
+        "chatter": 0
+      },
+      "totals": {
+        "node": 2323.89,
+        "supabase": 7435.95,
+        "salesforce": 0,
+        "permission": 0,
+        "sharing": 0,
+        "layout": 0,
+        "metadata": 0,
+        "related": 0,
+        "activity": 0,
+        "chatter": 0
+      },
+      "slowestEvents": [
+        {
+          "category": "supabase",
+          "label": "from:users.select(id, email, name, role, profile_image, is).eq(id,aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa).eq(is_active,true).single",
+          "ms": 1605.96,
+          "at": 2317.79
+        },
+        {
+          "category": "supabase",
+          "label": "from:user_profile_assignments.select(profile_id, profiles(id, name, descripti).eq(user_id,aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa).maybeSingle",
+          "ms": 1366.42,
+          "at": 2078.43
+        },
+        {
+          "category": "supabase",
+          "label": "from:user_permission_set_assignments.select(perm_set_id).eq(user_id,aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa)",
+          "ms": 1320.46,
+          "at": 2032.57
+        },
+        {
+          "category": "supabase",
+          "label": "from:user_permission_set_group_assignments.select(group_id, permission_set_groups(id, name).eq(user_id,aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa)",
+          "ms": 1318.61,
+          "at": 2030.79
+        },
+        {
+          "category": "supabase",
+          "label": "from:sf_objects.select(api_name, label).eq(is_active,true).order(sort_order)",
+          "ms": 1117.5,
+          "at": 1829.56
+        },
+        {
+          "category": "supabase",
+          "label": "from:users.select(id, email, name, role, is_active).eq(id,aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa).eq(is_active,true).single",
+          "ms": 372.79,
+          "at": 374.84
+        },
+        {
+          "category": "supabase",
+          "label": "from:user_profile_assignments.select(profiles(is_system_admin)).eq(user_id,aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa).maybeSingle",
+          "ms": 334.21,
+          "at": 709.36
+        }
+      ]
+    },
+    {
+      "totalMs": 693.42,
+      "status": 200,
+      "counts": {
+        "supabase": 2,
+        "salesforce": 0,
+        "permission": 0,
+        "sharing": 0,
+        "layout": 0,
+        "metadata": 0,
+        "related": 0,
+        "activity": 0,
+        "chatter": 0
+      },
+      "totals": {
+        "node": 693.42,
+        "supabase": 689.65,
+        "salesforce": 0,
+        "permission": 0,
+        "sharing": 0,
+        "layout": 0,
+        "metadata": 0,
+        "related": 0,
+        "activity": 0,
+        "chatter": 0
+      },
+      "slowestEvents": [
+        {
+          "category": "supabase",
+          "label": "from:users.select(id, email, name, role, is_active).eq(id,aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa).eq(is_active,true).single",
+          "ms": 366.94,
+          "at": 368.22
+        },
+        {
+          "category": "supabase",
+          "label": "from:user_profile_assignments.select(profiles(is_system_admin)).eq(user_id,aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa).maybeSingle",
+          "ms": 322.71,
+          "at": 691.15
+        }
+      ]
+    }
+  ],
+  "warmSamples": [
+    {
+      "status": 200,
+      "ms": 834.6,
+      "id": "b49710c5-eae4-44dc-bfcf-34ad2d4849c3"
+    },
+    {
+      "status": 200,
+      "ms": 705.37,
+      "id": "56fe3c9e-84b4-4c93-b17f-c357c182fe7b"
+    },
+    {
+      "status": 200,
+      "ms": 693.87,
+      "id": "2dc81140-bb29-428c-8c33-ef5c22269604"
+    },
+    {
+      "status": 200,
+      "ms": 676.91,
+      "id": "bb59086a-8531-4612-863b-52ace8459019"
+    },
+    {
+      "status": 200,
+      "ms": 683.78,
+      "id": "70d7e4a2-6172-47fc-8918-2be86d84fbe4"
+    }
+  ],
+  "finalCacheStats": {
+    "hits": 6,
+    "misses": 1,
+    "builds": 1,
+    "invalidations": 0,
+    "size": 1,
+    "hitRatio": 0.8571
+  },
+  "finalMeRequests": [
+    {
+      "totalMs": 2323.89,
+      "counts": {
+        "supabase": 7,
+        "salesforce": 0,
+        "permission": 0,
+        "sharing": 0,
+        "layout": 0,
+        "metadata": 0,
+        "related": 0,
+        "activity": 0,
+        "chatter": 0
+      },
+      "totals": {
+        "node": 2323.89,
+        "supabase": 7435.95,
+        "salesforce": 0,
+        "permission": 0,
+        "sharing": 0,
+        "layout": 0,
+        "metadata": 0,
+        "related": 0,
+        "activity": 0,
+        "chatter": 0
+      }
+    },
+    {
+      "totalMs": 693.42,
+      "counts": {
+        "supabase": 2,
+        "salesforce": 0,
+        "permission": 0,
+        "sharing": 0,
+        "layout": 0,
+        "metadata": 0,
+        "related": 0,
+        "activity": 0,
+        "chatter": 0
+      },
+      "totals": {
+        "node": 693.42,
+        "supabase": 689.65,
+        "salesforce": 0,
+        "permission": 0,
+        "sharing": 0,
+        "layout": 0,
+        "metadata": 0,
+        "related": 0,
+        "activity": 0,
+        "chatter": 0
+      }
+    },
+    {
+      "totalMs": 822.32,
+      "counts": {
+        "supabase": 2,
+        "salesforce": 0,
+        "permission": 0,
+        "sharing": 0,
+        "layout": 0,
+        "metadata": 0,
+        "related": 0,
+        "activity": 0,
+        "chatter": 0
+      },
+      "totals": {
+        "node": 822.32,
+        "supabase": 817.59,
+        "salesforce": 0,
+        "permission": 0,
+        "sharing": 0,
+        "layout": 0,
+        "metadata": 0,
+        "related": 0,
+        "activity": 0,
+        "chatter": 0
+      }
+    },
+    {
+      "totalMs": 698.78,
+      "counts": {
+        "supabase": 2,
+        "salesforce": 0,
+        "permission": 0,
+        "sharing": 0,
+        "layout": 0,
+        "metadata": 0,
+        "related": 0,
+        "activity": 0,
+        "chatter": 0
+      },
+      "totals": {
+        "node": 698.78,
+        "supabase": 695.64,
+        "salesforce": 0,
+        "permission": 0,
+        "sharing": 0,
+        "layout": 0,
+        "metadata": 0,
+        "related": 0,
+        "activity": 0,
+        "chatter": 0
+      }
+    },
+    {
+      "totalMs": 688.8,
+      "counts": {
+        "supabase": 2,
+        "salesforce": 0,
+        "permission": 0,
+        "sharing": 0,
+        "layout": 0,
+        "metadata": 0,
+        "related": 0,
+        "activity": 0,
+        "chatter": 0
+      },
+      "totals": {
+        "node": 688.8,
+        "supabase": 685.34,
+        "salesforce": 0,
+        "permission": 0,
+        "sharing": 0,
+        "layout": 0,
+        "metadata": 0,
+        "related": 0,
+        "activity": 0,
+        "chatter": 0
+      }
+    },
+    {
+      "totalMs": 672.08,
+      "counts": {
+        "supabase": 2,
+        "salesforce": 0,
+        "permission": 0,
+        "sharing": 0,
+        "layout": 0,
+        "metadata": 0,
+        "related": 0,
+        "activity": 0,
+        "chatter": 0
+      },
+      "totals": {
+        "node": 672.08,
+        "supabase": 668.56,
+        "salesforce": 0,
+        "permission": 0,
+        "sharing": 0,
+        "layout": 0,
+        "metadata": 0,
+        "related": 0,
+        "activity": 0,
+        "chatter": 0
+      }
+    },
+    {
+      "totalMs": 678.31,
+      "counts": {
+        "supabase": 2,
+        "salesforce": 0,
+        "permission": 0,
+        "sharing": 0,
+        "layout": 0,
+        "metadata": 0,
+        "related": 0,
+        "activity": 0,
+        "chatter": 0
+      },
+      "totals": {
+        "node": 678.31,
+        "supabase": 674.9,
+        "salesforce": 0,
+        "permission": 0,
+        "sharing": 0,
+        "layout": 0,
+        "metadata": 0,
+        "related": 0,
+        "activity": 0,
+        "chatter": 0
+      }
+    }
+  ]
+}

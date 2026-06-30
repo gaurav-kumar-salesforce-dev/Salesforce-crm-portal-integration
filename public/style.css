@@ -636,6 +636,10 @@ body {
 .object-icon-case { background: #f2cf5b; }
 .object-icon-lead { background: #00a99d; }
 .object-icon-campaign { background: #a094ed; }
+.object-icon-quote { background: #37a455; }
+.object-icon-product { background: #5a16c6; }
+.object-icon-opportunityProduct { background: #ff5d2d; }
+.object-icon-quoteLineItem { background: #37a455; }
 .object-icon-task { background: #35b66f; }
 .object-icon-call { background: #18aaa6; }
 .object-icon-event { background: #b55cff; }
@@ -1225,10 +1229,14 @@ body {
   border: 1px solid var(--border);
   border-radius: var(--r-lg);
   overflow: hidden;
+  overflow-anchor: none;
   box-shadow: var(--shadow-sm);
 }
 
-.table-scroll { overflow-x: auto; }
+.table-scroll {
+  overflow-x: auto;
+  overflow-anchor: none;
+}
 
 .pagination-bar {
   display: flex;
@@ -1270,6 +1278,7 @@ body {
   width: 100%;
   border-collapse: collapse;
   min-width: 600px;
+  overflow-anchor: none;
 }
 
 /* Head */
@@ -1311,6 +1320,7 @@ body {
 
 .data-table tbody tr {
   transition: background var(--dur-fast);
+  overflow-anchor: none;
 }
 
 .data-table tbody tr:hover { background: #F5F8FF; }
@@ -1334,6 +1344,33 @@ body {
 
 .data-table .lazy-load-row:hover {
   background: transparent;
+}
+
+.data-table .virtual-spacer-row td {
+  padding: 0;
+  border: 0;
+  line-height: 0;
+  font-size: 0;
+  background: transparent;
+  overflow-anchor: none;
+}
+
+.data-table .virtual-spacer-row:hover {
+  background: transparent;
+}
+
+html[data-theme="dark"] .data-table .virtual-spacer-row:hover {
+  background: transparent;
+}
+
+.data-table .virtual-spacer-block {
+  height: 0;
+  pointer-events: none;
+  overflow-anchor: none;
+}
+
+.data-table .virtual-record-row {
+  overflow-anchor: none;
 }
 
 /* Actions Column */
@@ -2142,6 +2179,18 @@ textarea.form-ctrl { resize: vertical; min-height: 80px; line-height: 1.5; }
   min-height: 300px;
 }
 
+.record-details-body {
+  padding: 12px;
+}
+
+.record-activity-body {
+  padding: 0;
+}
+
+.record-chatter-body {
+  padding: 0;
+}
+
 .side-tabs {
   display: flex;
   gap: 18px;
@@ -2926,6 +2975,155 @@ textarea.form-ctrl { resize: vertical; min-height: 80px; line-height: 1.5; }
   background: #f8fbff;
 }
 
+.related-panel.related-panel-single {
+  border-color: #d8dde6;
+  border-radius: 4px;
+  box-shadow: none;
+}
+
+.related-panel-single .related-head {
+  gap: 12px;
+  padding: 10px 12px 8px;
+  border-bottom: 0;
+  background: var(--surface);
+}
+
+.related-panel-single .related-head h3 {
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.related-panel-single .related-head h3 .object-icon {
+  width: 18px;
+  height: 18px;
+  border-radius: 3px;
+}
+
+.related-panel-single .related-head h3 .object-icon svg {
+  width: 12px;
+  height: 12px;
+}
+
+.related-panel-single .related-head p {
+  display: none;
+}
+
+.related-panel-single .btn-related-new {
+  min-height: 36px;
+  height: 36px;
+  padding: 7px 13px;
+  border-radius: 7px;
+  box-shadow: 0 8px 18px rgba(1, 118, 211, 0.18);
+  font-size: 13px;
+}
+
+.related-cards-list-wrap {
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+}
+
+.related-panel-single .related-card-item {
+  display: block;
+  padding: 10px 12px 11px;
+  border-bottom: 1px solid #d8dde6;
+  background: var(--surface);
+  cursor: pointer;
+}
+
+.related-panel-single .related-card-item:hover {
+  background: #f7f9fc;
+}
+
+.related-panel-single .related-card-topline {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-height: 24px;
+}
+
+.related-panel-single .related-card-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.related-panel-single .related-card-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 18px;
+  width: 18px;
+  height: 18px;
+}
+
+.related-panel-single .related-card-icon .object-icon {
+  width: 18px;
+  height: 18px;
+  border-radius: 3px;
+}
+
+.related-panel-single .related-card-icon .object-icon svg {
+  width: 12px;
+  height: 12px;
+}
+
+.related-panel-single .related-card-title .cell-button-link {
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.related-panel-single .related-card-fields {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  column-gap: 10px;
+  row-gap: 2px;
+  padding: 4px 34px 0 0;
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.related-panel-single .related-card-field {
+  display: contents;
+}
+
+.related-panel-single .related-card-field span {
+  color: var(--text-2);
+  font-weight: 400;
+}
+
+.related-panel-single .related-card-field strong {
+  min-width: 0;
+  color: var(--text-1);
+  font-weight: 400;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.related-panel-single .related-card-field .cell-button-link {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: top;
+  white-space: nowrap;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.related-panel-single .related-actions {
+  gap: 8px;
+  flex-wrap: nowrap;
+  align-items: center;
+}
+
 .related-empty {
   padding: 26px 16px;
 }
@@ -2936,6 +3134,17 @@ textarea.form-ctrl { resize: vertical; min-height: 80px; line-height: 1.5; }
   color: var(--text-3);
   font-size: 12px;
   text-align: center;
+}
+
+.related-panel-single .related-view-all {
+  padding: 8px 14px;
+  border-top: 0;
+  background: var(--surface);
+}
+
+.related-panel-single .related-view-all .cell-button-link {
+  font-size: 10px;
+  font-weight: 400;
 }
 
 .mini-table {
@@ -4097,6 +4306,10 @@ body {
 .object-icon-case { background: #f2cf5b; }
 .object-icon-lead { background: #00a99d; }
 .object-icon-campaign { background: #a094ed; }
+.object-icon-quote { background: #37a455; }
+.object-icon-product { background: #5a16c6; }
+.object-icon-opportunityProduct { background: #ff5d2d; }
+.object-icon-quoteLineItem { background: #37a455; }
 .object-icon-task { background: #35b66f; }
 .object-icon-call { background: #18aaa6; }
 .object-icon-event { background: #b55cff; }
@@ -5974,10 +6187,16 @@ html[data-theme="dark"] .related-head {
   border-bottom-color: #2a2d3e;
 }
 
+html[data-theme="dark"] .related-panel-single .related-head {
+  background: #1a1d27;
+}
+
+html[data-theme="dark"] .related-panel-single .related-card-item,
 html[data-theme="dark"] .related-item {
   border-bottom-color: #2a2d3e;
 }
 
+html[data-theme="dark"] .related-panel-single .related-card-item:hover,
 html[data-theme="dark"] .related-item:hover {
   background: #1f2235;
 }

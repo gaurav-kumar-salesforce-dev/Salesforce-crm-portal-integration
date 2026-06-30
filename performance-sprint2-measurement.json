@@ -1,0 +1,434 @@
+{
+  "user": {
+    "id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+    "role": "system_administrator"
+  },
+  "baselineFromPhase1": {
+    "accountFieldsMs": 2488.26,
+    "contactFieldsMs": 3205.34,
+    "describeCallsPerColdFieldsRequest": 1
+  },
+  "calls": [
+    {
+      "label": "reset performance audit",
+      "path": "/api/debug/performance-audit/reset",
+      "status": 200,
+      "ms": 967.09,
+      "perfRequestId": "0ddc2eb3-9a98-4cdb-952b-b5d61bb89acb"
+    },
+    {
+      "label": "invalidate metadata cache",
+      "path": "/api/debug/metadata-cache/invalidate",
+      "status": 200,
+      "ms": 768.89,
+      "perfRequestId": "ff021668-c18a-4932-b1b5-03580960eb03"
+    },
+    {
+      "label": "Account fields cold",
+      "path": "/api/Account/fields",
+      "status": 200,
+      "ms": 1990.26,
+      "perfRequestId": "c596454b-e09b-45e4-ba3d-2936d2e0a4d0"
+    },
+    {
+      "label": "Account fields warm",
+      "path": "/api/Account/fields",
+      "status": 200,
+      "ms": 702.84,
+      "perfRequestId": "b721aad9-e8a8-4f0f-8c6c-e2f28538d36e"
+    },
+    {
+      "label": "Contact fields cold",
+      "path": "/api/Contact/fields",
+      "status": 200,
+      "ms": 2779.62,
+      "perfRequestId": "128edf75-cebe-41d9-aa1a-ba88af6f437f"
+    },
+    {
+      "label": "Contact fields warm",
+      "path": "/api/Contact/fields",
+      "status": 200,
+      "ms": 713.34,
+      "perfRequestId": "566e0952-d21a-468b-b00f-d1102de9a550"
+    },
+    {
+      "label": "Account picklist warm",
+      "path": "/api/meta/Account/picklist/Type",
+      "status": 200,
+      "ms": 700.38,
+      "perfRequestId": "580b272f-0cb0-485c-a72b-4dfff48ce9db"
+    },
+    {
+      "label": "metadata cache stats",
+      "path": "/api/debug/metadata-cache",
+      "status": 200,
+      "ms": 699.53,
+      "perfRequestId": "3e5111a4-6444-4b5a-8bc4-fc0e789daa66"
+    },
+    {
+      "label": "performance audit report",
+      "path": "/api/debug/performance-audit",
+      "status": 200,
+      "ms": 694.51,
+      "perfRequestId": "c8b889be-ecf4-4b64-905b-d36f3893a23e"
+    }
+  ],
+  "stats": {
+    "hits": 3,
+    "misses": 2,
+    "rebuilds": 2,
+    "deduped": 0,
+    "invalidations": 0,
+    "size": 2,
+    "inflight": 0,
+    "ttlMs": 3600000,
+    "hitRatio": 0.6,
+    "keys": [
+      "sandbox-saasray:Account",
+      "sandbox-saasray:Contact"
+    ]
+  },
+  "fieldRequests": [
+    {
+      "path": "/api/Account/fields",
+      "totalMs": 1983.62,
+      "counts": {
+        "supabase": 3,
+        "salesforce": 0,
+        "permission": 0,
+        "sharing": 0,
+        "layout": 0,
+        "metadata": 1,
+        "related": 0,
+        "activity": 0,
+        "chatter": 0
+      },
+      "totals": {
+        "node": 1983.62,
+        "supabase": 1217.69,
+        "salesforce": 0,
+        "permission": 0,
+        "sharing": 0,
+        "layout": 0,
+        "metadata": 754.15,
+        "related": 0,
+        "activity": 0,
+        "chatter": 0
+      },
+      "events": [
+        {
+          "category": "metadata",
+          "label": "GET /sobjects/Account/describe",
+          "ms": 754.15,
+          "at": 1979.71,
+          "endpoint": "/sobjects/Account/describe"
+        }
+      ]
+    },
+    {
+      "path": "/api/Account/fields",
+      "totalMs": 698.69,
+      "counts": {
+        "supabase": 2,
+        "salesforce": 0,
+        "permission": 0,
+        "sharing": 0,
+        "layout": 0,
+        "metadata": 0,
+        "related": 0,
+        "activity": 0,
+        "chatter": 0
+      },
+      "totals": {
+        "node": 698.69,
+        "supabase": 692.56,
+        "salesforce": 0,
+        "permission": 0,
+        "sharing": 0,
+        "layout": 0,
+        "metadata": 0,
+        "related": 0,
+        "activity": 0,
+        "chatter": 0
+      },
+      "events": []
+    },
+    {
+      "path": "/api/Contact/fields",
+      "totalMs": 2776.17,
+      "counts": {
+        "supabase": 7,
+        "salesforce": 0,
+        "permission": 0,
+        "sharing": 0,
+        "layout": 0,
+        "metadata": 1,
+        "related": 0,
+        "activity": 0,
+        "chatter": 0
+      },
+      "totals": {
+        "node": 2776.17,
+        "supabase": 2692.05,
+        "salesforce": 0,
+        "permission": 0,
+        "sharing": 0,
+        "layout": 0,
+        "metadata": 425.01,
+        "related": 0,
+        "activity": 0,
+        "chatter": 0
+      },
+      "events": [
+        {
+          "category": "metadata",
+          "label": "GET /sobjects/Contact/describe",
+          "ms": 425.01,
+          "at": 2773.88,
+          "endpoint": "/sobjects/Contact/describe"
+        }
+      ]
+    },
+    {
+      "path": "/api/Contact/fields",
+      "totalMs": 707.95,
+      "counts": {
+        "supabase": 2,
+        "salesforce": 0,
+        "permission": 0,
+        "sharing": 0,
+        "layout": 0,
+        "metadata": 0,
+        "related": 0,
+        "activity": 0,
+        "chatter": 0
+      },
+      "totals": {
+        "node": 707.95,
+        "supabase": 701.32,
+        "salesforce": 0,
+        "permission": 0,
+        "sharing": 0,
+        "layout": 0,
+        "metadata": 0,
+        "related": 0,
+        "activity": 0,
+        "chatter": 0
+      },
+      "events": []
+    },
+    {
+      "path": "/api/meta/Account/picklist/Type",
+      "totalMs": 696.57,
+      "counts": {
+        "supabase": 2,
+        "salesforce": 0,
+        "permission": 0,
+        "sharing": 0,
+        "layout": 0,
+        "metadata": 0,
+        "related": 0,
+        "activity": 0,
+        "chatter": 0
+      },
+      "totals": {
+        "node": 696.57,
+        "supabase": 690.32,
+        "salesforce": 0,
+        "permission": 0,
+        "sharing": 0,
+        "layout": 0,
+        "metadata": 0,
+        "related": 0,
+        "activity": 0,
+        "chatter": 0
+      },
+      "events": []
+    }
+  ],
+  "concurrentDeduplication": {
+    "parallel": [
+      {
+        "status": 200,
+        "ms": 1065.54,
+        "id": "fc4a2b9e-fab9-41a5-b894-953f15b6d2a8"
+      },
+      {
+        "status": 200,
+        "ms": 1066.61,
+        "id": "bd489b9d-5364-4f93-82eb-7420956be3c4"
+      },
+      {
+        "status": 200,
+        "ms": 1065.23,
+        "id": "4f22d418-f1ef-43ac-b568-c782133aa883"
+      },
+      {
+        "status": 200,
+        "ms": 1063.06,
+        "id": "eefdbee4-ea08-4b12-953f-fbf199462f9d"
+      },
+      {
+        "status": 200,
+        "ms": 1062.33,
+        "id": "4cbea831-d13d-4dd6-874a-efa5ad18b905"
+      }
+    ],
+    "stats": {
+      "hits": 3,
+      "misses": 3,
+      "rebuilds": 3,
+      "deduped": 4,
+      "invalidations": 1,
+      "size": 2,
+      "inflight": 0,
+      "ttlMs": 3600000,
+      "hitRatio": 0.5,
+      "keys": [
+        "sandbox-saasray:Contact",
+        "sandbox-saasray:Account"
+      ]
+    },
+    "accountDescribeEvents": [
+      {
+        "category": "metadata",
+        "label": "GET /sobjects/Account/describe",
+        "ms": 369.2,
+        "at": 1058.6,
+        "endpoint": "/sobjects/Account/describe"
+      }
+    ],
+    "accountRequests": [
+      {
+        "totalMs": 1064.06,
+        "counts": {
+          "supabase": 2,
+          "salesforce": 0,
+          "permission": 0,
+          "sharing": 0,
+          "layout": 0,
+          "metadata": 1,
+          "related": 0,
+          "activity": 0,
+          "chatter": 0
+        },
+        "totals": {
+          "node": 1064.06,
+          "supabase": 684.94,
+          "salesforce": 0,
+          "permission": 0,
+          "sharing": 0,
+          "layout": 0,
+          "metadata": 369.2,
+          "related": 0,
+          "activity": 0,
+          "chatter": 0
+        }
+      },
+      {
+        "totalMs": 1048.16,
+        "counts": {
+          "supabase": 2,
+          "salesforce": 0,
+          "permission": 0,
+          "sharing": 0,
+          "layout": 0,
+          "metadata": 0,
+          "related": 0,
+          "activity": 0,
+          "chatter": 0
+        },
+        "totals": {
+          "node": 1048.16,
+          "supabase": 813.21,
+          "salesforce": 0,
+          "permission": 0,
+          "sharing": 0,
+          "layout": 0,
+          "metadata": 0,
+          "related": 0,
+          "activity": 0,
+          "chatter": 0
+        }
+      },
+      {
+        "totalMs": 1043.54,
+        "counts": {
+          "supabase": 2,
+          "salesforce": 0,
+          "permission": 0,
+          "sharing": 0,
+          "layout": 0,
+          "metadata": 0,
+          "related": 0,
+          "activity": 0,
+          "chatter": 0
+        },
+        "totals": {
+          "node": 1043.54,
+          "supabase": 813.32,
+          "salesforce": 0,
+          "permission": 0,
+          "sharing": 0,
+          "layout": 0,
+          "metadata": 0,
+          "related": 0,
+          "activity": 0,
+          "chatter": 0
+        }
+      },
+      {
+        "totalMs": 1051.9,
+        "counts": {
+          "supabase": 2,
+          "salesforce": 0,
+          "permission": 0,
+          "sharing": 0,
+          "layout": 0,
+          "metadata": 0,
+          "related": 0,
+          "activity": 0,
+          "chatter": 0
+        },
+        "totals": {
+          "node": 1051.9,
+          "supabase": 926.6,
+          "salesforce": 0,
+          "permission": 0,
+          "sharing": 0,
+          "layout": 0,
+          "metadata": 0,
+          "related": 0,
+          "activity": 0,
+          "chatter": 0
+        }
+      },
+      {
+        "totalMs": 1055.81,
+        "counts": {
+          "supabase": 2,
+          "salesforce": 0,
+          "permission": 0,
+          "sharing": 0,
+          "layout": 0,
+          "metadata": 0,
+          "related": 0,
+          "activity": 0,
+          "chatter": 0
+        },
+        "totals": {
+          "node": 1055.81,
+          "supabase": 942.43,
+          "salesforce": 0,
+          "permission": 0,
+          "sharing": 0,
+          "layout": 0,
+          "metadata": 0,
+          "related": 0,
+          "activity": 0,
+          "chatter": 0
+        }
+      }
+    ]
+  }
+}

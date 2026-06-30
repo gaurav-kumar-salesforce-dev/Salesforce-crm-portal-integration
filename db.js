@@ -14,7 +14,83 @@ const supabase = createClient(
 
 module.exports.supabase = supabase;
 
+const USER_CONTEXT_TTL_MS = 10 * 60 * 1000;
+const userContextCache = new Map();
+const userContextInflight = new Map();
+const userContextStats = {
+  hits: 0,
+  misses: 0,
+  builds: 0,
+  invalidations: 0
+};
+
+const denyPermissions = Object.freeze({
+  can_read: false,
+  can_create: false,
+  can_edit: false,
+  can_delete: false
+});
+
+function cloneJson(value) {
+  return value == null ? value : JSON.parse(JSON.stringify(value));
+}
+
+function fullPermissions() {
+  return { can_read: true, can_create: true, can_edit: true, can_delete: true };
+}
+
+function denyPermissionSet() {
+  return { ...denyPermissions };
+}
+
+function mergeObjectPermissions(base, additions = []) {
+  const result = { ...(base || denyPermissions) };
+  additions.forEach((perm) => {
+    result.can_read = Boolean(result.can_read || perm.can_read);
+    result.can_create = Boolean(result.can_create || perm.can_create);
+    result.can_edit = Boolean(result.can_edit || perm.can_edit);
+    result.can_delete = Boolean(result.can_delete || perm.can_delete);
+  });
+  return result;
+}
+
+function cachedUserContext(userId) {
+  const entry = userContextCache.get(userId);
+  if (!entry) return null;
+  if (entry.expiresAt <= Date.now()) {
+    userContextCache.delete(userId);
+    return null;
+  }
+  return entry.value;
+}
+
+function invalidateUserContextCache(userId) {
+  if (!userId) return;
+  if (userContextCache.delete(userId)) userContextStats.invalidations += 1;
+  userContextInflight.delete(userId);
+}
+
+function invalidateAllUserContextCache() {
+  if (userContextCache.size) userContextStats.invalidations += userContextCache.size;
+  userContextCache.clear();
+  userContextInflight.clear();
+}
+
+function getUserContextCacheStats() {
+  const total = userContextStats.hits + userContextStats.misses;
+  return {
+    ...userContextStats,
+    size: userContextCache.size,
+    hitRatio: total ? Number((userContextStats.hits / total).toFixed(4)) : 0
+  };
+}
+
 async function getEffectivePermissionSetIds(userId) {
+  const cached = cachedUserContext(userId);
+  if (cached?.effectivePermissionSetIds) {
+    return [...cached.effectivePermissionSetIds];
+  }
+
   const [
     { data: directAssignments, error: directError },
     { data: groupAssignments, error: groupError }
@@ -73,7 +149,12 @@ module.exports.getEffectivePermissionSetIds = getEffectivePermissionSetIds;
 // All FALSE if user has no profile or no permission at all on that object.
 // =============================================================================
 async function getEffectivePermissions(userId, sfObject) {
-  const deny = { can_read: false, can_create: false, can_edit: false, can_delete: false };
+  const cached = cachedUserContext(userId);
+  if (cached?.permissions && cached.permissions[sfObject]) {
+    return { ...cached.permissions[sfObject] };
+  }
+
+  const deny = denyPermissionSet();
 
   const { data: assignment, error: assignmentError } = await supabase
     .from('user_profile_assignments')
@@ -141,6 +222,161 @@ async function getEffectivePermissions(userId, sfObject) {
 
 module.exports.getEffectivePermissions = getEffectivePermissions;
 
+async function buildUserContext(userId) {
+  userContextStats.builds += 1;
+
+  const [
+    { data: user, error: userErr },
+    { data: profileData, error: profileErr },
+    { data: sfObjects, error: sfObjectsErr },
+    { data: directAssignments, error: directError },
+    { data: groupAssignments, error: groupError }
+  ] = await Promise.all([
+    supabase
+      .from('users')
+      .select('id, email, name, role, profile_image, is_active, must_change_pw, last_login_at')
+      .eq('id', userId)
+      .eq('is_active', true)
+      .single(),
+    supabase
+      .from('user_profile_assignments')
+      .select('profile_id, profiles(id, name, description, is_system_admin)')
+      .eq('user_id', userId)
+      .maybeSingle(),
+    supabase
+      .from('sf_objects')
+      .select('api_name, label')
+      .eq('is_active', true)
+      .order('sort_order'),
+    supabase
+      .from('user_permission_set_assignments')
+      .select('perm_set_id')
+      .eq('user_id', userId),
+    supabase
+      .from('user_permission_set_group_assignments')
+      .select('group_id, permission_set_groups(id, name, description)')
+      .eq('user_id', userId)
+  ]);
+
+  if (userErr || !user) return null;
+  if (profileErr) {
+    console.error('[getUserWithPermissions] Profile lookup error:', profileErr);
+  }
+  if (sfObjectsErr) throw sfObjectsErr;
+  if (directError) throw directError;
+  if (groupError) throw groupError;
+
+  const profile = profileData?.profiles || null;
+  const objects = sfObjects || [];
+  const directPermissionSetIds = (directAssignments || [])
+    .map((row) => row.perm_set_id)
+    .filter(Boolean);
+  const permissionGroups = (groupAssignments || [])
+    .map((row) => row.permission_set_groups)
+    .filter(Boolean);
+  const groupIds = [...new Set((groupAssignments || []).map((row) => row.group_id).filter(Boolean))];
+  const effectivePermissionSetIds = new Set(directPermissionSetIds);
+
+  if (groupIds.length) {
+    const { data: groupMembers, error: groupMembersError } = await supabase
+      .from('permission_set_groups')
+      .select(`
+        id,
+        permission_set_group_members (
+          perm_set_id
+        )
+      `)
+      .in('id', groupIds)
+      .eq('is_active', true);
+
+    if (groupMembersError) throw groupMembersError;
+    (groupMembers || []).forEach((group) => {
+      (group.permission_set_group_members || []).forEach((member) => {
+        if (member.perm_set_id) effectivePermissionSetIds.add(member.perm_set_id);
+      });
+    });
+  }
+
+  const permissions = {};
+  const permissionSetIds = [...effectivePermissionSetIds];
+  let profilePermissions = [];
+  let permissionSetPermissions = [];
+
+  if (profile?.is_system_admin) {
+    objects.forEach((obj) => {
+      permissions[obj.api_name] = fullPermissions();
+    });
+  } else {
+    const permissionQueries = [];
+    if (profile?.id) {
+      permissionQueries.push(
+        supabase
+          .from('profile_object_permissions')
+          .select('sf_object, can_read, can_create, can_edit, can_delete')
+          .eq('profile_id', profile.id)
+      );
+    } else {
+      permissionQueries.push(Promise.resolve({ data: [], error: null }));
+    }
+
+    if (permissionSetIds.length) {
+      permissionQueries.push(
+        supabase
+          .from('permission_set_object_perms')
+          .select('sf_object, can_read, can_create, can_edit, can_delete')
+          .in('perm_set_id', permissionSetIds)
+      );
+    } else {
+      permissionQueries.push(Promise.resolve({ data: [], error: null }));
+    }
+
+    const [
+      { data: profilePermissionRows, error: profilePermissionError },
+      { data: permissionSetPermissionRows, error: permissionSetPermissionError }
+    ] = await Promise.all(permissionQueries);
+
+    if (profilePermissionError) {
+      console.error('[getUserWithPermissions] Profile permission lookup error:', profilePermissionError);
+    }
+    if (permissionSetPermissionError) {
+      console.error('[getUserWithPermissions] Permission set object lookup error:', permissionSetPermissionError);
+    }
+
+    profilePermissions = profilePermissionRows || [];
+    permissionSetPermissions = permissionSetPermissionRows || [];
+
+    const profileByObject = new Map(profilePermissions.map((perm) => [perm.sf_object, perm]));
+    const permissionSetsByObject = permissionSetPermissions.reduce((acc, perm) => {
+      if (!acc.has(perm.sf_object)) acc.set(perm.sf_object, []);
+      acc.get(perm.sf_object).push(perm);
+      return acc;
+    }, new Map());
+
+    objects.forEach((obj) => {
+      permissions[obj.api_name] = mergeObjectPermissions(
+        profileByObject.get(obj.api_name) || denyPermissions,
+        permissionSetsByObject.get(obj.api_name) || []
+      );
+    });
+  }
+
+  return {
+    ...user,
+    profile,
+    permissions,
+    effectivePermissionSetIds: permissionSetIds,
+    directPermissionSetIds,
+    permissionGroups,
+    profileAssignment: profileData ? {
+      profile_id: profileData.profile_id,
+      profile
+    } : null,
+    sfObjects: objects,
+    profilePermissions,
+    permissionSetPermissions
+  };
+}
+
 
 // =============================================================================
 // getUserWithPermissions
@@ -149,48 +385,37 @@ module.exports.getEffectivePermissions = getEffectivePermissions;
 // This is what gets cached in the frontend as window.userPerms.
 // =============================================================================
 async function getUserWithPermissions(userId) {
-  // 1. Fetch user
-  const { data: user, error: userErr } = await supabase
-    .from('users')
-    .select('id, email, name, role, profile_image, is_active, must_change_pw, last_login_at')
-    .eq('id', userId)
-    .eq('is_active', true)
-    .single();
-
-  if (userErr || !user) return null;
-
-  // 2. Fetch their profile assignment
-  const { data: profileData } = await supabase
-    .from('user_profile_assignments')
-    .select('profile_id, profiles(id, name, description, is_system_admin)')
-    .eq('user_id', userId)
-    .single();
-
-  // 3. Fetch all SF objects
-  const { data: sfObjects } = await supabase
-    .from('sf_objects')
-    .select('api_name, label')
-    .eq('is_active', true)
-    .order('sort_order');
-
-  // 4. Compute effective permissions for each SF object
-  const permissions = {};
-  if (sfObjects) {
-    await Promise.all(
-      sfObjects.map(async (obj) => {
-        permissions[obj.api_name] = await getEffectivePermissions(userId, obj.api_name);
-      })
-    );
+  const cached = cachedUserContext(userId);
+  if (cached) {
+    userContextStats.hits += 1;
+    return cloneJson(cached);
   }
 
-  return {
-    ...user,
-    profile: profileData?.profiles || null,
-    permissions,  // { Account: { can_read, can_create, can_edit, can_delete }, ... }
-  };
+  userContextStats.misses += 1;
+  if (userContextInflight.has(userId)) {
+    return cloneJson(await userContextInflight.get(userId));
+  }
+
+  const promise = buildUserContext(userId)
+    .then((context) => {
+      if (context) {
+        userContextCache.set(userId, {
+          value: context,
+          expiresAt: Date.now() + USER_CONTEXT_TTL_MS
+        });
+      }
+      return context;
+    })
+    .finally(() => userContextInflight.delete(userId));
+
+  userContextInflight.set(userId, promise);
+  return cloneJson(await promise);
 }
 
 module.exports.getUserWithPermissions = getUserWithPermissions;
+module.exports.invalidateUserContextCache = invalidateUserContextCache;
+module.exports.invalidateAllUserContextCache = invalidateAllUserContextCache;
+module.exports.getUserContextCacheStats = getUserContextCacheStats;
 
 
 // =============================================================================

@@ -47,20 +47,141 @@ const state = {
 };
 
 const CLIENT_CACHE_TTL_MS = 30 * 1000;
+const REPORT_METADATA_SESSION_TTL_MS = 5 * 60 * 1000;
+const REPORT_SESSION_PREFIX = 'saasray:reports:';
 const browserMemoryCache = new Map();
 const browserInFlightRequests = new Map();
+const sharedPerformanceCache = window.SaaSRAYPerformance || null;
 
 const $ = (id) => document.getElementById(id);
 
+const REPORT_PAGE = (() => {
+  const file = (window.location.pathname.split('/').pop() || 'reports.html').toLowerCase();
+  const params = new URLSearchParams(window.location.search);
+  const hash = window.location.hash.match(/^#report\/([A-Za-z0-9-]+)$/);
+  return {
+    file,
+    mode: file === 'reports-builder.html' ? 'builder' : file === 'reports-view.html' ? 'viewer' : 'list',
+    reportId: params.get('id') || (hash ? hash[1] : ''),
+    usesDedicatedPage: file === 'reports-builder.html' || file === 'reports-view.html'
+  };
+})();
+
+const REPORT_RUN_CACHE_TTL_MS = 60 * 1000;
+
+function reportListUrl() {
+  return 'reports.html';
+}
+
+function reportBuilderUrl(id = '') {
+  return id ? `reports-builder.html?id=${encodeURIComponent(id)}` : 'reports-builder.html';
+}
+
+function reportViewUrl(id = '') {
+  return id ? `reports-view.html?id=${encodeURIComponent(id)}` : 'reports.html';
+}
+
+function navigateToReportBuilder(id = '') {
+  window.location.href = reportBuilderUrl(id);
+}
+
+function navigateToReportView(id = '') {
+  window.location.href = reportViewUrl(id);
+}
+
+function setReportUiMode(mode) {
+  document.body.classList.toggle('reports-page-list', mode === 'list');
+  document.body.classList.toggle('reports-page-builder', mode === 'builder');
+  document.body.classList.toggle('reports-page-viewer', mode === 'viewer');
+}
+
+function primeDedicatedReportPage() {
+  setReportUiMode(REPORT_PAGE.mode);
+  if (!REPORT_PAGE.usesDedicatedPage) return;
+
+  const listView = $('reportsListView');
+  const header = $('reportsHeader');
+  const builder = $('reportBuilderView');
+  if (listView) listView.style.display = 'none';
+  if (header) header.style.display = 'none';
+  if (builder) builder.style.display = '';
+  document.body.classList.add('reports-builder-mode');
+  document.body.classList.toggle('reports-view-mode', REPORT_PAGE.mode === 'viewer');
+  if ($('reportName')) $('reportName').value = REPORT_PAGE.mode === 'viewer' ? 'Opening report...' : 'Loading report...';
+  if ($('reportDescription')) $('reportDescription').value = '';
+  showReportPageLoading(REPORT_PAGE.mode === 'viewer' ? 'Preparing run mode...' : 'Loading report builder...');
+}
+
+function showReportPageLoading(message = 'Loading report...') {
+  let overlay = document.getElementById('reportPageLoading');
+  if (!overlay) {
+    overlay = document.createElement('div');
+    overlay.id = 'reportPageLoading';
+    overlay.className = 'report-page-loading';
+    overlay.innerHTML = `
+      <div class="report-page-loading-card">
+        <span class="report-page-loading-spinner"></span>
+        <strong>Loading report</strong>
+        <p data-report-loading-text></p>
+      </div>
+    `;
+    document.body.appendChild(overlay);
+  }
+  const text = overlay.querySelector('[data-report-loading-text]');
+  if (text) text.textContent = message;
+  overlay.hidden = false;
+}
+
+function hideReportPageLoading() {
+  const overlay = document.getElementById('reportPageLoading');
+  if (overlay) overlay.hidden = true;
+}
+
 document.addEventListener('DOMContentLoaded', async () => {
+  sharedPerformanceCache?.markModuleInitialized?.('reports');
+  primeDedicatedReportPage();
   initTheme();
   bindEvents();
   try {
-    await Promise.all([loadFolders(), loadObjects(), loadReportTypes()]);
+    const metadataPromise = Promise.all([loadFolders(), loadObjects(), loadReportTypes()]);
+    if (REPORT_PAGE.mode === 'builder') {
+      showReportPageLoading(REPORT_PAGE.reportId ? 'Loading report builder...' : 'Preparing new report...');
+      await metadataPromise;
+      if (REPORT_PAGE.reportId) {
+        await openReport(REPORT_PAGE.reportId, { pushState: false });
+      } else {
+        await newReport({ localOnly: true });
+      }
+      hideReportPageLoading();
+      loadReports({ silent: true }).catch(() => {});
+      return;
+    }
+    if (REPORT_PAGE.mode === 'viewer') {
+      showReportPageLoading('Opening report...');
+      await metadataPromise;
+      if (REPORT_PAGE.reportId) {
+        await openReportViewer(REPORT_PAGE.reportId);
+      } else {
+        showReportViewError('No report selected.');
+      }
+      hideReportPageLoading();
+      loadReports({ silent: true }).catch(() => {});
+      return;
+    }
+    const hashReportId = reportIdFromHash();
+    if (hashReportId) {
+      showReportPageLoading('Opening report...');
+      await metadataPromise;
+      await openReportViewer(hashReportId);
+      hideReportPageLoading();
+      loadReports({ silent: true }).catch(() => {});
+      return;
+    }
+    await metadataPromise;
+    showReportListMode();
     await loadReports();
-    const reportId = reportIdFromHash();
-    if (reportId) await openReport(reportId, { pushState: false });
   } catch (err) {
+    hideReportPageLoading();
     toast(err.message || 'Could not load reports', 'err');
   }
 });
@@ -163,7 +284,9 @@ function bindEvents() {
   $('addFilterBtn').addEventListener('click', addFilter);
   $('addCrossFilterBtn')?.addEventListener('click', addCrossFilter);
   $('runReportBtn').addEventListener('click', runPreview);
-  $('runFullReportBtn').addEventListener('click', runFullReport);
+  $('runFullReportBtn').addEventListener('click', () => {
+    runFullReport(REPORT_PAGE.mode === 'builder' ? { openViewer: true } : {});
+  });
   $('addChartBtn')?.addEventListener('click', enableChart);
   $('removeChartBtn')?.addEventListener('click', removeChart);
   ['chartType', 'chartLabelField', 'chartValueField'].forEach((id) => {
@@ -176,6 +299,12 @@ function bindEvents() {
   $('saveReportBtn').addEventListener('click', saveReport);
   $('saveRunReportBtn').addEventListener('click', saveAndRunReport);
   $('closeBuilderBtn').addEventListener('click', closeBuilder);
+  $('refreshReportViewBtn')?.addEventListener('click', () => {
+    if (state.activeReport?.id) openReportViewer(state.activeReport.id, { forceRefresh: true });
+  });
+  $('editReportBtn')?.addEventListener('click', () => {
+    if (state.activeReport?.id) navigateToReportBuilder(state.activeReport.id);
+  });
   $('cloneReportBtn').addEventListener('click', cloneReport);
   $('favoriteReportBtn').addEventListener('click', toggleFavorite);
   $('exportReportBtn').addEventListener('click', exportReport);
@@ -292,6 +421,25 @@ async function api(path, options = {}) {
     const cached = browserCacheGet(cacheKey);
     if (cached) return cached;
     if (browserInFlightRequests.has(cacheKey)) return browserInFlightRequests.get(cacheKey);
+    if (sharedPerformanceCache?.fetchJson) {
+      const sharedRequest = sharedPerformanceCache.fetchJson(path, {
+        ...options,
+        cacheKey,
+        cacheType: 'resource',
+        ttlMs: CLIENT_CACHE_TTL_MS,
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+          ...(options.headers || {})
+        }
+      });
+      browserInFlightRequests.set(cacheKey, sharedRequest);
+      sharedRequest
+        .then((data) => browserCacheSet(cacheKey, data))
+        .finally(() => browserInFlightRequests.delete(cacheKey))
+        .catch(() => {});
+      return sharedRequest;
+    }
   }
   const request = fetch(path, {
     ...options,
@@ -329,6 +477,8 @@ function browserCacheKey(path) {
 }
 
 function browserCacheGet(key) {
+  const shared = sharedPerformanceCache?.getCacheValue?.(key, 'resource');
+  if (shared) return shared;
   const item = browserMemoryCache.get(key);
   if (!item || Date.now() > item.expiresAt) {
     if (item) browserMemoryCache.delete(key);
@@ -339,9 +489,55 @@ function browserCacheGet(key) {
 
 function browserCacheSet(key, value, ttlMs = 60 * 1000) {
   browserMemoryCache.set(key, { value, expiresAt: Date.now() + Math.min(ttlMs, CLIENT_CACHE_TTL_MS) });
+  sharedPerformanceCache?.setCacheValue?.(key, value, {
+    type: 'resource',
+    ttlMs: Math.min(ttlMs, CLIENT_CACHE_TTL_MS)
+  });
+}
+
+function sessionCacheGet(key) {
+  try {
+    const raw = sessionStorage.getItem(key);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (!parsed?.expiresAt || parsed.expiresAt < Date.now()) {
+      sessionStorage.removeItem(key);
+      return null;
+    }
+    return parsed.value;
+  } catch {
+    return null;
+  }
+}
+
+function sessionCacheSet(key, value, ttlMs = REPORT_METADATA_SESSION_TTL_MS) {
+  try {
+    sessionStorage.setItem(key, JSON.stringify({ value, expiresAt: Date.now() + ttlMs }));
+  } catch {}
+}
+
+function clearReportSessionCache() {
+  try {
+    Object.keys(sessionStorage).forEach((key) => {
+      if (key.startsWith(REPORT_SESSION_PREFIX)) sessionStorage.removeItem(key);
+    });
+  } catch {}
+}
+
+function reportListSessionKey(params) {
+  return `${REPORT_SESSION_PREFIX}list:${params.toString() || 'default'}`;
+}
+
+function renderReportsFromData(reports) {
+  state.reports = Array.isArray(reports) ? reports : [];
+  const count = state.reports.length;
+  if ($('reportCount')) $('reportCount').textContent = `${count} ${count === 1 ? 'item' : 'items'}`;
+  if ($('reportsSubtitle')) $('reportsSubtitle').textContent = `${count} ${count === 1 ? 'item' : 'items'}`;
+  renderReports();
 }
 
 function browserCacheInvalidate(path) {
+  if (String(path || '').startsWith('/api/reports')) clearReportSessionCache();
   const scopes = String(path || '').startsWith('/api/dashboards')
     ? ['saasray:v1:/api/dashboards']
     : ['saasray:v1:/api/reports', 'saasray:v1:/api/dashboards'];
@@ -351,11 +547,22 @@ function browserCacheInvalidate(path) {
   for (const key of browserInFlightRequests.keys()) {
     if (scopes.some((scope) => key.startsWith(scope))) browserInFlightRequests.delete(key);
   }
+  scopes.forEach((scope) => sharedPerformanceCache?.invalidate?.(scope));
 }
 
-async function loadFolders() {
-  const data = await api('/api/reports/folders');
+async function loadFolders(options = {}) {
+  const sessionKey = `${REPORT_SESSION_PREFIX}folders`;
+  const cached = !options.forceRefresh ? sessionCacheGet(sessionKey) : null;
+  if (cached) {
+    state.folders = cached.folders || [];
+    renderFolderOptions();
+    renderFolderNav();
+    return;
+  }
+
+  const data = await api('/api/reports/folders', { skipBrowserCache: Boolean(options.forceRefresh) });
   state.folders = data.folders || [];
+  sessionCacheSet(sessionKey, { folders: state.folders });
   renderFolderOptions();
   renderFolderNav();
 }
@@ -457,23 +664,32 @@ async function loadReports(options = {}) {
   if (q) params.set('search', q);
   if (state.selectedFolderId) params.set('folderId', state.selectedFolderId);
   if (!state.selectedFolderId && state.reportView) params.set('view', state.reportView);
-  showReportsLoading();
+
+  const endpoint = `/api/reports${params.toString() ? `?${params.toString()}` : ''}`;
+  const sessionKey = reportListSessionKey(params);
+  const cached = !options.forceRefresh ? sessionCacheGet(sessionKey) : null;
+  if (cached) {
+    renderReportsFromData(cached.reports || []);
+    return;
+  }
+
+  if (!options.silent) showReportsLoading();
   try {
-    const data = await api(`/api/reports${params.toString() ? `?${params.toString()}` : ''}`, {
+    const data = await api(endpoint, {
       skipBrowserCache: Boolean(options.forceRefresh)
     });
-    state.reports = data.reports || [];
-    const count = state.reports.length;
-    if ($('reportCount')) $('reportCount').textContent = `${count} ${count === 1 ? 'item' : 'items'}`;
-    if ($('reportsSubtitle')) $('reportsSubtitle').textContent = `${count} ${count === 1 ? 'item' : 'items'}`;
-    renderReports();
+    sessionCacheSet(sessionKey, { reports: data.reports || [] });
+    renderReportsFromData(data.reports || []);
   } catch (err) {
-    $('reportsList').innerHTML = `<tr><td colspan="6" class="reports-empty-row">Could not load reports: ${esc(err.message)}</td></tr>`;
+    const list = $('reportsList');
+    if (list) list.innerHTML = `<tr><td colspan="6" class="reports-empty-row">Could not load reports: ${esc(err.message)}</td></tr>`;
   }
 }
 
 function showReportsLoading() {
-  $('reportsList').innerHTML = `
+  const list = $('reportsList');
+  if (!list) return;
+  list.innerHTML = `
     <tr>
       <td colspan="6" class="reports-loading-row">
         <span class="mini-spinner"></span>
@@ -552,7 +768,7 @@ function renderReports() {
   $('reportsList').innerHTML = state.reports.map((report) => `
     <tr class="${state.activeReport?.id === report.id ? 'active' : ''}">
       <td>
-        <button class="report-name-link" onclick="openReport('${esc(report.id)}')">${report.is_favorite ? '<svg width="12" height="12" viewBox="0 0 24 24" fill="var(--warning)" stroke="var(--warning)" stroke-width="2" style="vertical-align:-1px;margin-right:4px"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>' : ''}${esc(report.name)}</button>
+        <button class="report-name-link" onclick="openReportViewerFromList('${esc(report.id)}')">${report.is_favorite ? '<svg width="12" height="12" viewBox="0 0 24 24" fill="var(--warning)" stroke="var(--warning)" stroke-width="2" style="vertical-align:-1px;margin-right:4px"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>' : ''}${esc(report.name)}</button>
       </td>
       <td style="color:var(--text-2)">${esc(report.description || '—')}</td>
       <td>${esc(report.folder_name || 'Private Reports')}</td>
@@ -587,7 +803,8 @@ function renderReportActionMenu(report) {
   return `
     <div class="report-action-menu" onclick="event.stopPropagation()">
       <button onclick="runReportFromList('${esc(report.id)}')">Run</button>
-      <button onclick="openReport('${esc(report.id)}')">${canEdit ? 'Edit' : 'View'}</button>
+      <button onclick="openReportViewerFromList('${esc(report.id)}')">View</button>
+      <button onclick="navigateToReportBuilder('${esc(report.id)}')" ${canEdit ? '' : 'disabled'}>Edit</button>
       <button onclick="shareReportFromList('${esc(report.id)}')" ${canEdit ? '' : 'disabled'}>Share</button>
       <button onclick="scheduleReportFromList('${esc(report.id)}')" ${canEdit ? '' : 'disabled'}>Subscribe</button>
       <button onclick="exportReportFromList('${esc(report.id)}', 'csv')">Export CSV</button>
@@ -603,7 +820,7 @@ function renderReportActionMenu(report) {
 async function openReport(id, options = {}) {
   const data = await api(`/api/reports/${id}`);
   state.activeReport = data.report;
-  if (options.pushState !== false) window.history.replaceState(null, '', `#report/${id}`);
+  if (options.pushState !== false && !REPORT_PAGE.usesDedicatedPage) window.history.replaceState(null, '', `#report/${id}`);
   const definition = state.activeReport.definition || {};
   showBuilderMode();
   $('reportName').value = state.activeReport.name || '';
@@ -641,7 +858,11 @@ async function openReport(id, options = {}) {
   clearResults();
 }
 
-async function newReport() {
+async function newReport(options = {}) {
+  if (REPORT_PAGE.mode === 'list' && !options.localOnly) {
+    navigateToReportBuilder();
+    return;
+  }
   state.activeReport = null;
   showBuilderMode();
   $('reportName').value = 'New Tabular Report';
@@ -674,15 +895,37 @@ async function newReport() {
 }
 
 function showBuilderMode() {
+  setReportUiMode('builder');
   state.wasSidebarCollapsedBeforeBuilder = document.body.classList.contains('sidebar-collapsed');
-  $('reportsListView').style.display = 'none';
-  $('reportsHeader').style.display = 'none';
-  $('reportBuilderView').style.display = '';
+  if ($('reportsListView')) $('reportsListView').style.display = 'none';
+  if ($('reportsHeader')) $('reportsHeader').style.display = 'none';
+  if ($('reportBuilderView')) $('reportBuilderView').style.display = '';
   // CSS handles collapsing sidebar via body.reports-builder-mode rules
   document.body.classList.add('reports-builder-mode');
+  document.body.classList.remove('reports-view-mode');
+}
+
+function showReportListMode() {
+  setReportUiMode('list');
+  if ($('reportBuilderView')) $('reportBuilderView').style.display = 'none';
+  if ($('reportsListView')) $('reportsListView').style.display = '';
+  if ($('reportsHeader')) $('reportsHeader').style.display = '';
+  document.body.classList.remove('reports-builder-mode', 'reports-view-mode');
+}
+
+function showViewerMode() {
+  setReportUiMode('viewer');
+  if ($('reportsListView')) $('reportsListView').style.display = 'none';
+  if ($('reportsHeader')) $('reportsHeader').style.display = 'none';
+  if ($('reportBuilderView')) $('reportBuilderView').style.display = '';
+  document.body.classList.add('reports-builder-mode', 'reports-view-mode');
 }
 
 function closeBuilder() {
+  if (REPORT_PAGE.usesDedicatedPage) {
+    window.location.href = reportListUrl();
+    return;
+  }
   state.activeReport = null;
   window.history.replaceState(null, '', window.location.pathname);
   $('reportBuilderView').style.display = 'none';
@@ -697,6 +940,137 @@ function closeBuilder() {
 function reportIdFromHash() {
   const match = window.location.hash.match(/^#report\/([A-Za-z0-9-]+)$/);
   return match ? match[1] : '';
+}
+
+function reportRunCacheKey(reportId, definition) {
+  return `report-run:${reportId || 'draft'}:${JSON.stringify(definition || {})}`;
+}
+
+function readReportRunCache(reportId, definition) {
+  const entry = browserMemoryCache.get(reportRunCacheKey(reportId, definition));
+  if (!entry) return null;
+  if (Date.now() - entry.timestamp > REPORT_RUN_CACHE_TTL_MS) {
+    browserMemoryCache.delete(reportRunCacheKey(reportId, definition));
+    return null;
+  }
+  return entry.result;
+}
+
+function writeReportRunCache(reportId, definition, result) {
+  if (!reportId || !result) return;
+  browserMemoryCache.set(reportRunCacheKey(reportId, definition), {
+    timestamp: Date.now(),
+    result
+  });
+}
+
+function reportRunDraftKey(reportId) {
+  return `saasray:report-run-draft:${reportId}`;
+}
+
+function storeReportRunDraft(reportId, definition, result) {
+  if (!reportId || !result) return;
+  try {
+    sessionStorage.setItem(reportRunDraftKey(reportId), JSON.stringify({
+      timestamp: Date.now(),
+      definition,
+      result
+    }));
+  } catch {}
+}
+
+function readReportRunDraft(reportId) {
+  if (!reportId) return null;
+  try {
+    const raw = sessionStorage.getItem(reportRunDraftKey(reportId));
+    if (!raw) return null;
+    const data = JSON.parse(raw);
+    if (!data?.result || Date.now() - data.timestamp > 2 * 60 * 1000) {
+      sessionStorage.removeItem(reportRunDraftKey(reportId));
+      return null;
+    }
+    return data;
+  } catch {
+    return null;
+  }
+}
+
+function clearReportRunDraft(reportId) {
+  if (!reportId) return;
+  try {
+    sessionStorage.removeItem(reportRunDraftKey(reportId));
+  } catch {}
+}
+
+async function openReportViewer(reportId, options = {}) {
+  showViewerMode();
+  showReportViewLoading();
+  try {
+    await openReport(reportId, { pushState: false });
+    showViewerMode();
+    const definition = definitionFromForm();
+    const draft = options.forceRefresh ? null : readReportRunDraft(reportId);
+    if (draft?.result) {
+      renderReport(draft.result, { previewMode: false, viewerMode: true });
+      clearReportRunDraft(reportId);
+      return;
+    }
+    const cached = options.forceRefresh ? null : readReportRunCache(reportId, definition);
+    if (cached) {
+      renderReport(cached, { previewMode: false, viewerMode: true });
+      return;
+    }
+    await runFullReport({ silentBusy: true, stayOnPage: true, viewerMode: true });
+  } catch (err) {
+    showReportViewError(err.message || 'Could not load report');
+  }
+}
+
+function openReportViewerFromList(reportId) {
+  closeReportActionMenu();
+  navigateToReportView(reportId);
+}
+
+function showReportViewLoading() {
+  const head = $('reportResultsHead');
+  const body = $('reportResultsBody');
+  const foot = $('reportResultsFoot');
+  if (head) head.innerHTML = '';
+  if (foot) foot.innerHTML = '';
+  if (body) {
+    body.innerHTML = `
+      <tr>
+        <td class="report-run-loading-cell">
+          <div class="report-run-loading">
+            <span class="spinner"></span>
+            <strong>Loading report...</strong>
+            <span>Preparing secure Salesforce results.</span>
+          </div>
+        </td>
+      </tr>
+    `;
+  }
+}
+
+function showReportViewError(message) {
+  showViewerMode();
+  const head = $('reportResultsHead');
+  const body = $('reportResultsBody');
+  const foot = $('reportResultsFoot');
+  if (head) head.innerHTML = '';
+  if (foot) foot.innerHTML = '';
+  if (body) {
+    body.innerHTML = `
+      <tr>
+        <td class="report-run-loading-cell">
+          <div class="report-run-error">
+            <strong>Could not load report</strong>
+            <span>${esc(message)}</span>
+          </div>
+        </td>
+      </tr>
+    `;
+  }
 }
 
 async function loadFields(objectName) {
@@ -873,8 +1247,7 @@ async function saveAndRunReport() {
     const saved = await saveReport({ silent: true });
     if (!saved) return;
     setBusy(button, true, 'Running...');
-    await runFullReport({ silentBusy: true });
-    toast('Report saved and run completed', 'ok');
+    await runFullReport({ silentBusy: true, openViewer: true });
   } finally {
     setBusy(button, false, 'Save & Run');
   }
@@ -898,7 +1271,7 @@ async function runPreview(options = {}) {
       body: JSON.stringify({ definition })
     });
     state.lastPreviewSignature = signature;
-    renderResults(result, { previewMode: true });
+    renderReport(result, { previewMode: true });
   } catch (err) {
     toast(err.message, 'err');
   } finally {
@@ -917,11 +1290,19 @@ async function runFullReport(options = {}) {
   const button = $('runFullReportBtn');
   if (!options.silentBusy) setBusy(button, true, 'Running...');
   try {
+    const definition = definitionFromForm();
     const result = await api('/api/reports/run', {
       method: 'POST',
-      body: JSON.stringify({ definition: definitionFromForm() })
+      body: JSON.stringify({ definition })
     });
-    renderResults(result, { previewMode: false });
+    writeReportRunCache(state.activeReport?.id, definition, result);
+    if (options.openViewer && REPORT_PAGE.mode === 'builder' && state.activeReport?.id && !options.stayOnPage) {
+      storeReportRunDraft(state.activeReport.id, definition, result);
+      navigateToReportView(state.activeReport.id);
+      return result;
+    }
+    renderReport(result, { previewMode: false, viewerMode: Boolean(options.viewerMode) });
+    return result;
   } catch (err) {
     toast(err.message, 'err');
   } finally {
@@ -985,13 +1366,7 @@ async function exportReport(format = 'csv') {
 
 async function runReportFromList(reportId) {
   closeReportActionMenu();
-  setPageBusy(true, 'Opening report...');
-  try {
-    await openReport(reportId);
-    await runFullReport({ silentBusy: true });
-  } finally {
-    setPageBusy(false);
-  }
+  navigateToReportView(reportId);
 }
 
 async function exportReportFromList(reportId, format = 'csv') {
@@ -1246,6 +1621,10 @@ async function scheduleReport() {
       toast('Report schedule saved', 'ok');
     }
   });
+}
+
+function renderReport(result, options = { previewMode: true }) {
+  return renderResults(result, options);
 }
 
 function renderResults(result, options = { previewMode: true }) {

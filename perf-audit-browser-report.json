@@ -1,0 +1,691 @@
+{
+  "flow": {
+    "openedFirstAccount": true,
+    "openedSecondAccount": false,
+    "returnedAccount": false,
+    "openedContact": true
+  },
+  "report": {
+    "generatedAt": "2026-06-29T09:50:40.451Z",
+    "paints": {
+      "first-paint": 68,
+      "first-contentful-paint": 68
+    },
+    "lcp": {
+      "startTime": 68,
+      "renderTime": 68,
+      "loadTime": 0,
+      "size": 5956,
+      "element": ""
+    },
+    "longTasks": [],
+    "layoutShifts": [
+      {
+        "startTime": 77216.9,
+        "value": 0
+      }
+    ],
+    "requests": [
+      {
+        "sessionId": "1782726613048-2twq7j",
+        "method": "GET",
+        "url": "/api/Account/listviews",
+        "type": "metadata",
+        "startAt": 11.3,
+        "responseAt": 1836.5,
+        "durationMs": 1825.3,
+        "status": 200,
+        "ok": true,
+        "perfRequestId": "a30c8796-b149-45e2-a923-f9ee446d43f9",
+        "blockingRender": true
+      },
+      {
+        "sessionId": "1782726614887-89g60j",
+        "method": "GET",
+        "url": "/api/Account",
+        "type": "object-list",
+        "startAt": 2.2,
+        "responseAt": 1271.6,
+        "durationMs": 1269.4,
+        "status": 200,
+        "ok": true,
+        "perfRequestId": "e596c736-f324-4c47-ac78-a99d2da218b4",
+        "blockingRender": true
+      },
+      {
+        "sessionId": "1782726614887-89g60j",
+        "method": "GET",
+        "url": "/api/Case/fields",
+        "type": "metadata",
+        "startAt": 15.2,
+        "responseAt": 1650.8,
+        "durationMs": 1635.6,
+        "status": 200,
+        "ok": true,
+        "perfRequestId": "eb0d19e7-738e-492b-adea-f06d6b3f9946",
+        "blockingRender": true
+      },
+      {
+        "sessionId": "1782726623566-bm34wp",
+        "method": "GET",
+        "url": "/api/Contact/listviews",
+        "type": "metadata",
+        "startAt": 17.4,
+        "responseAt": 2518.7,
+        "durationMs": 2501.3,
+        "status": 200,
+        "ok": true,
+        "perfRequestId": "31a5fd72-ea24-4879-8a4f-99734e72e4d3",
+        "blockingRender": true
+      },
+      {
+        "sessionId": "1782726626086-syhj8p",
+        "method": "GET",
+        "url": "/api/Contact",
+        "type": "object-list",
+        "startAt": 1.8,
+        "responseAt": 2302.6,
+        "durationMs": 2300.8,
+        "status": 200,
+        "ok": true,
+        "perfRequestId": "1fde2e50-510c-4a3d-baf7-548218596d2f",
+        "blockingRender": true
+      },
+      {
+        "sessionId": "1782726629636-f692ux",
+        "method": "GET",
+        "url": "/api/Contact",
+        "type": "object-list",
+        "startAt": 11.3,
+        "responseAt": 3933.1,
+        "durationMs": 3921.9,
+        "status": 200,
+        "ok": true,
+        "perfRequestId": "37da4897-749d-4483-8ac1-bffb015d7db9",
+        "blockingRender": true
+      }
+    ],
+    "duplicates": [
+      {
+        "request": "GET /api/Contact",
+        "count": 2
+      }
+    ],
+    "sessions": [
+      {
+        "id": "1782726613048-2twq7j",
+        "type": "switch-object",
+        "meta": {
+          "function": "switchObject",
+          "args": [
+            "Account"
+          ],
+          "objectName": "Account"
+        },
+        "start": 64161.39999985695,
+        "end": 67319.69999980927,
+        "totalMs": 3158.3,
+        "apiRequests": [
+          {
+            "sessionId": "1782726613048-2twq7j",
+            "method": "GET",
+            "url": "/api/Account/listviews",
+            "type": "metadata",
+            "startAt": 11.3,
+            "responseAt": 1836.5,
+            "durationMs": 1825.3,
+            "status": 200,
+            "ok": true,
+            "perfRequestId": "a30c8796-b149-45e2-a923-f9ee446d43f9",
+            "blockingRender": true
+          }
+        ],
+        "domStart": {
+          "added": 0,
+          "removed": 0,
+          "mutationBatches": 0
+        },
+        "listenersStart": 0,
+        "renderStart": {},
+        "componentStart": {},
+        "events": [
+          {
+            "label": "switchObject:start",
+            "at": 0
+          },
+          {
+            "label": "api-request-start",
+            "at": 11.3,
+            "url": "/api/Account/listviews",
+            "method": "GET",
+            "type": "metadata"
+          },
+          {
+            "label": "api-response",
+            "at": 1836.6,
+            "url": "/api/Account/listviews",
+            "method": "GET",
+            "status": 200,
+            "ms": 1825.3
+          }
+        ],
+        "memoryStart": {
+          "usedJSHeapSize": 4855157,
+          "totalJSHeapSize": 6104829,
+          "jsHeapSizeLimit": 4223401984,
+          "at": 64127.5
+        },
+        "memoryEnd": {
+          "usedJSHeapSize": 5053553,
+          "totalJSHeapSize": 12693249,
+          "jsHeapSizeLimit": 4223401984,
+          "at": 67285.8
+        },
+        "domCreated": 221,
+        "domRemoved": 52,
+        "listenersAdded": 0,
+        "renderDelta": {},
+        "componentDelta": {}
+      },
+      {
+        "id": "1782726614887-89g60j",
+        "type": "load-list",
+        "meta": {
+          "function": "loadData",
+          "args": [],
+          "forceRefresh": false
+        },
+        "start": 66000.09999990463,
+        "end": 67319.69999980927,
+        "totalMs": 1319.6,
+        "apiRequests": [
+          {
+            "sessionId": "1782726614887-89g60j",
+            "method": "GET",
+            "url": "/api/Account",
+            "type": "object-list",
+            "startAt": 2.2,
+            "responseAt": 1271.6,
+            "durationMs": 1269.4,
+            "status": 200,
+            "ok": true,
+            "perfRequestId": "e596c736-f324-4c47-ac78-a99d2da218b4",
+            "blockingRender": true
+          },
+          {
+            "sessionId": "1782726614887-89g60j",
+            "method": "GET",
+            "url": "/api/Case/fields",
+            "type": "metadata",
+            "startAt": 15.2,
+            "responseAt": 1650.8,
+            "durationMs": 1635.6,
+            "status": 200,
+            "ok": true,
+            "perfRequestId": "eb0d19e7-738e-492b-adea-f06d6b3f9946",
+            "blockingRender": true
+          }
+        ],
+        "domStart": {
+          "added": 10,
+          "removed": 11,
+          "mutationBatches": 1
+        },
+        "listenersStart": 0,
+        "renderStart": {},
+        "componentStart": {},
+        "events": [
+          {
+            "label": "loadData:start",
+            "at": 0.1
+          },
+          {
+            "label": "api-request-start",
+            "at": 2.2,
+            "url": "/api/Account",
+            "method": "GET",
+            "type": "object-list"
+          },
+          {
+            "label": "api-request-start",
+            "at": 15.2,
+            "url": "/api/Case/fields",
+            "method": "GET",
+            "type": "metadata"
+          },
+          {
+            "label": "api-response",
+            "at": 1271.6,
+            "url": "/api/Account",
+            "method": "GET",
+            "status": 200,
+            "ms": 1269.4
+          },
+          {
+            "label": "renderTable:render",
+            "at": 1294.2,
+            "ms": 2.5
+          },
+          {
+            "label": "renderCurrentView:render",
+            "at": 1294.2,
+            "ms": 2.5
+          },
+          {
+            "label": "loadData:end",
+            "at": 1312.4
+          },
+          {
+            "label": "switchObject:end",
+            "at": 1312.7
+          }
+        ],
+        "memoryStart": {
+          "usedJSHeapSize": 7110057,
+          "totalJSHeapSize": 9026713,
+          "jsHeapSizeLimit": 4223401984,
+          "at": 65966.2
+        },
+        "memoryEnd": {
+          "usedJSHeapSize": 5053553,
+          "totalJSHeapSize": 12693249,
+          "jsHeapSizeLimit": 4223401984,
+          "at": 67285.8
+        },
+        "domCreated": 211,
+        "domRemoved": 41,
+        "listenersAdded": 0,
+        "renderDelta": {},
+        "componentDelta": {}
+      },
+      {
+        "id": "1782726616538-kbxkd2",
+        "type": "ambient",
+        "meta": {
+          "source": "auto"
+        },
+        "start": 67651,
+        "end": 91563.79999995232,
+        "totalMs": 23912.8,
+        "apiRequests": [],
+        "domStart": {
+          "added": 224,
+          "removed": 55,
+          "mutationBatches": 5
+        },
+        "listenersStart": 0,
+        "renderStart": {},
+        "componentStart": {},
+        "events": [
+          {
+            "label": "api-response",
+            "at": 0,
+            "url": "/api/Case/fields",
+            "method": "GET",
+            "status": 200,
+            "ms": 1635.6
+          }
+        ],
+        "memoryStart": {
+          "usedJSHeapSize": 5063182,
+          "totalJSHeapSize": 12693494,
+          "jsHeapSizeLimit": 4223401984,
+          "at": 67617.1
+        },
+        "memoryEnd": {
+          "usedJSHeapSize": 5628919,
+          "totalJSHeapSize": 22613619,
+          "jsHeapSizeLimit": 4223401984,
+          "at": 91530
+        },
+        "domCreated": 336,
+        "domRemoved": 148,
+        "listenersAdded": 0,
+        "renderDelta": {},
+        "componentDelta": {}
+      },
+      {
+        "id": "1782726623566-bm34wp",
+        "type": "switch-object",
+        "meta": {
+          "function": "switchObject",
+          "args": [
+            "Contact"
+          ],
+          "objectName": "Contact"
+        },
+        "start": 74679.19999980927,
+        "end": 79550.29999995232,
+        "totalMs": 4871.1,
+        "apiRequests": [
+          {
+            "sessionId": "1782726623566-bm34wp",
+            "method": "GET",
+            "url": "/api/Contact/listviews",
+            "type": "metadata",
+            "startAt": 17.4,
+            "responseAt": 2518.7,
+            "durationMs": 2501.3,
+            "status": 200,
+            "ok": true,
+            "perfRequestId": "31a5fd72-ea24-4879-8a4f-99734e72e4d3",
+            "blockingRender": true
+          }
+        ],
+        "domStart": {
+          "added": 287,
+          "removed": 118,
+          "mutationBatches": 8
+        },
+        "listenersStart": 0,
+        "renderStart": {},
+        "componentStart": {},
+        "events": [
+          {
+            "label": "switchObject:start",
+            "at": 0.2
+          },
+          {
+            "label": "api-request-start",
+            "at": 17.4,
+            "url": "/api/Contact/listviews",
+            "method": "GET",
+            "type": "metadata"
+          },
+          {
+            "label": "api-response",
+            "at": 2518.7,
+            "url": "/api/Contact/listviews",
+            "method": "GET",
+            "status": 200,
+            "ms": 2501.3
+          }
+        ],
+        "memoryStart": {
+          "usedJSHeapSize": 5025567,
+          "totalJSHeapSize": 13176171,
+          "jsHeapSizeLimit": 4223401984,
+          "at": 74645.5
+        },
+        "memoryEnd": {
+          "usedJSHeapSize": 9670019,
+          "totalJSHeapSize": 19131155,
+          "jsHeapSizeLimit": 4223401984,
+          "at": 79516.4
+        },
+        "domCreated": 205,
+        "domRemoved": 17,
+        "listenersAdded": 0,
+        "renderDelta": {},
+        "componentDelta": {}
+      },
+      {
+        "id": "1782726626086-syhj8p",
+        "type": "load-list",
+        "meta": {
+          "function": "loadData",
+          "args": [],
+          "forceRefresh": false
+        },
+        "start": 77199.39999985695,
+        "end": 79550.19999980927,
+        "totalMs": 2350.8,
+        "apiRequests": [
+          {
+            "sessionId": "1782726626086-syhj8p",
+            "method": "GET",
+            "url": "/api/Contact",
+            "type": "object-list",
+            "startAt": 1.8,
+            "responseAt": 2302.6,
+            "durationMs": 2300.8,
+            "status": 200,
+            "ok": true,
+            "perfRequestId": "1fde2e50-510c-4a3d-baf7-548218596d2f",
+            "blockingRender": true
+          }
+        ],
+        "domStart": {
+          "added": 298,
+          "removed": 121,
+          "mutationBatches": 9
+        },
+        "listenersStart": 0,
+        "renderStart": {},
+        "componentStart": {},
+        "events": [
+          {
+            "label": "loadData:start",
+            "at": 0.4
+          },
+          {
+            "label": "api-request-start",
+            "at": 1.8,
+            "url": "/api/Contact",
+            "method": "GET",
+            "type": "object-list"
+          },
+          {
+            "label": "api-response",
+            "at": 2302.6,
+            "url": "/api/Contact",
+            "method": "GET",
+            "status": 200,
+            "ms": 2300.8
+          },
+          {
+            "label": "renderTable:render",
+            "at": 2328.3,
+            "ms": 1.8
+          },
+          {
+            "label": "renderCurrentView:render",
+            "at": 2328.3,
+            "ms": 2.1
+          },
+          {
+            "label": "loadData:end",
+            "at": 2339.2
+          },
+          {
+            "label": "switchObject:end",
+            "at": 2339.3
+          }
+        ],
+        "memoryStart": {
+          "usedJSHeapSize": 6937652,
+          "totalJSHeapSize": 13179368,
+          "jsHeapSizeLimit": 4223401984,
+          "at": 77165.9
+        },
+        "memoryEnd": {
+          "usedJSHeapSize": 9670019,
+          "totalJSHeapSize": 19131155,
+          "jsHeapSizeLimit": 4223401984,
+          "at": 79516.4
+        },
+        "domCreated": 194,
+        "domRemoved": 14,
+        "listenersAdded": 0,
+        "renderDelta": {},
+        "componentDelta": {}
+      },
+      {
+        "id": "1782726629636-f692ux",
+        "type": "load-list",
+        "meta": {
+          "function": "loadData",
+          "args": [
+            "[object Object]"
+          ],
+          "forceRefresh": true
+        },
+        "start": 80749,
+        "end": 84715.29999995232,
+        "totalMs": 3966.3,
+        "apiRequests": [
+          {
+            "sessionId": "1782726629636-f692ux",
+            "method": "GET",
+            "url": "/api/Contact",
+            "type": "object-list",
+            "startAt": 11.3,
+            "responseAt": 3933.1,
+            "durationMs": 3921.9,
+            "status": 200,
+            "ok": true,
+            "perfRequestId": "37da4897-749d-4483-8ac1-bffb015d7db9",
+            "blockingRender": true
+          }
+        ],
+        "domStart": {
+          "added": 495,
+          "removed": 138,
+          "mutationBatches": 13
+        },
+        "listenersStart": 0,
+        "renderStart": {},
+        "componentStart": {},
+        "events": [
+          {
+            "label": "loadData:start",
+            "at": 0.2
+          },
+          {
+            "label": "api-request-start",
+            "at": 11.3,
+            "url": "/api/Contact",
+            "method": "GET",
+            "type": "object-list"
+          },
+          {
+            "label": "api-response",
+            "at": 3933.2,
+            "url": "/api/Contact",
+            "method": "GET",
+            "status": 200,
+            "ms": 3921.9
+          },
+          {
+            "label": "renderTable:render",
+            "at": 3949,
+            "ms": 0.8
+          },
+          {
+            "label": "renderCurrentView:render",
+            "at": 3949,
+            "ms": 0.9
+          },
+          {
+            "label": "loadData:end",
+            "at": 3961.5
+          }
+        ],
+        "memoryStart": {
+          "usedJSHeapSize": 9673346,
+          "totalJSHeapSize": 19131346,
+          "jsHeapSizeLimit": 4223401984,
+          "at": 80715.3
+        },
+        "memoryEnd": {
+          "usedJSHeapSize": 13738714,
+          "totalJSHeapSize": 26655926,
+          "jsHeapSizeLimit": 4223401984,
+          "at": 84681.5
+        },
+        "domCreated": 62,
+        "domRemoved": 62,
+        "listenersAdded": 0,
+        "renderDelta": {},
+        "componentDelta": {}
+      }
+    ],
+    "frontend": {
+      "domNodesCreated": 560,
+      "domNodesRemoved": 203,
+      "mutationBatches": 17,
+      "eventListenersAdded": 0,
+      "eventListenersByType": {},
+      "renderCount": {},
+      "componentsInitialized": {}
+    },
+    "modules": [
+      {
+        "name": "/style.css?v=6",
+        "initiatorType": "link",
+        "startTime": 19,
+        "duration": 6.7,
+        "transferSize": 300,
+        "decodedBodySize": 0
+      },
+      {
+        "name": "/perf-audit.js?v=1",
+        "initiatorType": "script",
+        "startTime": 19.4,
+        "duration": 7.6,
+        "transferSize": 300,
+        "decodedBodySize": 0
+      },
+      {
+        "name": "/client-performance.js?v=1",
+        "initiatorType": "script",
+        "startTime": 19.4,
+        "duration": 12,
+        "transferSize": 300,
+        "decodedBodySize": 0
+      },
+      {
+        "name": "/app.js?v=26",
+        "initiatorType": "script",
+        "startTime": 19.5,
+        "duration": 13.6,
+        "transferSize": 300,
+        "decodedBodySize": 0
+      }
+    ],
+    "memory": [
+      {
+        "usedJSHeapSize": 7099902,
+        "totalJSHeapSize": 9024374,
+        "jsHeapSizeLimit": 4223401984,
+        "at": 65012.5
+      },
+      {
+        "usedJSHeapSize": 5095234,
+        "totalJSHeapSize": 12702198,
+        "jsHeapSizeLimit": 4223401984,
+        "at": 70015.4
+      },
+      {
+        "usedJSHeapSize": 6926434,
+        "totalJSHeapSize": 13176594,
+        "jsHeapSizeLimit": 4223401984,
+        "at": 75009.8
+      },
+      {
+        "usedJSHeapSize": 9672474,
+        "totalJSHeapSize": 19131346,
+        "jsHeapSizeLimit": 4223401984,
+        "at": 80007.7
+      },
+      {
+        "usedJSHeapSize": 5624659,
+        "totalJSHeapSize": 22613619,
+        "jsHeapSizeLimit": 4223401984,
+        "at": 85008.4
+      },
+      {
+        "usedJSHeapSize": 5627007,
+        "totalJSHeapSize": 22613619,
+        "jsHeapSizeLimit": 4223401984,
+        "at": 90010.4
+      }
+    ],
+    "currentMemory": {
+      "usedJSHeapSize": 5628919,
+      "totalJSHeapSize": 22613619,
+      "jsHeapSizeLimit": 4223401984,
+      "at": 91530.2
+    }
+  }
+}

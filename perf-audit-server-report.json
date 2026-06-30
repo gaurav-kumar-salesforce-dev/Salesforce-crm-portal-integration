@@ -1,0 +1,3621 @@
+{
+  "user": {
+    "role": "system_administrator"
+  },
+  "calls": [
+    {
+      "label": "reset audit buffer",
+      "path": "/api/debug/performance-audit/reset",
+      "status": 200,
+      "ms": 956.63,
+      "perfRequestId": "0138970e-1fe8-402a-addd-092114e8e868"
+    },
+    {
+      "label": "current portal user",
+      "path": "/api/portal/me",
+      "status": 200,
+      "ms": 4378.41,
+      "perfRequestId": "432fa85a-bada-486e-8efa-9702f7a85995"
+    },
+    {
+      "label": "open object Account fields",
+      "path": "/api/Account/fields",
+      "status": 200,
+      "ms": 2492.9,
+      "perfRequestId": "ae0c88f5-adec-4282-88cf-87897b4121b5"
+    },
+    {
+      "label": "open object Account listviews",
+      "path": "/api/Account/listviews",
+      "status": 200,
+      "ms": 952.62,
+      "perfRequestId": "ad80b141-00ab-420d-9028-c2bd98f7a140"
+    },
+    {
+      "label": "open object Account list",
+      "path": "/api/Account",
+      "status": 200,
+      "ms": 2534.03,
+      "perfRequestId": "c83e063e-4272-4902-b01f-d3f36214dc68"
+    },
+    {
+      "label": "refresh Account list",
+      "path": "/api/Account",
+      "status": 200,
+      "ms": 1327.03,
+      "perfRequestId": "67b6b632-f229-430d-8e4d-4a0ea801b805"
+    },
+    {
+      "label": "Account layout JSON",
+      "path": "/api/portal/layouts/Account",
+      "status": 200,
+      "ms": 1241.12,
+      "perfRequestId": "4086b9d3-28ef-4f7e-b9c6-e248a10b3583"
+    },
+    {
+      "label": "Account compact layout JSON",
+      "path": "/api/portal/compact-layouts/Account",
+      "status": 200,
+      "ms": 1089.09,
+      "perfRequestId": "2a86605a-d698-4a6f-bd7b-92cb89b5478e"
+    },
+    {
+      "label": "Account record page JSON",
+      "path": "/api/portal/record-pages/Account",
+      "status": 200,
+      "ms": 1040.1,
+      "perfRequestId": "df558829-a4e3-46eb-9dc8-c31cf1ec8008"
+    },
+    {
+      "label": "open Account record",
+      "path": "/api/Account/001C100000R25I7IAJ",
+      "status": 200,
+      "ms": 1833.61,
+      "perfRequestId": "8e4e886b-063b-4e3e-b3f2-1e9137e43e22"
+    },
+    {
+      "label": "open Account related list",
+      "path": "/api/Account/001C100000R25I7IAJ/related",
+      "status": 200,
+      "ms": 1864.86,
+      "perfRequestId": "72c0a83f-4c34-4845-9874-bf55c447c439"
+    },
+    {
+      "label": "open Account activity",
+      "path": "/api/Account/001C100000R25I7IAJ/activity",
+      "status": 200,
+      "ms": 908.79,
+      "perfRequestId": "505eb565-1a4a-4e00-a98b-a26f6964aafd"
+    },
+    {
+      "label": "open Account chatter",
+      "path": "/api/Account/001C100000R25I7IAJ/chatter",
+      "status": 200,
+      "ms": 942.27,
+      "perfRequestId": "4c692d8c-e20e-4604-866c-865e22db76f5"
+    },
+    {
+      "label": "open previous/second Account record",
+      "path": "/api/Account/001C100000R25NDIAZ",
+      "status": 200,
+      "ms": 1342.26,
+      "perfRequestId": "7f22c0fb-57dd-4b27-ac54-32cf24eb7319"
+    },
+    {
+      "label": "return to previous Account record",
+      "path": "/api/Account/001C100000R25I7IAJ",
+      "status": 200,
+      "ms": 1315.1,
+      "perfRequestId": "00458ccd-7a4c-4767-a801-c4d9fe40ac2b"
+    },
+    {
+      "label": "switch object Contact fields",
+      "path": "/api/Contact/fields",
+      "status": 200,
+      "ms": 3208.14,
+      "perfRequestId": "f0bac8e4-294e-4676-a16a-c0892b294480"
+    },
+    {
+      "label": "switch object Contact listviews",
+      "path": "/api/Contact/listviews",
+      "status": 200,
+      "ms": 947.35,
+      "perfRequestId": "5fbd9222-773e-45cb-bf73-b77792d31d2e"
+    },
+    {
+      "label": "switch object Contact list",
+      "path": "/api/Contact",
+      "status": 200,
+      "ms": 2150.14,
+      "perfRequestId": "7a92564a-591e-43f6-baf3-f1a2ea7b8cd4"
+    },
+    {
+      "label": "open Contact record",
+      "path": "/api/Contact/003C100000OD3m2IAD",
+      "status": 200,
+      "ms": 1553.37,
+      "perfRequestId": "b66ec23c-de84-4a62-a70e-50a7978f2b2d"
+    },
+    {
+      "label": "open Contact related list",
+      "path": "/api/Contact/003C100000OD3m2IAD/related",
+      "status": 200,
+      "ms": 1539.77,
+      "perfRequestId": "2b79f16b-4650-4fc3-b995-ad46b0f76ed3"
+    },
+    {
+      "label": "read audit report",
+      "path": "/api/debug/performance-audit",
+      "status": 200,
+      "ms": 800.62,
+      "perfRequestId": "f873593b-73cc-4456-8728-0b813c570cbc"
+    }
+  ],
+  "report": {
+    "generatedAt": "2026-06-29T09:48:15.080Z",
+    "requestCount": 20,
+    "routeSummary": {
+      "other": {
+        "count": 1,
+        "totalMs": 926.09,
+        "supabase": 917.3,
+        "salesforce": 0,
+        "permission": 0,
+        "sharing": 0,
+        "layout": 0,
+        "metadata": 0,
+        "related": 0,
+        "activity": 0,
+        "chatter": 0,
+        "avgMs": 926.09
+      },
+      "record": {
+        "count": 7,
+        "totalMs": 12296.95,
+        "supabase": 15069.4,
+        "salesforce": 4392.7,
+        "permission": 0.05,
+        "sharing": 0,
+        "layout": 0,
+        "metadata": 1073.18,
+        "related": 0,
+        "activity": 0,
+        "chatter": 0,
+        "avgMs": 1756.71
+      },
+      "metadata": {
+        "count": 2,
+        "totalMs": 5693.6,
+        "supabase": 4013.81,
+        "salesforce": 0,
+        "permission": 0,
+        "sharing": 0,
+        "layout": 0,
+        "metadata": 2032.89,
+        "related": 0,
+        "activity": 0,
+        "chatter": 0,
+        "avgMs": 2846.8
+      },
+      "object-list": {
+        "count": 3,
+        "totalMs": 5977.11,
+        "supabase": 3039.78,
+        "salesforce": 2532.83,
+        "permission": 0.14,
+        "sharing": 0,
+        "layout": 0,
+        "metadata": 371.73,
+        "related": 0,
+        "activity": 0,
+        "chatter": 0,
+        "avgMs": 1992.37
+      },
+      "layout-json": {
+        "count": 3,
+        "totalMs": 3360.51,
+        "supabase": 3354.46,
+        "salesforce": 0,
+        "permission": 0,
+        "sharing": 0,
+        "layout": 0,
+        "metadata": 0,
+        "related": 0,
+        "activity": 0,
+        "chatter": 0,
+        "avgMs": 1120.17
+      },
+      "related-list": {
+        "count": 2,
+        "totalMs": 3399.58,
+        "supabase": 2260.45,
+        "salesforce": 1425.07,
+        "permission": 0.02,
+        "sharing": 0,
+        "layout": 0,
+        "metadata": 1225.31,
+        "related": 0,
+        "activity": 0,
+        "chatter": 0,
+        "avgMs": 1699.79
+      },
+      "activity": {
+        "count": 1,
+        "totalMs": 906.78,
+        "supabase": 690.38,
+        "salesforce": 576,
+        "permission": 0.01,
+        "sharing": 0,
+        "layout": 0,
+        "metadata": 0,
+        "related": 0,
+        "activity": 0,
+        "chatter": 0,
+        "avgMs": 906.78
+      },
+      "chatter": {
+        "count": 1,
+        "totalMs": 939.59,
+        "supabase": 699.14,
+        "salesforce": 0,
+        "permission": 0,
+        "sharing": 0,
+        "layout": 0,
+        "metadata": 0,
+        "related": 0,
+        "activity": 0,
+        "chatter": 237.02,
+        "avgMs": 939.59
+      }
+    },
+    "slowestRequests": [
+      {
+        "id": "432fa85a-bada-486e-8efa-9702f7a85995",
+        "method": "GET",
+        "path": "/api/portal/me",
+        "routeType": "record",
+        "start": 86766.6709,
+        "status": 200,
+        "totalMs": 4371.86,
+        "counts": {
+          "supabase": 15,
+          "salesforce": 0,
+          "permission": 0,
+          "sharing": 0,
+          "layout": 0,
+          "metadata": 0,
+          "related": 0,
+          "activity": 0,
+          "chatter": 0
+        },
+        "totals": {
+          "node": 4371.86,
+          "supabase": 10660.23,
+          "salesforce": 0,
+          "permission": 0,
+          "sharing": 0,
+          "layout": 0,
+          "metadata": 0,
+          "related": 0,
+          "activity": 0,
+          "chatter": 0
+        },
+        "events": [
+          {
+            "category": "supabase",
+            "label": "from:users.select(id, email, name, role, is_active).eq(id,aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa).eq(is_active,true).single",
+            "ms": 398.39,
+            "at": 399.3
+          },
+          {
+            "category": "supabase",
+            "label": "from:user_profile_assignments.select(profiles(is_system_admin)).eq(user_id,aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa).maybeSingle",
+            "ms": 341.37,
+            "at": 740.79
+          },
+          {
+            "category": "supabase",
+            "label": "from:users.select(id, email, name, role, profile_image, is).eq(id,aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa).eq(is_active,true).single",
+            "ms": 779.55,
+            "at": 1520.82
+          },
+          {
+            "category": "supabase",
+            "label": "from:user_profile_assignments.select(profile_id, profiles(id, name, descripti).eq(user_id,aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa).single",
+            "ms": 376.34,
+            "at": 1897.3
+          },
+          {
+            "category": "supabase",
+            "label": "from:sf_objects.select(api_name, label).eq(is_active,true).order(sort_order)",
+            "ms": 366.39,
+            "at": 2263.97
+          },
+          {
+            "category": "supabase",
+            "label": "from:user_profile_assignments.select(profiles(id, is_system_admin)).eq(user_id,aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa).maybeSingle",
+            "ms": 341,
+            "at": 2605.9
+          },
+          {
+            "category": "supabase",
+            "label": "from:user_profile_assignments.select(profiles(id, is_system_admin)).eq(user_id,aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa).maybeSingle",
+            "ms": 874.74,
+            "at": 3139.69
+          },
+          {
+            "category": "supabase",
+            "label": "from:user_profile_assignments.select(profiles(id, is_system_admin)).eq(user_id,aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa).maybeSingle",
+            "ms": 1012.12,
+            "at": 3277.24
+          },
+          {
+            "category": "supabase",
+            "label": "from:user_profile_assignments.select(profiles(id, is_system_admin)).eq(user_id,aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa).maybeSingle",
+            "ms": 1012.54,
+            "at": 3277.62
+          },
+          {
+            "category": "supabase",
+            "label": "from:user_profile_assignments.select(profiles(id, is_system_admin)).eq(user_id,aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa).maybeSingle",
+            "ms": 1017.58,
+            "at": 3282.68
+          },
+          {
+            "category": "supabase",
+            "label": "from:user_profile_assignments.select(profiles(id, is_system_admin)).eq(user_id,aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa).maybeSingle",
+            "ms": 1017.76,
+            "at": 3282.75
+          },
+          {
+            "category": "supabase",
+            "label": "from:user_profile_assignments.select(profiles(id, is_system_admin)).eq(user_id,aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa).maybeSingle",
+            "ms": 1017.66,
+            "at": 3282.79
+          },
+          {
+            "category": "supabase",
+            "label": "from:user_profile_assignments.select(profiles(id, is_system_admin)).eq(user_id,aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa).maybeSingle",
+            "ms": 1127.36,
+            "at": 3392.53
+          },
+          {
+            "category": "supabase",
+            "label": "from:users.select(profile_image).eq(id,aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa).single",
+            "ms": 629.59,
+            "at": 4022.29
+          },
+          {
+            "category": "supabase",
+            "label": "from:user_profile_assignments.select(profiles(id, name, is_system_admin)).eq(user_id,aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa).single",
+            "ms": 347.84,
+            "at": 4370.33
+          }
+        ]
+      },
+      {
+        "id": "f0bac8e4-294e-4676-a16a-c0892b294480",
+        "method": "GET",
+        "path": "/api/Contact/fields",
+        "routeType": "metadata",
+        "start": 110028.6667,
+        "status": 200,
+        "totalMs": 3205.34,
+        "counts": {
+          "supabase": 7,
+          "salesforce": 0,
+          "permission": 0,
+          "sharing": 0,
+          "layout": 0,
+          "metadata": 1,
+          "related": 0,
+          "activity": 0,
+          "chatter": 0
+        },
+        "totals": {
+          "node": 3205.34,
+          "supabase": 2933.16,
+          "salesforce": 0,
+          "permission": 0,
+          "sharing": 0,
+          "layout": 0,
+          "metadata": 631.21,
+          "related": 0,
+          "activity": 0,
+          "chatter": 0
+        },
+        "events": [
+          {
+            "category": "supabase",
+            "label": "from:users.select(id, email, name, role, is_active).eq(id,aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa).eq(is_active,true).single",
+            "ms": 359.97,
+            "at": 360.9
+          },
+          {
+            "category": "supabase",
+            "label": "from:user_profile_assignments.select(profiles(is_system_admin)).eq(user_id,aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa).maybeSingle",
+            "ms": 342.11,
+            "at": 703.16
+          },
+          {
+            "category": "supabase",
+            "label": "from:sensitive_fields.select(field_name).eq(sf_object,Contact)",
+            "ms": 536.59,
+            "at": 1239.92
+          },
+          {
+            "category": "supabase",
+            "label": "from:user_profile_assignments.select(profile_id).eq(user_id,aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa).maybeSingle",
+            "ms": 374.67,
+            "at": 1614.76
+          },
+          {
+            "category": "supabase",
+            "label": "from:field_permissions.select(field_name, can_view, can_edit).eq(profile_id,82ca56e5-4084-4cdc-a1d4-dabb922f40dc).eq(sf_object,Contact)",
+            "ms": 409.66,
+            "at": 2024.66
+          },
+          {
+            "category": "supabase",
+            "label": "from:user_permission_set_assignments.select(perm_set_id).eq(user_id,aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa)",
+            "ms": 363.35,
+            "at": 2389.05
+          },
+          {
+            "category": "supabase",
+            "label": "from:user_permission_set_group_assignments.select(group_id).eq(user_id,aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa)",
+            "ms": 546.81,
+            "at": 2572.58
+          },
+          {
+            "category": "metadata",
+            "label": "GET /sobjects/Contact/describe",
+            "ms": 631.21,
+            "at": 3204.35,
+            "endpoint": "/sobjects/Contact/describe"
+          }
+        ]
+      },
+      {
+        "id": "c83e063e-4272-4902-b01f-d3f36214dc68",
+        "method": "GET",
+        "path": "/api/Account",
+        "routeType": "object-list",
+        "start": 94589.1554,
+        "status": 200,
+        "totalMs": 2523.89,
+        "counts": {
+          "supabase": 3,
+          "salesforce": 1,
+          "permission": 1,
+          "sharing": 2,
+          "layout": 0,
+          "metadata": 1,
+          "related": 0,
+          "activity": 0,
+          "chatter": 0
+        },
+        "totals": {
+          "node": 2523.89,
+          "supabase": 1041.32,
+          "salesforce": 1097.68,
+          "permission": 0.03,
+          "sharing": 0,
+          "layout": 0,
+          "metadata": 371.73,
+          "related": 0,
+          "activity": 0,
+          "chatter": 0
+        },
+        "events": [
+          {
+            "category": "supabase",
+            "label": "from:users.select(id, email, name, role, is_active).eq(id,aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa).eq(is_active,true).single",
+            "ms": 357.6,
+            "at": 358.98
+          },
+          {
+            "category": "supabase",
+            "label": "from:user_profile_assignments.select(profiles(is_system_admin)).eq(user_id,aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa).maybeSingle",
+            "ms": 334.41,
+            "at": 693.51
+          },
+          {
+            "category": "permission",
+            "label": "Account.can_read.admin-bypass",
+            "ms": 0.03,
+            "at": 694.13
+          },
+          {
+            "category": "sharing",
+            "label": "Account.scopeFilter.admin",
+            "ms": 0,
+            "at": 694.74
+          },
+          {
+            "category": "metadata",
+            "label": "GET /sobjects/Account/describe",
+            "ms": 371.73,
+            "at": 1066.7,
+            "endpoint": "/sobjects/Account/describe"
+          },
+          {
+            "category": "salesforce",
+            "label": "GET /query",
+            "ms": 1097.68,
+            "at": 2164.89,
+            "endpoint": "/query"
+          },
+          {
+            "category": "sharing",
+            "label": "Account.applyRecordVisibility.admin",
+            "ms": 0,
+            "at": 2165.65
+          },
+          {
+            "category": "supabase",
+            "label": "from:org_wide_defaults.select(access_level).eq(sf_object,Account).maybeSingle",
+            "ms": 349.31,
+            "at": 2515.51
+          }
+        ]
+      },
+      {
+        "id": "ae0c88f5-adec-4282-88cf-87897b4121b5",
+        "method": "GET",
+        "path": "/api/Account/fields",
+        "routeType": "metadata",
+        "start": 91145.4149,
+        "status": 200,
+        "totalMs": 2488.26,
+        "counts": {
+          "supabase": 3,
+          "salesforce": 0,
+          "permission": 0,
+          "sharing": 0,
+          "layout": 0,
+          "metadata": 1,
+          "related": 0,
+          "activity": 0,
+          "chatter": 0
+        },
+        "totals": {
+          "node": 2488.26,
+          "supabase": 1080.65,
+          "salesforce": 0,
+          "permission": 0,
+          "sharing": 0,
+          "layout": 0,
+          "metadata": 1401.68,
+          "related": 0,
+          "activity": 0,
+          "chatter": 0
+        },
+        "events": [
+          {
+            "category": "supabase",
+            "label": "from:users.select(id, email, name, role, is_active).eq(id,aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa).eq(is_active,true).single",
+            "ms": 354.11,
+            "at": 355.91
+          },
+          {
+            "category": "supabase",
+            "label": "from:user_profile_assignments.select(profiles(is_system_admin)).eq(user_id,aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa).maybeSingle",
+            "ms": 346.87,
+            "at": 702.91
+          },
+          {
+            "category": "supabase",
+            "label": "from:sensitive_fields.select(field_name).eq(sf_object,Account)",
+            "ms": 379.67,
+            "at": 1083.36
+          },
+          {
+            "category": "metadata",
+            "label": "GET /sobjects/Account/describe",
+            "ms": 1401.68,
+            "at": 2485.57,
+            "endpoint": "/sobjects/Account/describe"
+          }
+        ]
+      },
+      {
+        "id": "7a92564a-591e-43f6-baf3-f1a2ea7b8cd4",
+        "method": "GET",
+        "path": "/api/Contact",
+        "routeType": "object-list",
+        "start": 114184.6074,
+        "status": 200,
+        "totalMs": 2134.77,
+        "counts": {
+          "supabase": 3,
+          "salesforce": 1,
+          "permission": 1,
+          "sharing": 2,
+          "layout": 0,
+          "metadata": 0,
+          "related": 0,
+          "activity": 0,
+          "chatter": 0
+        },
+        "totals": {
+          "node": 2134.77,
+          "supabase": 1333.11,
+          "salesforce": 787.52,
+          "permission": 0.11,
+          "sharing": 0,
+          "layout": 0,
+          "metadata": 0,
+          "related": 0,
+          "activity": 0,
+          "chatter": 0
+        },
+        "events": [
+          {
+            "category": "supabase",
+            "label": "from:users.select(id, email, name, role, is_active).eq(id,aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa).eq(is_active,true).single",
+            "ms": 374.07,
+            "at": 374.88
+          },
+          {
+            "category": "supabase",
+            "label": "from:user_profile_assignments.select(profiles(is_system_admin)).eq(user_id,aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa).maybeSingle",
+            "ms": 331.74,
+            "at": 706.78
+          },
+          {
+            "category": "permission",
+            "label": "Contact.can_read.admin-bypass",
+            "ms": 0.11,
+            "at": 706.94
+          },
+          {
+            "category": "sharing",
+            "label": "Contact.scopeFilter.admin",
+            "ms": 0,
+            "at": 707
+          },
+          {
+            "category": "salesforce",
+            "label": "GET /query",
+            "ms": 787.52,
+            "at": 1494.8,
+            "endpoint": "/query"
+          },
+          {
+            "category": "sharing",
+            "label": "Contact.applyRecordVisibility.admin",
+            "ms": 0,
+            "at": 1495.11
+          },
+          {
+            "category": "supabase",
+            "label": "from:org_wide_defaults.select(access_level).eq(sf_object,Contact).maybeSingle",
+            "ms": 627.3,
+            "at": 2125
+          }
+        ]
+      },
+      {
+        "id": "72c0a83f-4c34-4845-9874-bf55c447c439",
+        "method": "GET",
+        "path": "/api/Account/001C100000R25I7IAJ/related",
+        "routeType": "related-list",
+        "start": 103654.5219,
+        "status": 200,
+        "totalMs": 1863.57,
+        "counts": {
+          "supabase": 3,
+          "salesforce": 5,
+          "permission": 1,
+          "sharing": 0,
+          "layout": 0,
+          "metadata": 4,
+          "related": 0,
+          "activity": 0,
+          "chatter": 0
+        },
+        "totals": {
+          "node": 1863.57,
+          "supabase": 1103.75,
+          "salesforce": 881.16,
+          "permission": 0.01,
+          "sharing": 0,
+          "layout": 0,
+          "metadata": 1225.31,
+          "related": 0,
+          "activity": 0,
+          "chatter": 0
+        },
+        "events": [
+          {
+            "category": "supabase",
+            "label": "from:users.select(id, email, name, role, is_active).eq(id,aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa).eq(is_active,true).single",
+            "ms": 360.38,
+            "at": 360.98
+          },
+          {
+            "category": "supabase",
+            "label": "from:user_profile_assignments.select(profiles(is_system_admin)).eq(user_id,aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa).maybeSingle",
+            "ms": 405.07,
+            "at": 766.3
+          },
+          {
+            "category": "permission",
+            "label": "Account.can_read.admin-bypass",
+            "ms": 0.01,
+            "at": 766.53
+          },
+          {
+            "category": "salesforce",
+            "label": "GET /sobjects/Account/001C100000R25I7IAJ?fields=Portal_Owner__c",
+            "ms": 178.24,
+            "at": 945.47,
+            "endpoint": "/sobjects/Account/001C100000R25I7IAJ?fields=Portal_Owner__c"
+          },
+          {
+            "category": "supabase",
+            "label": "from:portal_record_pages.select(regions).eq(object_name,Account).maybeSingle",
+            "ms": 338.3,
+            "at": 1284.1
+          },
+          {
+            "category": "metadata",
+            "label": "GET /sobjects/Case/describe",
+            "ms": 236.66,
+            "at": 1521.53,
+            "endpoint": "/sobjects/Case/describe"
+          },
+          {
+            "category": "metadata",
+            "label": "GET /sobjects/Opportunity/describe",
+            "ms": 264.99,
+            "at": 1549.9,
+            "endpoint": "/sobjects/Opportunity/describe"
+          },
+          {
+            "category": "metadata",
+            "label": "GET /sobjects/Contact/describe",
+            "ms": 288.29,
+            "at": 1573.19,
+            "endpoint": "/sobjects/Contact/describe"
+          },
+          {
+            "category": "salesforce",
+            "label": "GET /query",
+            "ms": 154.67,
+            "at": 1676.37,
+            "endpoint": "/query"
+          },
+          {
+            "category": "salesforce",
+            "label": "GET /query",
+            "ms": 135.88,
+            "at": 1685.89,
+            "endpoint": "/query"
+          },
+          {
+            "category": "metadata",
+            "label": "GET /sobjects/Contact/describe",
+            "ms": 435.37,
+            "at": 1720.3,
+            "endpoint": "/sobjects/Contact/describe"
+          },
+          {
+            "category": "salesforce",
+            "label": "GET /query",
+            "ms": 269.93,
+            "at": 1843.27,
+            "endpoint": "/query"
+          },
+          {
+            "category": "salesforce",
+            "label": "GET /query",
+            "ms": 142.44,
+            "at": 1862.83,
+            "endpoint": "/query"
+          }
+        ]
+      },
+      {
+        "id": "8e4e886b-063b-4e3e-b3f2-1e9137e43e22",
+        "method": "GET",
+        "path": "/api/Account/001C100000R25I7IAJ",
+        "routeType": "record",
+        "start": 101821.6618,
+        "status": 200,
+        "totalMs": 1831.3,
+        "counts": {
+          "supabase": 2,
+          "salesforce": 4,
+          "permission": 1,
+          "sharing": 0,
+          "layout": 0,
+          "metadata": 1,
+          "related": 0,
+          "activity": 0,
+          "chatter": 0
+        },
+        "totals": {
+          "node": 1831.3,
+          "supabase": 749.55,
+          "salesforce": 1289,
+          "permission": 0.01,
+          "sharing": 0,
+          "layout": 0,
+          "metadata": 383.35,
+          "related": 0,
+          "activity": 0,
+          "chatter": 0
+        },
+        "events": [
+          {
+            "category": "supabase",
+            "label": "from:users.select(id, email, name, role, is_active).eq(id,aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa).eq(is_active,true).single",
+            "ms": 389.57,
+            "at": 390.64
+          },
+          {
+            "category": "supabase",
+            "label": "from:user_profile_assignments.select(profiles(is_system_admin)).eq(user_id,aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa).maybeSingle",
+            "ms": 359.98,
+            "at": 750.79
+          },
+          {
+            "category": "permission",
+            "label": "Account.can_read.admin-bypass",
+            "ms": 0.01,
+            "at": 751
+          },
+          {
+            "category": "salesforce",
+            "label": "GET /sobjects/Account/001C100000R25I7IAJ",
+            "ms": 329.51,
+            "at": 1080.88,
+            "endpoint": "/sobjects/Account/001C100000R25I7IAJ"
+          },
+          {
+            "category": "metadata",
+            "label": "GET /sobjects/Account/describe",
+            "ms": 383.35,
+            "at": 1464.25,
+            "endpoint": "/sobjects/Account/describe"
+          },
+          {
+            "category": "salesforce",
+            "label": "GET /query",
+            "ms": 242.47,
+            "at": 1707.19,
+            "endpoint": "/query"
+          },
+          {
+            "category": "salesforce",
+            "label": "GET /query",
+            "ms": 351.06,
+            "at": 1815.78,
+            "endpoint": "/query"
+          },
+          {
+            "category": "salesforce",
+            "label": "GET /query",
+            "ms": 365.96,
+            "at": 1830.69,
+            "endpoint": "/query"
+          }
+        ]
+      },
+      {
+        "id": "b66ec23c-de84-4a62-a70e-50a7978f2b2d",
+        "method": "GET",
+        "path": "/api/Contact/003C100000OD3m2IAD",
+        "routeType": "record",
+        "start": 116334.458,
+        "status": 200,
+        "totalMs": 1550.12,
+        "counts": {
+          "supabase": 2,
+          "salesforce": 5,
+          "permission": 1,
+          "sharing": 0,
+          "layout": 0,
+          "metadata": 1,
+          "related": 0,
+          "activity": 0,
+          "chatter": 0
+        },
+        "totals": {
+          "node": 1550.12,
+          "supabase": 779.24,
+          "salesforce": 1290.82,
+          "permission": 0.01,
+          "sharing": 0,
+          "layout": 0,
+          "metadata": 242.59,
+          "related": 0,
+          "activity": 0,
+          "chatter": 0
+        },
+        "events": [
+          {
+            "category": "supabase",
+            "label": "from:users.select(id, email, name, role, is_active).eq(id,aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa).eq(is_active,true).single",
+            "ms": 408.32,
+            "at": 408.96
+          },
+          {
+            "category": "supabase",
+            "label": "from:user_profile_assignments.select(profiles(is_system_admin)).eq(user_id,aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa).maybeSingle",
+            "ms": 370.92,
+            "at": 780.04
+          },
+          {
+            "category": "permission",
+            "label": "Contact.can_read.admin-bypass",
+            "ms": 0.01,
+            "at": 780.1
+          },
+          {
+            "category": "salesforce",
+            "label": "GET /sobjects/Contact/003C100000OD3m2IAD",
+            "ms": 160.05,
+            "at": 940.22,
+            "endpoint": "/sobjects/Contact/003C100000OD3m2IAD"
+          },
+          {
+            "category": "metadata",
+            "label": "GET /sobjects/Contact/describe",
+            "ms": 242.59,
+            "at": 1182.85,
+            "endpoint": "/sobjects/Contact/describe"
+          },
+          {
+            "category": "salesforce",
+            "label": "GET /query",
+            "ms": 186.19,
+            "at": 1369.33,
+            "endpoint": "/query"
+          },
+          {
+            "category": "salesforce",
+            "label": "GET /query",
+            "ms": 287.86,
+            "at": 1471.01,
+            "endpoint": "/query"
+          },
+          {
+            "category": "salesforce",
+            "label": "GET /query",
+            "ms": 291.04,
+            "at": 1474.18,
+            "endpoint": "/query"
+          },
+          {
+            "category": "salesforce",
+            "label": "GET /query",
+            "ms": 365.68,
+            "at": 1548.84,
+            "endpoint": "/query"
+          }
+        ]
+      },
+      {
+        "id": "2b79f16b-4650-4fc3-b995-ad46b0f76ed3",
+        "method": "GET",
+        "path": "/api/Contact/003C100000OD3m2IAD/related",
+        "routeType": "related-list",
+        "start": 117889.0936,
+        "status": 200,
+        "totalMs": 1536.01,
+        "counts": {
+          "supabase": 3,
+          "salesforce": 3,
+          "permission": 1,
+          "sharing": 0,
+          "layout": 0,
+          "metadata": 0,
+          "related": 0,
+          "activity": 0,
+          "chatter": 0
+        },
+        "totals": {
+          "node": 1536.01,
+          "supabase": 1156.7,
+          "salesforce": 543.91,
+          "permission": 0.01,
+          "sharing": 0,
+          "layout": 0,
+          "metadata": 0,
+          "related": 0,
+          "activity": 0,
+          "chatter": 0
+        },
+        "events": [
+          {
+            "category": "supabase",
+            "label": "from:users.select(id, email, name, role, is_active).eq(id,aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa).eq(is_active,true).single",
+            "ms": 350.21,
+            "at": 351.13
+          },
+          {
+            "category": "supabase",
+            "label": "from:user_profile_assignments.select(profiles(is_system_admin)).eq(user_id,aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa).maybeSingle",
+            "ms": 442.68,
+            "at": 793.96
+          },
+          {
+            "category": "permission",
+            "label": "Contact.can_read.admin-bypass",
+            "ms": 0.01,
+            "at": 794.01
+          },
+          {
+            "category": "salesforce",
+            "label": "GET /sobjects/Contact/003C100000OD3m2IAD?fields=Portal_Owner__c",
+            "ms": 191.41,
+            "at": 985.47,
+            "endpoint": "/sobjects/Contact/003C100000OD3m2IAD?fields=Portal_Owner__c"
+          },
+          {
+            "category": "supabase",
+            "label": "from:portal_record_pages.select(regions).eq(object_name,Contact).maybeSingle",
+            "ms": 363.81,
+            "at": 1349.54
+          },
+          {
+            "category": "salesforce",
+            "label": "GET /query",
+            "ms": 167.54,
+            "at": 1519.21,
+            "endpoint": "/query"
+          },
+          {
+            "category": "salesforce",
+            "label": "GET /query",
+            "ms": 184.96,
+            "at": 1535.19,
+            "endpoint": "/query"
+          }
+        ]
+      },
+      {
+        "id": "7f22c0fb-57dd-4b27-ac54-32cf24eb7319",
+        "method": "GET",
+        "path": "/api/Account/001C100000R25NDIAZ",
+        "routeType": "record",
+        "start": 107371.227,
+        "status": 200,
+        "totalMs": 1339.34,
+        "counts": {
+          "supabase": 2,
+          "salesforce": 4,
+          "permission": 1,
+          "sharing": 0,
+          "layout": 0,
+          "metadata": 1,
+          "related": 0,
+          "activity": 0,
+          "chatter": 0
+        },
+        "totals": {
+          "node": 1339.34,
+          "supabase": 725.31,
+          "salesforce": 740.54,
+          "permission": 0.01,
+          "sharing": 0,
+          "layout": 0,
+          "metadata": 232.12,
+          "related": 0,
+          "activity": 0,
+          "chatter": 0
+        },
+        "events": [
+          {
+            "category": "supabase",
+            "label": "from:users.select(id, email, name, role, is_active).eq(id,aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa).eq(is_active,true).single",
+            "ms": 392.97,
+            "at": 393.71
+          },
+          {
+            "category": "supabase",
+            "label": "from:user_profile_assignments.select(profiles(is_system_admin)).eq(user_id,aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa).maybeSingle",
+            "ms": 332.34,
+            "at": 726.33
+          },
+          {
+            "category": "permission",
+            "label": "Account.can_read.admin-bypass",
+            "ms": 0.01,
+            "at": 726.41
+          },
+          {
+            "category": "salesforce",
+            "label": "GET /sobjects/Account/001C100000R25NDIAZ",
+            "ms": 167.01,
+            "at": 893.49,
+            "endpoint": "/sobjects/Account/001C100000R25NDIAZ"
+          },
+          {
+            "category": "metadata",
+            "label": "GET /sobjects/Account/describe",
+            "ms": 232.12,
+            "at": 1125.66,
+            "endpoint": "/sobjects/Account/describe"
+          },
+          {
+            "category": "salesforce",
+            "label": "GET /query",
+            "ms": 152.9,
+            "at": 1278.86,
+            "endpoint": "/query"
+          },
+          {
+            "category": "salesforce",
+            "label": "GET /query",
+            "ms": 208.24,
+            "at": 1334.22,
+            "endpoint": "/query"
+          },
+          {
+            "category": "salesforce",
+            "label": "GET /query",
+            "ms": 212.39,
+            "at": 1338.37,
+            "endpoint": "/query"
+          }
+        ]
+      },
+      {
+        "id": "67b6b632-f229-430d-8e4d-4a0ea801b805",
+        "method": "GET",
+        "path": "/api/Account",
+        "routeType": "object-list",
+        "start": 97124.0593,
+        "status": 200,
+        "totalMs": 1318.45,
+        "counts": {
+          "supabase": 2,
+          "salesforce": 1,
+          "permission": 1,
+          "sharing": 2,
+          "layout": 0,
+          "metadata": 0,
+          "related": 0,
+          "activity": 0,
+          "chatter": 0
+        },
+        "totals": {
+          "node": 1318.45,
+          "supabase": 665.35,
+          "salesforce": 647.63,
+          "permission": 0,
+          "sharing": 0,
+          "layout": 0,
+          "metadata": 0,
+          "related": 0,
+          "activity": 0,
+          "chatter": 0
+        },
+        "events": [
+          {
+            "category": "supabase",
+            "label": "from:users.select(id, email, name, role, is_active).eq(id,aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa).eq(is_active,true).single",
+            "ms": 333.7,
+            "at": 334.74
+          },
+          {
+            "category": "supabase",
+            "label": "from:user_profile_assignments.select(profiles(is_system_admin)).eq(user_id,aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa).maybeSingle",
+            "ms": 331.65,
+            "at": 666.53
+          },
+          {
+            "category": "permission",
+            "label": "Account.can_read.admin-bypass",
+            "ms": 0,
+            "at": 666.57
+          },
+          {
+            "category": "sharing",
+            "label": "Account.scopeFilter.admin",
+            "ms": 0,
+            "at": 666.6
+          },
+          {
+            "category": "salesforce",
+            "label": "GET /query",
+            "ms": 647.63,
+            "at": 1314.45,
+            "endpoint": "/query"
+          },
+          {
+            "category": "sharing",
+            "label": "Account.applyRecordVisibility.admin",
+            "ms": 0,
+            "at": 1314.58
+          }
+        ]
+      },
+      {
+        "id": "00458ccd-7a4c-4767-a801-c4d9fe40ac2b",
+        "method": "GET",
+        "path": "/api/Account/001C100000R25I7IAJ",
+        "routeType": "record",
+        "start": 108713.6333,
+        "status": 200,
+        "totalMs": 1312.02,
+        "counts": {
+          "supabase": 2,
+          "salesforce": 4,
+          "permission": 1,
+          "sharing": 0,
+          "layout": 0,
+          "metadata": 1,
+          "related": 0,
+          "activity": 0,
+          "chatter": 0
+        },
+        "totals": {
+          "node": 1312.02,
+          "supabase": 701.27,
+          "salesforce": 637.82,
+          "permission": 0.02,
+          "sharing": 0,
+          "layout": 0,
+          "metadata": 215.12,
+          "related": 0,
+          "activity": 0,
+          "chatter": 0
+        },
+        "events": [
+          {
+            "category": "supabase",
+            "label": "from:users.select(id, email, name, role, is_active).eq(id,aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa).eq(is_active,true).single",
+            "ms": 333.57,
+            "at": 334.29
+          },
+          {
+            "category": "supabase",
+            "label": "from:user_profile_assignments.select(profiles(is_system_admin)).eq(user_id,aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa).maybeSingle",
+            "ms": 367.7,
+            "at": 702.14
+          },
+          {
+            "category": "permission",
+            "label": "Account.can_read.admin-bypass",
+            "ms": 0.02,
+            "at": 702.2
+          },
+          {
+            "category": "salesforce",
+            "label": "GET /sobjects/Account/001C100000R25I7IAJ",
+            "ms": 180.44,
+            "at": 882.71,
+            "endpoint": "/sobjects/Account/001C100000R25I7IAJ"
+          },
+          {
+            "category": "metadata",
+            "label": "GET /sobjects/Account/describe",
+            "ms": 215.12,
+            "at": 1097.87,
+            "endpoint": "/sobjects/Account/describe"
+          },
+          {
+            "category": "salesforce",
+            "label": "GET /query",
+            "ms": 117.48,
+            "at": 1215.81,
+            "endpoint": "/query"
+          },
+          {
+            "category": "salesforce",
+            "label": "GET /query",
+            "ms": 127,
+            "at": 1225.32,
+            "endpoint": "/query"
+          },
+          {
+            "category": "salesforce",
+            "label": "GET /query",
+            "ms": 212.9,
+            "at": 1311.18,
+            "endpoint": "/query"
+          }
+        ]
+      },
+      {
+        "id": "4086b9d3-28ef-4f7e-b9c6-e248a10b3583",
+        "method": "GET",
+        "path": "/api/portal/layouts/Account",
+        "routeType": "layout-json",
+        "start": 98451.1027,
+        "status": 200,
+        "totalMs": 1238.61,
+        "counts": {
+          "supabase": 3,
+          "salesforce": 0,
+          "permission": 0,
+          "sharing": 0,
+          "layout": 0,
+          "metadata": 0,
+          "related": 0,
+          "activity": 0,
+          "chatter": 0
+        },
+        "totals": {
+          "node": 1238.61,
+          "supabase": 1237.09,
+          "salesforce": 0,
+          "permission": 0,
+          "sharing": 0,
+          "layout": 0,
+          "metadata": 0,
+          "related": 0,
+          "activity": 0,
+          "chatter": 0
+        },
+        "events": [
+          {
+            "category": "supabase",
+            "label": "from:users.select(id, email, name, role, is_active).eq(id,aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa).eq(is_active,true).single",
+            "ms": 352.9,
+            "at": 353.36
+          },
+          {
+            "category": "supabase",
+            "label": "from:user_profile_assignments.select(profiles(is_system_admin)).eq(user_id,aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa).maybeSingle",
+            "ms": 343.05,
+            "at": 696.53
+          },
+          {
+            "category": "supabase",
+            "label": "from:portal_custom_layouts.select(layout_data).eq(user_id,aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa).eq(object_name,Account).maybeSingle",
+            "ms": 541.14,
+            "at": 1237.97
+          }
+        ]
+      },
+      {
+        "id": "2a86605a-d698-4a6f-bd7b-92cb89b5478e",
+        "method": "GET",
+        "path": "/api/portal/compact-layouts/Account",
+        "routeType": "layout-json",
+        "start": 99693.6645,
+        "status": 200,
+        "totalMs": 1085.26,
+        "counts": {
+          "supabase": 3,
+          "salesforce": 0,
+          "permission": 0,
+          "sharing": 0,
+          "layout": 0,
+          "metadata": 0,
+          "related": 0,
+          "activity": 0,
+          "chatter": 0
+        },
+        "totals": {
+          "node": 1085.26,
+          "supabase": 1082.81,
+          "salesforce": 0,
+          "permission": 0,
+          "sharing": 0,
+          "layout": 0,
+          "metadata": 0,
+          "related": 0,
+          "activity": 0,
+          "chatter": 0
+        },
+        "events": [
+          {
+            "category": "supabase",
+            "label": "from:users.select(id, email, name, role, is_active).eq(id,aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa).eq(is_active,true).single",
+            "ms": 360.61,
+            "at": 361.82
+          },
+          {
+            "category": "supabase",
+            "label": "from:user_profile_assignments.select(profiles(is_system_admin)).eq(user_id,aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa).maybeSingle",
+            "ms": 381.86,
+            "at": 743.96
+          },
+          {
+            "category": "supabase",
+            "label": "from:portal_compact_layouts.select(fields).eq(user_id,aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa).eq(object_name,Account).maybeSingle",
+            "ms": 340.34,
+            "at": 1084.59
+          }
+        ]
+      },
+      {
+        "id": "df558829-a4e3-46eb-9dc8-c31cf1ec8008",
+        "method": "GET",
+        "path": "/api/portal/record-pages/Account",
+        "routeType": "layout-json",
+        "start": 100781.7476,
+        "status": 200,
+        "totalMs": 1036.64,
+        "counts": {
+          "supabase": 3,
+          "salesforce": 0,
+          "permission": 0,
+          "sharing": 0,
+          "layout": 0,
+          "metadata": 0,
+          "related": 0,
+          "activity": 0,
+          "chatter": 0
+        },
+        "totals": {
+          "node": 1036.64,
+          "supabase": 1034.56,
+          "salesforce": 0,
+          "permission": 0,
+          "sharing": 0,
+          "layout": 0,
+          "metadata": 0,
+          "related": 0,
+          "activity": 0,
+          "chatter": 0
+        },
+        "events": [
+          {
+            "category": "supabase",
+            "label": "from:users.select(id, email, name, role, is_active).eq(id,aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa).eq(is_active,true).single",
+            "ms": 346.82,
+            "at": 347.52
+          },
+          {
+            "category": "supabase",
+            "label": "from:user_profile_assignments.select(profiles(is_system_admin)).eq(user_id,aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa).maybeSingle",
+            "ms": 336.09,
+            "at": 683.75
+          },
+          {
+            "category": "supabase",
+            "label": "from:portal_record_pages.select(layout, regions, updated_at).eq(object_name,Account).maybeSingle",
+            "ms": 351.65,
+            "at": 1035.87
+          }
+        ]
+      },
+      {
+        "id": "ad80b141-00ab-420d-9028-c2bd98f7a140",
+        "method": "GET",
+        "path": "/api/Account/listviews",
+        "routeType": "record",
+        "start": 93635.705,
+        "status": 200,
+        "totalMs": 950.07,
+        "counts": {
+          "supabase": 2,
+          "salesforce": 1,
+          "permission": 0,
+          "sharing": 0,
+          "layout": 0,
+          "metadata": 0,
+          "related": 0,
+          "activity": 0,
+          "chatter": 0
+        },
+        "totals": {
+          "node": 950.07,
+          "supabase": 697.47,
+          "salesforce": 251.18,
+          "permission": 0,
+          "sharing": 0,
+          "layout": 0,
+          "metadata": 0,
+          "related": 0,
+          "activity": 0,
+          "chatter": 0
+        },
+        "events": [
+          {
+            "category": "supabase",
+            "label": "from:users.select(id, email, name, role, is_active).eq(id,aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa).eq(is_active,true).single",
+            "ms": 333.02,
+            "at": 333.45
+          },
+          {
+            "category": "supabase",
+            "label": "from:user_profile_assignments.select(profiles(is_system_admin)).eq(user_id,aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa).maybeSingle",
+            "ms": 364.45,
+            "at": 698.05
+          },
+          {
+            "category": "salesforce",
+            "label": "GET /sobjects/Account/listviews",
+            "ms": 251.18,
+            "at": 949.44,
+            "endpoint": "/sobjects/Account/listviews"
+          }
+        ]
+      },
+      {
+        "id": "5fbd9222-773e-45cb-bf73-b77792d31d2e",
+        "method": "GET",
+        "path": "/api/Contact/listviews",
+        "routeType": "record",
+        "start": 113239.4351,
+        "status": 200,
+        "totalMs": 942.24,
+        "counts": {
+          "supabase": 2,
+          "salesforce": 1,
+          "permission": 0,
+          "sharing": 0,
+          "layout": 0,
+          "metadata": 0,
+          "related": 0,
+          "activity": 0,
+          "chatter": 0
+        },
+        "totals": {
+          "node": 942.24,
+          "supabase": 756.33,
+          "salesforce": 183.34,
+          "permission": 0,
+          "sharing": 0,
+          "layout": 0,
+          "metadata": 0,
+          "related": 0,
+          "activity": 0,
+          "chatter": 0
+        },
+        "events": [
+          {
+            "category": "supabase",
+            "label": "from:users.select(id, email, name, role, is_active).eq(id,aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa).eq(is_active,true).single",
+            "ms": 366.93,
+            "at": 367.7
+          },
+          {
+            "category": "supabase",
+            "label": "from:user_profile_assignments.select(profiles(is_system_admin)).eq(user_id,aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa).maybeSingle",
+            "ms": 389.4,
+            "at": 757.27
+          },
+          {
+            "category": "salesforce",
+            "label": "GET /sobjects/Contact/listviews",
+            "ms": 183.34,
+            "at": 940.7,
+            "endpoint": "/sobjects/Contact/listviews"
+          }
+        ]
+      },
+      {
+        "id": "4c692d8c-e20e-4604-866c-865e22db76f5",
+        "method": "GET",
+        "path": "/api/Account/001C100000R25I7IAJ/chatter",
+        "routeType": "chatter",
+        "start": 106429.1069,
+        "status": 200,
+        "totalMs": 939.59,
+        "counts": {
+          "supabase": 2,
+          "salesforce": 0,
+          "permission": 0,
+          "sharing": 0,
+          "layout": 0,
+          "metadata": 0,
+          "related": 0,
+          "activity": 0,
+          "chatter": 1
+        },
+        "totals": {
+          "node": 939.59,
+          "supabase": 699.14,
+          "salesforce": 0,
+          "permission": 0,
+          "sharing": 0,
+          "layout": 0,
+          "metadata": 0,
+          "related": 0,
+          "activity": 0,
+          "chatter": 237.02
+        },
+        "events": [
+          {
+            "category": "supabase",
+            "label": "from:users.select(id, email, name, role, is_active).eq(id,aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa).eq(is_active,true).single",
+            "ms": 352.43,
+            "at": 353.53
+          },
+          {
+            "category": "supabase",
+            "label": "from:user_profile_assignments.select(profiles(is_system_admin)).eq(user_id,aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa).maybeSingle",
+            "ms": 346.71,
+            "at": 700.53
+          },
+          {
+            "category": "chatter",
+            "label": "GET /chatter/feeds/record/001C100000R25I7IAJ/feed-elements",
+            "ms": 237.02,
+            "at": 938.23,
+            "endpoint": "/chatter/feeds/record/001C100000R25I7IAJ/feed-elements"
+          }
+        ]
+      },
+      {
+        "id": "0138970e-1fe8-402a-addd-092114e8e868",
+        "method": "POST",
+        "path": "/api/debug/performance-audit/reset",
+        "routeType": "other",
+        "start": 85835.5994,
+        "status": 200,
+        "totalMs": 926.09,
+        "counts": {
+          "supabase": 2,
+          "salesforce": 0,
+          "permission": 0,
+          "sharing": 0,
+          "layout": 0,
+          "metadata": 0,
+          "related": 0,
+          "activity": 0,
+          "chatter": 0
+        },
+        "totals": {
+          "node": 926.09,
+          "supabase": 917.3,
+          "salesforce": 0,
+          "permission": 0,
+          "sharing": 0,
+          "layout": 0,
+          "metadata": 0,
+          "related": 0,
+          "activity": 0,
+          "chatter": 0
+        },
+        "events": [
+          {
+            "category": "supabase",
+            "label": "from:users.select(id, email, name, role, is_active).eq(id,aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa).eq(is_active,true).single",
+            "ms": 564.11,
+            "at": 569.05
+          },
+          {
+            "category": "supabase",
+            "label": "from:user_profile_assignments.select(profiles(is_system_admin)).eq(user_id,aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa).maybeSingle",
+            "ms": 353.19,
+            "at": 922.41
+          }
+        ]
+      },
+      {
+        "id": "505eb565-1a4a-4e00-a98b-a26f6964aafd",
+        "method": "GET",
+        "path": "/api/Account/001C100000R25I7IAJ/activity",
+        "routeType": "activity",
+        "start": 105519.3736,
+        "status": 200,
+        "totalMs": 906.78,
+        "counts": {
+          "supabase": 2,
+          "salesforce": 3,
+          "permission": 1,
+          "sharing": 0,
+          "layout": 0,
+          "metadata": 0,
+          "related": 0,
+          "activity": 0,
+          "chatter": 0
+        },
+        "totals": {
+          "node": 906.78,
+          "supabase": 690.38,
+          "salesforce": 576,
+          "permission": 0.01,
+          "sharing": 0,
+          "layout": 0,
+          "metadata": 0,
+          "related": 0,
+          "activity": 0,
+          "chatter": 0
+        },
+        "events": [
+          {
+            "category": "supabase",
+            "label": "from:users.select(id, email, name, role, is_active).eq(id,aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa).eq(is_active,true).single",
+            "ms": 344.38,
+            "at": 344.86
+          },
+          {
+            "category": "supabase",
+            "label": "from:user_profile_assignments.select(profiles(is_system_admin)).eq(user_id,aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa).maybeSingle",
+            "ms": 346,
+            "at": 690.97
+          },
+          {
+            "category": "permission",
+            "label": "Account.can_read.admin-bypass",
+            "ms": 0.01,
+            "at": 691.25
+          },
+          {
+            "category": "salesforce",
+            "label": "GET /query",
+            "ms": 179.41,
+            "at": 871.44,
+            "endpoint": "/query"
+          },
+          {
+            "category": "salesforce",
+            "label": "GET /query",
+            "ms": 186.74,
+            "at": 878.73,
+            "endpoint": "/query"
+          },
+          {
+            "category": "salesforce",
+            "label": "GET /query",
+            "ms": 209.85,
+            "at": 901.87,
+            "endpoint": "/query"
+          }
+        ]
+      }
+    ],
+    "slowestEvents": [
+      {
+        "requestId": "ae0c88f5-adec-4282-88cf-87897b4121b5",
+        "path": "/api/Account/fields",
+        "routeType": "metadata",
+        "category": "metadata",
+        "label": "GET /sobjects/Account/describe",
+        "ms": 1401.68,
+        "at": 2485.57,
+        "endpoint": "/sobjects/Account/describe"
+      },
+      {
+        "requestId": "432fa85a-bada-486e-8efa-9702f7a85995",
+        "path": "/api/portal/me",
+        "routeType": "record",
+        "category": "supabase",
+        "label": "from:user_profile_assignments.select(profiles(id, is_system_admin)).eq(user_id,aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa).maybeSingle",
+        "ms": 1127.36,
+        "at": 3392.53
+      },
+      {
+        "requestId": "c83e063e-4272-4902-b01f-d3f36214dc68",
+        "path": "/api/Account",
+        "routeType": "object-list",
+        "category": "salesforce",
+        "label": "GET /query",
+        "ms": 1097.68,
+        "at": 2164.89,
+        "endpoint": "/query"
+      },
+      {
+        "requestId": "432fa85a-bada-486e-8efa-9702f7a85995",
+        "path": "/api/portal/me",
+        "routeType": "record",
+        "category": "supabase",
+        "label": "from:user_profile_assignments.select(profiles(id, is_system_admin)).eq(user_id,aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa).maybeSingle",
+        "ms": 1017.76,
+        "at": 3282.75
+      },
+      {
+        "requestId": "432fa85a-bada-486e-8efa-9702f7a85995",
+        "path": "/api/portal/me",
+        "routeType": "record",
+        "category": "supabase",
+        "label": "from:user_profile_assignments.select(profiles(id, is_system_admin)).eq(user_id,aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa).maybeSingle",
+        "ms": 1017.66,
+        "at": 3282.79
+      },
+      {
+        "requestId": "432fa85a-bada-486e-8efa-9702f7a85995",
+        "path": "/api/portal/me",
+        "routeType": "record",
+        "category": "supabase",
+        "label": "from:user_profile_assignments.select(profiles(id, is_system_admin)).eq(user_id,aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa).maybeSingle",
+        "ms": 1017.58,
+        "at": 3282.68
+      },
+      {
+        "requestId": "432fa85a-bada-486e-8efa-9702f7a85995",
+        "path": "/api/portal/me",
+        "routeType": "record",
+        "category": "supabase",
+        "label": "from:user_profile_assignments.select(profiles(id, is_system_admin)).eq(user_id,aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa).maybeSingle",
+        "ms": 1012.54,
+        "at": 3277.62
+      },
+      {
+        "requestId": "432fa85a-bada-486e-8efa-9702f7a85995",
+        "path": "/api/portal/me",
+        "routeType": "record",
+        "category": "supabase",
+        "label": "from:user_profile_assignments.select(profiles(id, is_system_admin)).eq(user_id,aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa).maybeSingle",
+        "ms": 1012.12,
+        "at": 3277.24
+      },
+      {
+        "requestId": "432fa85a-bada-486e-8efa-9702f7a85995",
+        "path": "/api/portal/me",
+        "routeType": "record",
+        "category": "supabase",
+        "label": "from:user_profile_assignments.select(profiles(id, is_system_admin)).eq(user_id,aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa).maybeSingle",
+        "ms": 874.74,
+        "at": 3139.69
+      },
+      {
+        "requestId": "7a92564a-591e-43f6-baf3-f1a2ea7b8cd4",
+        "path": "/api/Contact",
+        "routeType": "object-list",
+        "category": "salesforce",
+        "label": "GET /query",
+        "ms": 787.52,
+        "at": 1494.8,
+        "endpoint": "/query"
+      },
+      {
+        "requestId": "432fa85a-bada-486e-8efa-9702f7a85995",
+        "path": "/api/portal/me",
+        "routeType": "record",
+        "category": "supabase",
+        "label": "from:users.select(id, email, name, role, profile_image, is).eq(id,aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa).eq(is_active,true).single",
+        "ms": 779.55,
+        "at": 1520.82
+      },
+      {
+        "requestId": "67b6b632-f229-430d-8e4d-4a0ea801b805",
+        "path": "/api/Account",
+        "routeType": "object-list",
+        "category": "salesforce",
+        "label": "GET /query",
+        "ms": 647.63,
+        "at": 1314.45,
+        "endpoint": "/query"
+      },
+      {
+        "requestId": "f0bac8e4-294e-4676-a16a-c0892b294480",
+        "path": "/api/Contact/fields",
+        "routeType": "metadata",
+        "category": "metadata",
+        "label": "GET /sobjects/Contact/describe",
+        "ms": 631.21,
+        "at": 3204.35,
+        "endpoint": "/sobjects/Contact/describe"
+      },
+      {
+        "requestId": "432fa85a-bada-486e-8efa-9702f7a85995",
+        "path": "/api/portal/me",
+        "routeType": "record",
+        "category": "supabase",
+        "label": "from:users.select(profile_image).eq(id,aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa).single",
+        "ms": 629.59,
+        "at": 4022.29
+      },
+      {
+        "requestId": "7a92564a-591e-43f6-baf3-f1a2ea7b8cd4",
+        "path": "/api/Contact",
+        "routeType": "object-list",
+        "category": "supabase",
+        "label": "from:org_wide_defaults.select(access_level).eq(sf_object,Contact).maybeSingle",
+        "ms": 627.3,
+        "at": 2125
+      },
+      {
+        "requestId": "0138970e-1fe8-402a-addd-092114e8e868",
+        "path": "/api/debug/performance-audit/reset",
+        "routeType": "other",
+        "category": "supabase",
+        "label": "from:users.select(id, email, name, role, is_active).eq(id,aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa).eq(is_active,true).single",
+        "ms": 564.11,
+        "at": 569.05
+      },
+      {
+        "requestId": "f0bac8e4-294e-4676-a16a-c0892b294480",
+        "path": "/api/Contact/fields",
+        "routeType": "metadata",
+        "category": "supabase",
+        "label": "from:user_permission_set_group_assignments.select(group_id).eq(user_id,aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa)",
+        "ms": 546.81,
+        "at": 2572.58
+      },
+      {
+        "requestId": "4086b9d3-28ef-4f7e-b9c6-e248a10b3583",
+        "path": "/api/portal/layouts/Account",
+        "routeType": "layout-json",
+        "category": "supabase",
+        "label": "from:portal_custom_layouts.select(layout_data).eq(user_id,aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa).eq(object_name,Account).maybeSingle",
+        "ms": 541.14,
+        "at": 1237.97
+      },
+      {
+        "requestId": "f0bac8e4-294e-4676-a16a-c0892b294480",
+        "path": "/api/Contact/fields",
+        "routeType": "metadata",
+        "category": "supabase",
+        "label": "from:sensitive_fields.select(field_name).eq(sf_object,Contact)",
+        "ms": 536.59,
+        "at": 1239.92
+      },
+      {
+        "requestId": "2b79f16b-4650-4fc3-b995-ad46b0f76ed3",
+        "path": "/api/Contact/003C100000OD3m2IAD/related",
+        "routeType": "related-list",
+        "category": "supabase",
+        "label": "from:user_profile_assignments.select(profiles(is_system_admin)).eq(user_id,aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa).maybeSingle",
+        "ms": 442.68,
+        "at": 793.96
+      },
+      {
+        "requestId": "72c0a83f-4c34-4845-9874-bf55c447c439",
+        "path": "/api/Account/001C100000R25I7IAJ/related",
+        "routeType": "related-list",
+        "category": "metadata",
+        "label": "GET /sobjects/Contact/describe",
+        "ms": 435.37,
+        "at": 1720.3,
+        "endpoint": "/sobjects/Contact/describe"
+      },
+      {
+        "requestId": "f0bac8e4-294e-4676-a16a-c0892b294480",
+        "path": "/api/Contact/fields",
+        "routeType": "metadata",
+        "category": "supabase",
+        "label": "from:field_permissions.select(field_name, can_view, can_edit).eq(profile_id,82ca56e5-4084-4cdc-a1d4-dabb922f40dc).eq(sf_object,Contact)",
+        "ms": 409.66,
+        "at": 2024.66
+      },
+      {
+        "requestId": "b66ec23c-de84-4a62-a70e-50a7978f2b2d",
+        "path": "/api/Contact/003C100000OD3m2IAD",
+        "routeType": "record",
+        "category": "supabase",
+        "label": "from:users.select(id, email, name, role, is_active).eq(id,aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa).eq(is_active,true).single",
+        "ms": 408.32,
+        "at": 408.96
+      },
+      {
+        "requestId": "72c0a83f-4c34-4845-9874-bf55c447c439",
+        "path": "/api/Account/001C100000R25I7IAJ/related",
+        "routeType": "related-list",
+        "category": "supabase",
+        "label": "from:user_profile_assignments.select(profiles(is_system_admin)).eq(user_id,aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa).maybeSingle",
+        "ms": 405.07,
+        "at": 766.3
+      },
+      {
+        "requestId": "432fa85a-bada-486e-8efa-9702f7a85995",
+        "path": "/api/portal/me",
+        "routeType": "record",
+        "category": "supabase",
+        "label": "from:users.select(id, email, name, role, is_active).eq(id,aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa).eq(is_active,true).single",
+        "ms": 398.39,
+        "at": 399.3
+      },
+      {
+        "requestId": "7f22c0fb-57dd-4b27-ac54-32cf24eb7319",
+        "path": "/api/Account/001C100000R25NDIAZ",
+        "routeType": "record",
+        "category": "supabase",
+        "label": "from:users.select(id, email, name, role, is_active).eq(id,aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa).eq(is_active,true).single",
+        "ms": 392.97,
+        "at": 393.71
+      },
+      {
+        "requestId": "8e4e886b-063b-4e3e-b3f2-1e9137e43e22",
+        "path": "/api/Account/001C100000R25I7IAJ",
+        "routeType": "record",
+        "category": "supabase",
+        "label": "from:users.select(id, email, name, role, is_active).eq(id,aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa).eq(is_active,true).single",
+        "ms": 389.57,
+        "at": 390.64
+      },
+      {
+        "requestId": "5fbd9222-773e-45cb-bf73-b77792d31d2e",
+        "path": "/api/Contact/listviews",
+        "routeType": "record",
+        "category": "supabase",
+        "label": "from:user_profile_assignments.select(profiles(is_system_admin)).eq(user_id,aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa).maybeSingle",
+        "ms": 389.4,
+        "at": 757.27
+      },
+      {
+        "requestId": "8e4e886b-063b-4e3e-b3f2-1e9137e43e22",
+        "path": "/api/Account/001C100000R25I7IAJ",
+        "routeType": "record",
+        "category": "metadata",
+        "label": "GET /sobjects/Account/describe",
+        "ms": 383.35,
+        "at": 1464.25,
+        "endpoint": "/sobjects/Account/describe"
+      },
+      {
+        "requestId": "2a86605a-d698-4a6f-bd7b-92cb89b5478e",
+        "path": "/api/portal/compact-layouts/Account",
+        "routeType": "layout-json",
+        "category": "supabase",
+        "label": "from:user_profile_assignments.select(profiles(is_system_admin)).eq(user_id,aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa).maybeSingle",
+        "ms": 381.86,
+        "at": 743.96
+      },
+      {
+        "requestId": "ae0c88f5-adec-4282-88cf-87897b4121b5",
+        "path": "/api/Account/fields",
+        "routeType": "metadata",
+        "category": "supabase",
+        "label": "from:sensitive_fields.select(field_name).eq(sf_object,Account)",
+        "ms": 379.67,
+        "at": 1083.36
+      },
+      {
+        "requestId": "432fa85a-bada-486e-8efa-9702f7a85995",
+        "path": "/api/portal/me",
+        "routeType": "record",
+        "category": "supabase",
+        "label": "from:user_profile_assignments.select(profile_id, profiles(id, name, descripti).eq(user_id,aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa).single",
+        "ms": 376.34,
+        "at": 1897.3
+      },
+      {
+        "requestId": "f0bac8e4-294e-4676-a16a-c0892b294480",
+        "path": "/api/Contact/fields",
+        "routeType": "metadata",
+        "category": "supabase",
+        "label": "from:user_profile_assignments.select(profile_id).eq(user_id,aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa).maybeSingle",
+        "ms": 374.67,
+        "at": 1614.76
+      },
+      {
+        "requestId": "7a92564a-591e-43f6-baf3-f1a2ea7b8cd4",
+        "path": "/api/Contact",
+        "routeType": "object-list",
+        "category": "supabase",
+        "label": "from:users.select(id, email, name, role, is_active).eq(id,aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa).eq(is_active,true).single",
+        "ms": 374.07,
+        "at": 374.88
+      },
+      {
+        "requestId": "c83e063e-4272-4902-b01f-d3f36214dc68",
+        "path": "/api/Account",
+        "routeType": "object-list",
+        "category": "metadata",
+        "label": "GET /sobjects/Account/describe",
+        "ms": 371.73,
+        "at": 1066.7,
+        "endpoint": "/sobjects/Account/describe"
+      },
+      {
+        "requestId": "b66ec23c-de84-4a62-a70e-50a7978f2b2d",
+        "path": "/api/Contact/003C100000OD3m2IAD",
+        "routeType": "record",
+        "category": "supabase",
+        "label": "from:user_profile_assignments.select(profiles(is_system_admin)).eq(user_id,aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa).maybeSingle",
+        "ms": 370.92,
+        "at": 780.04
+      },
+      {
+        "requestId": "00458ccd-7a4c-4767-a801-c4d9fe40ac2b",
+        "path": "/api/Account/001C100000R25I7IAJ",
+        "routeType": "record",
+        "category": "supabase",
+        "label": "from:user_profile_assignments.select(profiles(is_system_admin)).eq(user_id,aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa).maybeSingle",
+        "ms": 367.7,
+        "at": 702.14
+      },
+      {
+        "requestId": "5fbd9222-773e-45cb-bf73-b77792d31d2e",
+        "path": "/api/Contact/listviews",
+        "routeType": "record",
+        "category": "supabase",
+        "label": "from:users.select(id, email, name, role, is_active).eq(id,aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa).eq(is_active,true).single",
+        "ms": 366.93,
+        "at": 367.7
+      },
+      {
+        "requestId": "432fa85a-bada-486e-8efa-9702f7a85995",
+        "path": "/api/portal/me",
+        "routeType": "record",
+        "category": "supabase",
+        "label": "from:sf_objects.select(api_name, label).eq(is_active,true).order(sort_order)",
+        "ms": 366.39,
+        "at": 2263.97
+      },
+      {
+        "requestId": "8e4e886b-063b-4e3e-b3f2-1e9137e43e22",
+        "path": "/api/Account/001C100000R25I7IAJ",
+        "routeType": "record",
+        "category": "salesforce",
+        "label": "GET /query",
+        "ms": 365.96,
+        "at": 1830.69,
+        "endpoint": "/query"
+      }
+    ],
+    "requests": [
+      {
+        "id": "0138970e-1fe8-402a-addd-092114e8e868",
+        "method": "POST",
+        "path": "/api/debug/performance-audit/reset",
+        "routeType": "other",
+        "start": 85835.5994,
+        "status": 200,
+        "totalMs": 926.09,
+        "counts": {
+          "supabase": 2,
+          "salesforce": 0,
+          "permission": 0,
+          "sharing": 0,
+          "layout": 0,
+          "metadata": 0,
+          "related": 0,
+          "activity": 0,
+          "chatter": 0
+        },
+        "totals": {
+          "node": 926.09,
+          "supabase": 917.3,
+          "salesforce": 0,
+          "permission": 0,
+          "sharing": 0,
+          "layout": 0,
+          "metadata": 0,
+          "related": 0,
+          "activity": 0,
+          "chatter": 0
+        },
+        "events": [
+          {
+            "category": "supabase",
+            "label": "from:users.select(id, email, name, role, is_active).eq(id,aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa).eq(is_active,true).single",
+            "ms": 564.11,
+            "at": 569.05
+          },
+          {
+            "category": "supabase",
+            "label": "from:user_profile_assignments.select(profiles(is_system_admin)).eq(user_id,aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa).maybeSingle",
+            "ms": 353.19,
+            "at": 922.41
+          }
+        ]
+      },
+      {
+        "id": "432fa85a-bada-486e-8efa-9702f7a85995",
+        "method": "GET",
+        "path": "/api/portal/me",
+        "routeType": "record",
+        "start": 86766.6709,
+        "status": 200,
+        "totalMs": 4371.86,
+        "counts": {
+          "supabase": 15,
+          "salesforce": 0,
+          "permission": 0,
+          "sharing": 0,
+          "layout": 0,
+          "metadata": 0,
+          "related": 0,
+          "activity": 0,
+          "chatter": 0
+        },
+        "totals": {
+          "node": 4371.86,
+          "supabase": 10660.23,
+          "salesforce": 0,
+          "permission": 0,
+          "sharing": 0,
+          "layout": 0,
+          "metadata": 0,
+          "related": 0,
+          "activity": 0,
+          "chatter": 0
+        },
+        "events": [
+          {
+            "category": "supabase",
+            "label": "from:users.select(id, email, name, role, is_active).eq(id,aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa).eq(is_active,true).single",
+            "ms": 398.39,
+            "at": 399.3
+          },
+          {
+            "category": "supabase",
+            "label": "from:user_profile_assignments.select(profiles(is_system_admin)).eq(user_id,aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa).maybeSingle",
+            "ms": 341.37,
+            "at": 740.79
+          },
+          {
+            "category": "supabase",
+            "label": "from:users.select(id, email, name, role, profile_image, is).eq(id,aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa).eq(is_active,true).single",
+            "ms": 779.55,
+            "at": 1520.82
+          },
+          {
+            "category": "supabase",
+            "label": "from:user_profile_assignments.select(profile_id, profiles(id, name, descripti).eq(user_id,aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa).single",
+            "ms": 376.34,
+            "at": 1897.3
+          },
+          {
+            "category": "supabase",
+            "label": "from:sf_objects.select(api_name, label).eq(is_active,true).order(sort_order)",
+            "ms": 366.39,
+            "at": 2263.97
+          },
+          {
+            "category": "supabase",
+            "label": "from:user_profile_assignments.select(profiles(id, is_system_admin)).eq(user_id,aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa).maybeSingle",
+            "ms": 341,
+            "at": 2605.9
+          },
+          {
+            "category": "supabase",
+            "label": "from:user_profile_assignments.select(profiles(id, is_system_admin)).eq(user_id,aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa).maybeSingle",
+            "ms": 874.74,
+            "at": 3139.69
+          },
+          {
+            "category": "supabase",
+            "label": "from:user_profile_assignments.select(profiles(id, is_system_admin)).eq(user_id,aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa).maybeSingle",
+            "ms": 1012.12,
+            "at": 3277.24
+          },
+          {
+            "category": "supabase",
+            "label": "from:user_profile_assignments.select(profiles(id, is_system_admin)).eq(user_id,aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa).maybeSingle",
+            "ms": 1012.54,
+            "at": 3277.62
+          },
+          {
+            "category": "supabase",
+            "label": "from:user_profile_assignments.select(profiles(id, is_system_admin)).eq(user_id,aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa).maybeSingle",
+            "ms": 1017.58,
+            "at": 3282.68
+          },
+          {
+            "category": "supabase",
+            "label": "from:user_profile_assignments.select(profiles(id, is_system_admin)).eq(user_id,aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa).maybeSingle",
+            "ms": 1017.76,
+            "at": 3282.75
+          },
+          {
+            "category": "supabase",
+            "label": "from:user_profile_assignments.select(profiles(id, is_system_admin)).eq(user_id,aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa).maybeSingle",
+            "ms": 1017.66,
+            "at": 3282.79
+          },
+          {
+            "category": "supabase",
+            "label": "from:user_profile_assignments.select(profiles(id, is_system_admin)).eq(user_id,aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa).maybeSingle",
+            "ms": 1127.36,
+            "at": 3392.53
+          },
+          {
+            "category": "supabase",
+            "label": "from:users.select(profile_image).eq(id,aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa).single",
+            "ms": 629.59,
+            "at": 4022.29
+          },
+          {
+            "category": "supabase",
+            "label": "from:user_profile_assignments.select(profiles(id, name, is_system_admin)).eq(user_id,aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa).single",
+            "ms": 347.84,
+            "at": 4370.33
+          }
+        ]
+      },
+      {
+        "id": "ae0c88f5-adec-4282-88cf-87897b4121b5",
+        "method": "GET",
+        "path": "/api/Account/fields",
+        "routeType": "metadata",
+        "start": 91145.4149,
+        "status": 200,
+        "totalMs": 2488.26,
+        "counts": {
+          "supabase": 3,
+          "salesforce": 0,
+          "permission": 0,
+          "sharing": 0,
+          "layout": 0,
+          "metadata": 1,
+          "related": 0,
+          "activity": 0,
+          "chatter": 0
+        },
+        "totals": {
+          "node": 2488.26,
+          "supabase": 1080.65,
+          "salesforce": 0,
+          "permission": 0,
+          "sharing": 0,
+          "layout": 0,
+          "metadata": 1401.68,
+          "related": 0,
+          "activity": 0,
+          "chatter": 0
+        },
+        "events": [
+          {
+            "category": "supabase",
+            "label": "from:users.select(id, email, name, role, is_active).eq(id,aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa).eq(is_active,true).single",
+            "ms": 354.11,
+            "at": 355.91
+          },
+          {
+            "category": "supabase",
+            "label": "from:user_profile_assignments.select(profiles(is_system_admin)).eq(user_id,aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa).maybeSingle",
+            "ms": 346.87,
+            "at": 702.91
+          },
+          {
+            "category": "supabase",
+            "label": "from:sensitive_fields.select(field_name).eq(sf_object,Account)",
+            "ms": 379.67,
+            "at": 1083.36
+          },
+          {
+            "category": "metadata",
+            "label": "GET /sobjects/Account/describe",
+            "ms": 1401.68,
+            "at": 2485.57,
+            "endpoint": "/sobjects/Account/describe"
+          }
+        ]
+      },
+      {
+        "id": "ad80b141-00ab-420d-9028-c2bd98f7a140",
+        "method": "GET",
+        "path": "/api/Account/listviews",
+        "routeType": "record",
+        "start": 93635.705,
+        "status": 200,
+        "totalMs": 950.07,
+        "counts": {
+          "supabase": 2,
+          "salesforce": 1,
+          "permission": 0,
+          "sharing": 0,
+          "layout": 0,
+          "metadata": 0,
+          "related": 0,
+          "activity": 0,
+          "chatter": 0
+        },
+        "totals": {
+          "node": 950.07,
+          "supabase": 697.47,
+          "salesforce": 251.18,
+          "permission": 0,
+          "sharing": 0,
+          "layout": 0,
+          "metadata": 0,
+          "related": 0,
+          "activity": 0,
+          "chatter": 0
+        },
+        "events": [
+          {
+            "category": "supabase",
+            "label": "from:users.select(id, email, name, role, is_active).eq(id,aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa).eq(is_active,true).single",
+            "ms": 333.02,
+            "at": 333.45
+          },
+          {
+            "category": "supabase",
+            "label": "from:user_profile_assignments.select(profiles(is_system_admin)).eq(user_id,aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa).maybeSingle",
+            "ms": 364.45,
+            "at": 698.05
+          },
+          {
+            "category": "salesforce",
+            "label": "GET /sobjects/Account/listviews",
+            "ms": 251.18,
+            "at": 949.44,
+            "endpoint": "/sobjects/Account/listviews"
+          }
+        ]
+      },
+      {
+        "id": "c83e063e-4272-4902-b01f-d3f36214dc68",
+        "method": "GET",
+        "path": "/api/Account",
+        "routeType": "object-list",
+        "start": 94589.1554,
+        "status": 200,
+        "totalMs": 2523.89,
+        "counts": {
+          "supabase": 3,
+          "salesforce": 1,
+          "permission": 1,
+          "sharing": 2,
+          "layout": 0,
+          "metadata": 1,
+          "related": 0,
+          "activity": 0,
+          "chatter": 0
+        },
+        "totals": {
+          "node": 2523.89,
+          "supabase": 1041.32,
+          "salesforce": 1097.68,
+          "permission": 0.03,
+          "sharing": 0,
+          "layout": 0,
+          "metadata": 371.73,
+          "related": 0,
+          "activity": 0,
+          "chatter": 0
+        },
+        "events": [
+          {
+            "category": "supabase",
+            "label": "from:users.select(id, email, name, role, is_active).eq(id,aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa).eq(is_active,true).single",
+            "ms": 357.6,
+            "at": 358.98
+          },
+          {
+            "category": "supabase",
+            "label": "from:user_profile_assignments.select(profiles(is_system_admin)).eq(user_id,aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa).maybeSingle",
+            "ms": 334.41,
+            "at": 693.51
+          },
+          {
+            "category": "permission",
+            "label": "Account.can_read.admin-bypass",
+            "ms": 0.03,
+            "at": 694.13
+          },
+          {
+            "category": "sharing",
+            "label": "Account.scopeFilter.admin",
+            "ms": 0,
+            "at": 694.74
+          },
+          {
+            "category": "metadata",
+            "label": "GET /sobjects/Account/describe",
+            "ms": 371.73,
+            "at": 1066.7,
+            "endpoint": "/sobjects/Account/describe"
+          },
+          {
+            "category": "salesforce",
+            "label": "GET /query",
+            "ms": 1097.68,
+            "at": 2164.89,
+            "endpoint": "/query"
+          },
+          {
+            "category": "sharing",
+            "label": "Account.applyRecordVisibility.admin",
+            "ms": 0,
+            "at": 2165.65
+          },
+          {
+            "category": "supabase",
+            "label": "from:org_wide_defaults.select(access_level).eq(sf_object,Account).maybeSingle",
+            "ms": 349.31,
+            "at": 2515.51
+          }
+        ]
+      },
+      {
+        "id": "67b6b632-f229-430d-8e4d-4a0ea801b805",
+        "method": "GET",
+        "path": "/api/Account",
+        "routeType": "object-list",
+        "start": 97124.0593,
+        "status": 200,
+        "totalMs": 1318.45,
+        "counts": {
+          "supabase": 2,
+          "salesforce": 1,
+          "permission": 1,
+          "sharing": 2,
+          "layout": 0,
+          "metadata": 0,
+          "related": 0,
+          "activity": 0,
+          "chatter": 0
+        },
+        "totals": {
+          "node": 1318.45,
+          "supabase": 665.35,
+          "salesforce": 647.63,
+          "permission": 0,
+          "sharing": 0,
+          "layout": 0,
+          "metadata": 0,
+          "related": 0,
+          "activity": 0,
+          "chatter": 0
+        },
+        "events": [
+          {
+            "category": "supabase",
+            "label": "from:users.select(id, email, name, role, is_active).eq(id,aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa).eq(is_active,true).single",
+            "ms": 333.7,
+            "at": 334.74
+          },
+          {
+            "category": "supabase",
+            "label": "from:user_profile_assignments.select(profiles(is_system_admin)).eq(user_id,aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa).maybeSingle",
+            "ms": 331.65,
+            "at": 666.53
+          },
+          {
+            "category": "permission",
+            "label": "Account.can_read.admin-bypass",
+            "ms": 0,
+            "at": 666.57
+          },
+          {
+            "category": "sharing",
+            "label": "Account.scopeFilter.admin",
+            "ms": 0,
+            "at": 666.6
+          },
+          {
+            "category": "salesforce",
+            "label": "GET /query",
+            "ms": 647.63,
+            "at": 1314.45,
+            "endpoint": "/query"
+          },
+          {
+            "category": "sharing",
+            "label": "Account.applyRecordVisibility.admin",
+            "ms": 0,
+            "at": 1314.58
+          }
+        ]
+      },
+      {
+        "id": "4086b9d3-28ef-4f7e-b9c6-e248a10b3583",
+        "method": "GET",
+        "path": "/api/portal/layouts/Account",
+        "routeType": "layout-json",
+        "start": 98451.1027,
+        "status": 200,
+        "totalMs": 1238.61,
+        "counts": {
+          "supabase": 3,
+          "salesforce": 0,
+          "permission": 0,
+          "sharing": 0,
+          "layout": 0,
+          "metadata": 0,
+          "related": 0,
+          "activity": 0,
+          "chatter": 0
+        },
+        "totals": {
+          "node": 1238.61,
+          "supabase": 1237.09,
+          "salesforce": 0,
+          "permission": 0,
+          "sharing": 0,
+          "layout": 0,
+          "metadata": 0,
+          "related": 0,
+          "activity": 0,
+          "chatter": 0
+        },
+        "events": [
+          {
+            "category": "supabase",
+            "label": "from:users.select(id, email, name, role, is_active).eq(id,aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa).eq(is_active,true).single",
+            "ms": 352.9,
+            "at": 353.36
+          },
+          {
+            "category": "supabase",
+            "label": "from:user_profile_assignments.select(profiles(is_system_admin)).eq(user_id,aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa).maybeSingle",
+            "ms": 343.05,
+            "at": 696.53
+          },
+          {
+            "category": "supabase",
+            "label": "from:portal_custom_layouts.select(layout_data).eq(user_id,aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa).eq(object_name,Account).maybeSingle",
+            "ms": 541.14,
+            "at": 1237.97
+          }
+        ]
+      },
+      {
+        "id": "2a86605a-d698-4a6f-bd7b-92cb89b5478e",
+        "method": "GET",
+        "path": "/api/portal/compact-layouts/Account",
+        "routeType": "layout-json",
+        "start": 99693.6645,
+        "status": 200,
+        "totalMs": 1085.26,
+        "counts": {
+          "supabase": 3,
+          "salesforce": 0,
+          "permission": 0,
+          "sharing": 0,
+          "layout": 0,
+          "metadata": 0,
+          "related": 0,
+          "activity": 0,
+          "chatter": 0
+        },
+        "totals": {
+          "node": 1085.26,
+          "supabase": 1082.81,
+          "salesforce": 0,
+          "permission": 0,
+          "sharing": 0,
+          "layout": 0,
+          "metadata": 0,
+          "related": 0,
+          "activity": 0,
+          "chatter": 0
+        },
+        "events": [
+          {
+            "category": "supabase",
+            "label": "from:users.select(id, email, name, role, is_active).eq(id,aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa).eq(is_active,true).single",
+            "ms": 360.61,
+            "at": 361.82
+          },
+          {
+            "category": "supabase",
+            "label": "from:user_profile_assignments.select(profiles(is_system_admin)).eq(user_id,aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa).maybeSingle",
+            "ms": 381.86,
+            "at": 743.96
+          },
+          {
+            "category": "supabase",
+            "label": "from:portal_compact_layouts.select(fields).eq(user_id,aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa).eq(object_name,Account).maybeSingle",
+            "ms": 340.34,
+            "at": 1084.59
+          }
+        ]
+      },
+      {
+        "id": "df558829-a4e3-46eb-9dc8-c31cf1ec8008",
+        "method": "GET",
+        "path": "/api/portal/record-pages/Account",
+        "routeType": "layout-json",
+        "start": 100781.7476,
+        "status": 200,
+        "totalMs": 1036.64,
+        "counts": {
+          "supabase": 3,
+          "salesforce": 0,
+          "permission": 0,
+          "sharing": 0,
+          "layout": 0,
+          "metadata": 0,
+          "related": 0,
+          "activity": 0,
+          "chatter": 0
+        },
+        "totals": {
+          "node": 1036.64,
+          "supabase": 1034.56,
+          "salesforce": 0,
+          "permission": 0,
+          "sharing": 0,
+          "layout": 0,
+          "metadata": 0,
+          "related": 0,
+          "activity": 0,
+          "chatter": 0
+        },
+        "events": [
+          {
+            "category": "supabase",
+            "label": "from:users.select(id, email, name, role, is_active).eq(id,aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa).eq(is_active,true).single",
+            "ms": 346.82,
+            "at": 347.52
+          },
+          {
+            "category": "supabase",
+            "label": "from:user_profile_assignments.select(profiles(is_system_admin)).eq(user_id,aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa).maybeSingle",
+            "ms": 336.09,
+            "at": 683.75
+          },
+          {
+            "category": "supabase",
+            "label": "from:portal_record_pages.select(layout, regions, updated_at).eq(object_name,Account).maybeSingle",
+            "ms": 351.65,
+            "at": 1035.87
+          }
+        ]
+      },
+      {
+        "id": "8e4e886b-063b-4e3e-b3f2-1e9137e43e22",
+        "method": "GET",
+        "path": "/api/Account/001C100000R25I7IAJ",
+        "routeType": "record",
+        "start": 101821.6618,
+        "status": 200,
+        "totalMs": 1831.3,
+        "counts": {
+          "supabase": 2,
+          "salesforce": 4,
+          "permission": 1,
+          "sharing": 0,
+          "layout": 0,
+          "metadata": 1,
+          "related": 0,
+          "activity": 0,
+          "chatter": 0
+        },
+        "totals": {
+          "node": 1831.3,
+          "supabase": 749.55,
+          "salesforce": 1289,
+          "permission": 0.01,
+          "sharing": 0,
+          "layout": 0,
+          "metadata": 383.35,
+          "related": 0,
+          "activity": 0,
+          "chatter": 0
+        },
+        "events": [
+          {
+            "category": "supabase",
+            "label": "from:users.select(id, email, name, role, is_active).eq(id,aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa).eq(is_active,true).single",
+            "ms": 389.57,
+            "at": 390.64
+          },
+          {
+            "category": "supabase",
+            "label": "from:user_profile_assignments.select(profiles(is_system_admin)).eq(user_id,aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa).maybeSingle",
+            "ms": 359.98,
+            "at": 750.79
+          },
+          {
+            "category": "permission",
+            "label": "Account.can_read.admin-bypass",
+            "ms": 0.01,
+            "at": 751
+          },
+          {
+            "category": "salesforce",
+            "label": "GET /sobjects/Account/001C100000R25I7IAJ",
+            "ms": 329.51,
+            "at": 1080.88,
+            "endpoint": "/sobjects/Account/001C100000R25I7IAJ"
+          },
+          {
+            "category": "metadata",
+            "label": "GET /sobjects/Account/describe",
+            "ms": 383.35,
+            "at": 1464.25,
+            "endpoint": "/sobjects/Account/describe"
+          },
+          {
+            "category": "salesforce",
+            "label": "GET /query",
+            "ms": 242.47,
+            "at": 1707.19,
+            "endpoint": "/query"
+          },
+          {
+            "category": "salesforce",
+            "label": "GET /query",
+            "ms": 351.06,
+            "at": 1815.78,
+            "endpoint": "/query"
+          },
+          {
+            "category": "salesforce",
+            "label": "GET /query",
+            "ms": 365.96,
+            "at": 1830.69,
+            "endpoint": "/query"
+          }
+        ]
+      },
+      {
+        "id": "72c0a83f-4c34-4845-9874-bf55c447c439",
+        "method": "GET",
+        "path": "/api/Account/001C100000R25I7IAJ/related",
+        "routeType": "related-list",
+        "start": 103654.5219,
+        "status": 200,
+        "totalMs": 1863.57,
+        "counts": {
+          "supabase": 3,
+          "salesforce": 5,
+          "permission": 1,
+          "sharing": 0,
+          "layout": 0,
+          "metadata": 4,
+          "related": 0,
+          "activity": 0,
+          "chatter": 0
+        },
+        "totals": {
+          "node": 1863.57,
+          "supabase": 1103.75,
+          "salesforce": 881.16,
+          "permission": 0.01,
+          "sharing": 0,
+          "layout": 0,
+          "metadata": 1225.31,
+          "related": 0,
+          "activity": 0,
+          "chatter": 0
+        },
+        "events": [
+          {
+            "category": "supabase",
+            "label": "from:users.select(id, email, name, role, is_active).eq(id,aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa).eq(is_active,true).single",
+            "ms": 360.38,
+            "at": 360.98
+          },
+          {
+            "category": "supabase",
+            "label": "from:user_profile_assignments.select(profiles(is_system_admin)).eq(user_id,aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa).maybeSingle",
+            "ms": 405.07,
+            "at": 766.3
+          },
+          {
+            "category": "permission",
+            "label": "Account.can_read.admin-bypass",
+            "ms": 0.01,
+            "at": 766.53
+          },
+          {
+            "category": "salesforce",
+            "label": "GET /sobjects/Account/001C100000R25I7IAJ?fields=Portal_Owner__c",
+            "ms": 178.24,
+            "at": 945.47,
+            "endpoint": "/sobjects/Account/001C100000R25I7IAJ?fields=Portal_Owner__c"
+          },
+          {
+            "category": "supabase",
+            "label": "from:portal_record_pages.select(regions).eq(object_name,Account).maybeSingle",
+            "ms": 338.3,
+            "at": 1284.1
+          },
+          {
+            "category": "metadata",
+            "label": "GET /sobjects/Case/describe",
+            "ms": 236.66,
+            "at": 1521.53,
+            "endpoint": "/sobjects/Case/describe"
+          },
+          {
+            "category": "metadata",
+            "label": "GET /sobjects/Opportunity/describe",
+            "ms": 264.99,
+            "at": 1549.9,
+            "endpoint": "/sobjects/Opportunity/describe"
+          },
+          {
+            "category": "metadata",
+            "label": "GET /sobjects/Contact/describe",
+            "ms": 288.29,
+            "at": 1573.19,
+            "endpoint": "/sobjects/Contact/describe"
+          },
+          {
+            "category": "salesforce",
+            "label": "GET /query",
+            "ms": 154.67,
+            "at": 1676.37,
+            "endpoint": "/query"
+          },
+          {
+            "category": "salesforce",
+            "label": "GET /query",
+            "ms": 135.88,
+            "at": 1685.89,
+            "endpoint": "/query"
+          },
+          {
+            "category": "metadata",
+            "label": "GET /sobjects/Contact/describe",
+            "ms": 435.37,
+            "at": 1720.3,
+            "endpoint": "/sobjects/Contact/describe"
+          },
+          {
+            "category": "salesforce",
+            "label": "GET /query",
+            "ms": 269.93,
+            "at": 1843.27,
+            "endpoint": "/query"
+          },
+          {
+            "category": "salesforce",
+            "label": "GET /query",
+            "ms": 142.44,
+            "at": 1862.83,
+            "endpoint": "/query"
+          }
+        ]
+      },
+      {
+        "id": "505eb565-1a4a-4e00-a98b-a26f6964aafd",
+        "method": "GET",
+        "path": "/api/Account/001C100000R25I7IAJ/activity",
+        "routeType": "activity",
+        "start": 105519.3736,
+        "status": 200,
+        "totalMs": 906.78,
+        "counts": {
+          "supabase": 2,
+          "salesforce": 3,
+          "permission": 1,
+          "sharing": 0,
+          "layout": 0,
+          "metadata": 0,
+          "related": 0,
+          "activity": 0,
+          "chatter": 0
+        },
+        "totals": {
+          "node": 906.78,
+          "supabase": 690.38,
+          "salesforce": 576,
+          "permission": 0.01,
+          "sharing": 0,
+          "layout": 0,
+          "metadata": 0,
+          "related": 0,
+          "activity": 0,
+          "chatter": 0
+        },
+        "events": [
+          {
+            "category": "supabase",
+            "label": "from:users.select(id, email, name, role, is_active).eq(id,aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa).eq(is_active,true).single",
+            "ms": 344.38,
+            "at": 344.86
+          },
+          {
+            "category": "supabase",
+            "label": "from:user_profile_assignments.select(profiles(is_system_admin)).eq(user_id,aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa).maybeSingle",
+            "ms": 346,
+            "at": 690.97
+          },
+          {
+            "category": "permission",
+            "label": "Account.can_read.admin-bypass",
+            "ms": 0.01,
+            "at": 691.25
+          },
+          {
+            "category": "salesforce",
+            "label": "GET /query",
+            "ms": 179.41,
+            "at": 871.44,
+            "endpoint": "/query"
+          },
+          {
+            "category": "salesforce",
+            "label": "GET /query",
+            "ms": 186.74,
+            "at": 878.73,
+            "endpoint": "/query"
+          },
+          {
+            "category": "salesforce",
+            "label": "GET /query",
+            "ms": 209.85,
+            "at": 901.87,
+            "endpoint": "/query"
+          }
+        ]
+      },
+      {
+        "id": "4c692d8c-e20e-4604-866c-865e22db76f5",
+        "method": "GET",
+        "path": "/api/Account/001C100000R25I7IAJ/chatter",
+        "routeType": "chatter",
+        "start": 106429.1069,
+        "status": 200,
+        "totalMs": 939.59,
+        "counts": {
+          "supabase": 2,
+          "salesforce": 0,
+          "permission": 0,
+          "sharing": 0,
+          "layout": 0,
+          "metadata": 0,
+          "related": 0,
+          "activity": 0,
+          "chatter": 1
+        },
+        "totals": {
+          "node": 939.59,
+          "supabase": 699.14,
+          "salesforce": 0,
+          "permission": 0,
+          "sharing": 0,
+          "layout": 0,
+          "metadata": 0,
+          "related": 0,
+          "activity": 0,
+          "chatter": 237.02
+        },
+        "events": [
+          {
+            "category": "supabase",
+            "label": "from:users.select(id, email, name, role, is_active).eq(id,aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa).eq(is_active,true).single",
+            "ms": 352.43,
+            "at": 353.53
+          },
+          {
+            "category": "supabase",
+            "label": "from:user_profile_assignments.select(profiles(is_system_admin)).eq(user_id,aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa).maybeSingle",
+            "ms": 346.71,
+            "at": 700.53
+          },
+          {
+            "category": "chatter",
+            "label": "GET /chatter/feeds/record/001C100000R25I7IAJ/feed-elements",
+            "ms": 237.02,
+            "at": 938.23,
+            "endpoint": "/chatter/feeds/record/001C100000R25I7IAJ/feed-elements"
+          }
+        ]
+      },
+      {
+        "id": "7f22c0fb-57dd-4b27-ac54-32cf24eb7319",
+        "method": "GET",
+        "path": "/api/Account/001C100000R25NDIAZ",
+        "routeType": "record",
+        "start": 107371.227,
+        "status": 200,
+        "totalMs": 1339.34,
+        "counts": {
+          "supabase": 2,
+          "salesforce": 4,
+          "permission": 1,
+          "sharing": 0,
+          "layout": 0,
+          "metadata": 1,
+          "related": 0,
+          "activity": 0,
+          "chatter": 0
+        },
+        "totals": {
+          "node": 1339.34,
+          "supabase": 725.31,
+          "salesforce": 740.54,
+          "permission": 0.01,
+          "sharing": 0,
+          "layout": 0,
+          "metadata": 232.12,
+          "related": 0,
+          "activity": 0,
+          "chatter": 0
+        },
+        "events": [
+          {
+            "category": "supabase",
+            "label": "from:users.select(id, email, name, role, is_active).eq(id,aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa).eq(is_active,true).single",
+            "ms": 392.97,
+            "at": 393.71
+          },
+          {
+            "category": "supabase",
+            "label": "from:user_profile_assignments.select(profiles(is_system_admin)).eq(user_id,aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa).maybeSingle",
+            "ms": 332.34,
+            "at": 726.33
+          },
+          {
+            "category": "permission",
+            "label": "Account.can_read.admin-bypass",
+            "ms": 0.01,
+            "at": 726.41
+          },
+          {
+            "category": "salesforce",
+            "label": "GET /sobjects/Account/001C100000R25NDIAZ",
+            "ms": 167.01,
+            "at": 893.49,
+            "endpoint": "/sobjects/Account/001C100000R25NDIAZ"
+          },
+          {
+            "category": "metadata",
+            "label": "GET /sobjects/Account/describe",
+            "ms": 232.12,
+            "at": 1125.66,
+            "endpoint": "/sobjects/Account/describe"
+          },
+          {
+            "category": "salesforce",
+            "label": "GET /query",
+            "ms": 152.9,
+            "at": 1278.86,
+            "endpoint": "/query"
+          },
+          {
+            "category": "salesforce",
+            "label": "GET /query",
+            "ms": 208.24,
+            "at": 1334.22,
+            "endpoint": "/query"
+          },
+          {
+            "category": "salesforce",
+            "label": "GET /query",
+            "ms": 212.39,
+            "at": 1338.37,
+            "endpoint": "/query"
+          }
+        ]
+      },
+      {
+        "id": "00458ccd-7a4c-4767-a801-c4d9fe40ac2b",
+        "method": "GET",
+        "path": "/api/Account/001C100000R25I7IAJ",
+        "routeType": "record",
+        "start": 108713.6333,
+        "status": 200,
+        "totalMs": 1312.02,
+        "counts": {
+          "supabase": 2,
+          "salesforce": 4,
+          "permission": 1,
+          "sharing": 0,
+          "layout": 0,
+          "metadata": 1,
+          "related": 0,
+          "activity": 0,
+          "chatter": 0
+        },
+        "totals": {
+          "node": 1312.02,
+          "supabase": 701.27,
+          "salesforce": 637.82,
+          "permission": 0.02,
+          "sharing": 0,
+          "layout": 0,
+          "metadata": 215.12,
+          "related": 0,
+          "activity": 0,
+          "chatter": 0
+        },
+        "events": [
+          {
+            "category": "supabase",
+            "label": "from:users.select(id, email, name, role, is_active).eq(id,aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa).eq(is_active,true).single",
+            "ms": 333.57,
+            "at": 334.29
+          },
+          {
+            "category": "supabase",
+            "label": "from:user_profile_assignments.select(profiles(is_system_admin)).eq(user_id,aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa).maybeSingle",
+            "ms": 367.7,
+            "at": 702.14
+          },
+          {
+            "category": "permission",
+            "label": "Account.can_read.admin-bypass",
+            "ms": 0.02,
+            "at": 702.2
+          },
+          {
+            "category": "salesforce",
+            "label": "GET /sobjects/Account/001C100000R25I7IAJ",
+            "ms": 180.44,
+            "at": 882.71,
+            "endpoint": "/sobjects/Account/001C100000R25I7IAJ"
+          },
+          {
+            "category": "metadata",
+            "label": "GET /sobjects/Account/describe",
+            "ms": 215.12,
+            "at": 1097.87,
+            "endpoint": "/sobjects/Account/describe"
+          },
+          {
+            "category": "salesforce",
+            "label": "GET /query",
+            "ms": 117.48,
+            "at": 1215.81,
+            "endpoint": "/query"
+          },
+          {
+            "category": "salesforce",
+            "label": "GET /query",
+            "ms": 127,
+            "at": 1225.32,
+            "endpoint": "/query"
+          },
+          {
+            "category": "salesforce",
+            "label": "GET /query",
+            "ms": 212.9,
+            "at": 1311.18,
+            "endpoint": "/query"
+          }
+        ]
+      },
+      {
+        "id": "f0bac8e4-294e-4676-a16a-c0892b294480",
+        "method": "GET",
+        "path": "/api/Contact/fields",
+        "routeType": "metadata",
+        "start": 110028.6667,
+        "status": 200,
+        "totalMs": 3205.34,
+        "counts": {
+          "supabase": 7,
+          "salesforce": 0,
+          "permission": 0,
+          "sharing": 0,
+          "layout": 0,
+          "metadata": 1,
+          "related": 0,
+          "activity": 0,
+          "chatter": 0
+        },
+        "totals": {
+          "node": 3205.34,
+          "supabase": 2933.16,
+          "salesforce": 0,
+          "permission": 0,
+          "sharing": 0,
+          "layout": 0,
+          "metadata": 631.21,
+          "related": 0,
+          "activity": 0,
+          "chatter": 0
+        },
+        "events": [
+          {
+            "category": "supabase",
+            "label": "from:users.select(id, email, name, role, is_active).eq(id,aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa).eq(is_active,true).single",
+            "ms": 359.97,
+            "at": 360.9
+          },
+          {
+            "category": "supabase",
+            "label": "from:user_profile_assignments.select(profiles(is_system_admin)).eq(user_id,aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa).maybeSingle",
+            "ms": 342.11,
+            "at": 703.16
+          },
+          {
+            "category": "supabase",
+            "label": "from:sensitive_fields.select(field_name).eq(sf_object,Contact)",
+            "ms": 536.59,
+            "at": 1239.92
+          },
+          {
+            "category": "supabase",
+            "label": "from:user_profile_assignments.select(profile_id).eq(user_id,aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa).maybeSingle",
+            "ms": 374.67,
+            "at": 1614.76
+          },
+          {
+            "category": "supabase",
+            "label": "from:field_permissions.select(field_name, can_view, can_edit).eq(profile_id,82ca56e5-4084-4cdc-a1d4-dabb922f40dc).eq(sf_object,Contact)",
+            "ms": 409.66,
+            "at": 2024.66
+          },
+          {
+            "category": "supabase",
+            "label": "from:user_permission_set_assignments.select(perm_set_id).eq(user_id,aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa)",
+            "ms": 363.35,
+            "at": 2389.05
+          },
+          {
+            "category": "supabase",
+            "label": "from:user_permission_set_group_assignments.select(group_id).eq(user_id,aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa)",
+            "ms": 546.81,
+            "at": 2572.58
+          },
+          {
+            "category": "metadata",
+            "label": "GET /sobjects/Contact/describe",
+            "ms": 631.21,
+            "at": 3204.35,
+            "endpoint": "/sobjects/Contact/describe"
+          }
+        ]
+      },
+      {
+        "id": "5fbd9222-773e-45cb-bf73-b77792d31d2e",
+        "method": "GET",
+        "path": "/api/Contact/listviews",
+        "routeType": "record",
+        "start": 113239.4351,
+        "status": 200,
+        "totalMs": 942.24,
+        "counts": {
+          "supabase": 2,
+          "salesforce": 1,
+          "permission": 0,
+          "sharing": 0,
+          "layout": 0,
+          "metadata": 0,
+          "related": 0,
+          "activity": 0,
+          "chatter": 0
+        },
+        "totals": {
+          "node": 942.24,
+          "supabase": 756.33,
+          "salesforce": 183.34,
+          "permission": 0,
+          "sharing": 0,
+          "layout": 0,
+          "metadata": 0,
+          "related": 0,
+          "activity": 0,
+          "chatter": 0
+        },
+        "events": [
+          {
+            "category": "supabase",
+            "label": "from:users.select(id, email, name, role, is_active).eq(id,aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa).eq(is_active,true).single",
+            "ms": 366.93,
+            "at": 367.7
+          },
+          {
+            "category": "supabase",
+            "label": "from:user_profile_assignments.select(profiles(is_system_admin)).eq(user_id,aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa).maybeSingle",
+            "ms": 389.4,
+            "at": 757.27
+          },
+          {
+            "category": "salesforce",
+            "label": "GET /sobjects/Contact/listviews",
+            "ms": 183.34,
+            "at": 940.7,
+            "endpoint": "/sobjects/Contact/listviews"
+          }
+        ]
+      },
+      {
+        "id": "7a92564a-591e-43f6-baf3-f1a2ea7b8cd4",
+        "method": "GET",
+        "path": "/api/Contact",
+        "routeType": "object-list",
+        "start": 114184.6074,
+        "status": 200,
+        "totalMs": 2134.77,
+        "counts": {
+          "supabase": 3,
+          "salesforce": 1,
+          "permission": 1,
+          "sharing": 2,
+          "layout": 0,
+          "metadata": 0,
+          "related": 0,
+          "activity": 0,
+          "chatter": 0
+        },
+        "totals": {
+          "node": 2134.77,
+          "supabase": 1333.11,
+          "salesforce": 787.52,
+          "permission": 0.11,
+          "sharing": 0,
+          "layout": 0,
+          "metadata": 0,
+          "related": 0,
+          "activity": 0,
+          "chatter": 0
+        },
+        "events": [
+          {
+            "category": "supabase",
+            "label": "from:users.select(id, email, name, role, is_active).eq(id,aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa).eq(is_active,true).single",
+            "ms": 374.07,
+            "at": 374.88
+          },
+          {
+            "category": "supabase",
+            "label": "from:user_profile_assignments.select(profiles(is_system_admin)).eq(user_id,aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa).maybeSingle",
+            "ms": 331.74,
+            "at": 706.78
+          },
+          {
+            "category": "permission",
+            "label": "Contact.can_read.admin-bypass",
+            "ms": 0.11,
+            "at": 706.94
+          },
+          {
+            "category": "sharing",
+            "label": "Contact.scopeFilter.admin",
+            "ms": 0,
+            "at": 707
+          },
+          {
+            "category": "salesforce",
+            "label": "GET /query",
+            "ms": 787.52,
+            "at": 1494.8,
+            "endpoint": "/query"
+          },
+          {
+            "category": "sharing",
+            "label": "Contact.applyRecordVisibility.admin",
+            "ms": 0,
+            "at": 1495.11
+          },
+          {
+            "category": "supabase",
+            "label": "from:org_wide_defaults.select(access_level).eq(sf_object,Contact).maybeSingle",
+            "ms": 627.3,
+            "at": 2125
+          }
+        ]
+      },
+      {
+        "id": "b66ec23c-de84-4a62-a70e-50a7978f2b2d",
+        "method": "GET",
+        "path": "/api/Contact/003C100000OD3m2IAD",
+        "routeType": "record",
+        "start": 116334.458,
+        "status": 200,
+        "totalMs": 1550.12,
+        "counts": {
+          "supabase": 2,
+          "salesforce": 5,
+          "permission": 1,
+          "sharing": 0,
+          "layout": 0,
+          "metadata": 1,
+          "related": 0,
+          "activity": 0,
+          "chatter": 0
+        },
+        "totals": {
+          "node": 1550.12,
+          "supabase": 779.24,
+          "salesforce": 1290.82,
+          "permission": 0.01,
+          "sharing": 0,
+          "layout": 0,
+          "metadata": 242.59,
+          "related": 0,
+          "activity": 0,
+          "chatter": 0
+        },
+        "events": [
+          {
+            "category": "supabase",
+            "label": "from:users.select(id, email, name, role, is_active).eq(id,aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa).eq(is_active,true).single",
+            "ms": 408.32,
+            "at": 408.96
+          },
+          {
+            "category": "supabase",
+            "label": "from:user_profile_assignments.select(profiles(is_system_admin)).eq(user_id,aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa).maybeSingle",
+            "ms": 370.92,
+            "at": 780.04
+          },
+          {
+            "category": "permission",
+            "label": "Contact.can_read.admin-bypass",
+            "ms": 0.01,
+            "at": 780.1
+          },
+          {
+            "category": "salesforce",
+            "label": "GET /sobjects/Contact/003C100000OD3m2IAD",
+            "ms": 160.05,
+            "at": 940.22,
+            "endpoint": "/sobjects/Contact/003C100000OD3m2IAD"
+          },
+          {
+            "category": "metadata",
+            "label": "GET /sobjects/Contact/describe",
+            "ms": 242.59,
+            "at": 1182.85,
+            "endpoint": "/sobjects/Contact/describe"
+          },
+          {
+            "category": "salesforce",
+            "label": "GET /query",
+            "ms": 186.19,
+            "at": 1369.33,
+            "endpoint": "/query"
+          },
+          {
+            "category": "salesforce",
+            "label": "GET /query",
+            "ms": 287.86,
+            "at": 1471.01,
+            "endpoint": "/query"
+          },
+          {
+            "category": "salesforce",
+            "label": "GET /query",
+            "ms": 291.04,
+            "at": 1474.18,
+            "endpoint": "/query"
+          },
+          {
+            "category": "salesforce",
+            "label": "GET /query",
+            "ms": 365.68,
+            "at": 1548.84,
+            "endpoint": "/query"
+          }
+        ]
+      },
+      {
+        "id": "2b79f16b-4650-4fc3-b995-ad46b0f76ed3",
+        "method": "GET",
+        "path": "/api/Contact/003C100000OD3m2IAD/related",
+        "routeType": "related-list",
+        "start": 117889.0936,
+        "status": 200,
+        "totalMs": 1536.01,
+        "counts": {
+          "supabase": 3,
+          "salesforce": 3,
+          "permission": 1,
+          "sharing": 0,
+          "layout": 0,
+          "metadata": 0,
+          "related": 0,
+          "activity": 0,
+          "chatter": 0
+        },
+        "totals": {
+          "node": 1536.01,
+          "supabase": 1156.7,
+          "salesforce": 543.91,
+          "permission": 0.01,
+          "sharing": 0,
+          "layout": 0,
+          "metadata": 0,
+          "related": 0,
+          "activity": 0,
+          "chatter": 0
+        },
+        "events": [
+          {
+            "category": "supabase",
+            "label": "from:users.select(id, email, name, role, is_active).eq(id,aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa).eq(is_active,true).single",
+            "ms": 350.21,
+            "at": 351.13
+          },
+          {
+            "category": "supabase",
+            "label": "from:user_profile_assignments.select(profiles(is_system_admin)).eq(user_id,aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa).maybeSingle",
+            "ms": 442.68,
+            "at": 793.96
+          },
+          {
+            "category": "permission",
+            "label": "Contact.can_read.admin-bypass",
+            "ms": 0.01,
+            "at": 794.01
+          },
+          {
+            "category": "salesforce",
+            "label": "GET /sobjects/Contact/003C100000OD3m2IAD?fields=Portal_Owner__c",
+            "ms": 191.41,
+            "at": 985.47,
+            "endpoint": "/sobjects/Contact/003C100000OD3m2IAD?fields=Portal_Owner__c"
+          },
+          {
+            "category": "supabase",
+            "label": "from:portal_record_pages.select(regions).eq(object_name,Contact).maybeSingle",
+            "ms": 363.81,
+            "at": 1349.54
+          },
+          {
+            "category": "salesforce",
+            "label": "GET /query",
+            "ms": 167.54,
+            "at": 1519.21,
+            "endpoint": "/query"
+          },
+          {
+            "category": "salesforce",
+            "label": "GET /query",
+            "ms": 184.96,
+            "at": 1535.19,
+            "endpoint": "/query"
+          }
+        ]
+      }
+    ]
+  }
+}

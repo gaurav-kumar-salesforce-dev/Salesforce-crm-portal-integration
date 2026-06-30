@@ -1,0 +1,447 @@
+{
+  "user": {
+    "id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+    "role": "system_administrator",
+    "isSystemAdmin": true
+  },
+  "record": {
+    "object": "Account",
+    "id": "001C100000R25I7IAJ",
+    "name": "Acme Consulting 1392"
+  },
+  "baselineFromSprint4": {
+    "authSupabaseMs": 690,
+    "authSupabaseQueries": 2,
+    "warmRecordMs": 699.2
+  },
+  "setup": [
+    {
+      "label": "build user context",
+      "path": "/api/portal/me",
+      "status": 200,
+      "ms": 905.08,
+      "perfRequestId": "ceab0e27-e57e-4403-a1e9-0fa0808cad14"
+    },
+    {
+      "label": "warm user context hit",
+      "path": "/api/portal/me",
+      "status": 200,
+      "ms": 7.19,
+      "perfRequestId": "b819c3ac-a2d0-4561-8f02-41ca73091ffc"
+    },
+    {
+      "label": "warm Account metadata",
+      "path": "/api/Account/fields",
+      "status": 200,
+      "ms": 1295.55,
+      "perfRequestId": "e6027088-ad42-40e3-89c2-426a8148fdeb"
+    },
+    {
+      "label": "warm Account layout",
+      "path": "/api/portal/layouts/Account",
+      "status": 200,
+      "ms": 356.1,
+      "perfRequestId": "be6aadbc-eea5-444e-b451-7aad8c72f185"
+    },
+    {
+      "label": "warm Account compact",
+      "path": "/api/portal/compact-layouts/Account",
+      "status": 200,
+      "ms": 357,
+      "perfRequestId": "e0019fff-7fc2-41ee-9aec-39b54fa6a090"
+    },
+    {
+      "label": "warm Account record page",
+      "path": "/api/portal/record-pages/Account",
+      "status": 200,
+      "ms": 379.92,
+      "perfRequestId": "70423a3e-dcd0-47d8-8c4a-c2eb75ccb70d"
+    },
+    {
+      "label": "Account list for id",
+      "path": "/api/Account",
+      "status": 200,
+      "ms": 891.98,
+      "perfRequestId": "f62a70c4-1627-444e-8bff-b33b27a6f6ce"
+    },
+    {
+      "label": "warm record detail cache",
+      "path": "/api/Account/001C100000R25I7IAJ",
+      "status": 200,
+      "ms": 352.9,
+      "perfRequestId": "0fa823d4-af4e-4d3d-afa9-7b284bc3cb72"
+    },
+    {
+      "label": "warm record detail cache hit",
+      "path": "/api/Account/001C100000R25I7IAJ",
+      "status": 200,
+      "ms": 12.89,
+      "perfRequestId": "61a2304c-dc8e-4811-a2e7-8a2869512240"
+    }
+  ],
+  "calls": [
+    {
+      "label": "portal me warm",
+      "path": "/api/portal/me",
+      "status": 200,
+      "ms": 6.46,
+      "perfRequestId": "abff2d65-f863-42cd-838b-677f19b73400"
+    },
+    {
+      "label": "layout warm",
+      "path": "/api/portal/layouts/Account",
+      "status": 200,
+      "ms": 5.91,
+      "perfRequestId": "d4d819f0-313c-4b19-9248-6006312a0823"
+    },
+    {
+      "label": "compact warm",
+      "path": "/api/portal/compact-layouts/Account",
+      "status": 200,
+      "ms": 11.33,
+      "perfRequestId": "e3cd75c6-8006-4f9d-9621-2e9dff48e936"
+    },
+    {
+      "label": "record page warm",
+      "path": "/api/portal/record-pages/Account",
+      "status": 200,
+      "ms": 7.89,
+      "perfRequestId": "c56124b7-4831-43d9-9bb0-c6fea7a53d0b"
+    },
+    {
+      "label": "record detail warm",
+      "path": "/api/Account/001C100000R25I7IAJ",
+      "status": 200,
+      "ms": 7.11,
+      "perfRequestId": "6251c5dc-8378-47a3-8124-30bed47159ab"
+    },
+    {
+      "label": "Account list warm",
+      "path": "/api/Account",
+      "status": 200,
+      "ms": 767.5,
+      "perfRequestId": "4a7b4d2a-60d9-46e9-b350-92cc2b59bee9"
+    },
+    {
+      "label": "chatter auth warm",
+      "path": "/api/Account/001C100000R25I7IAJ/chatter",
+      "status": 200,
+      "ms": 265.77,
+      "perfRequestId": "55f0438f-b0f2-4467-a289-974bf40e4115"
+    },
+    {
+      "label": "duplicate context 1",
+      "path": "/api/portal/me",
+      "status": 200,
+      "ms": 10.11,
+      "perfRequestId": "745bcc34-5880-4f30-89a3-0cd2b05e315e"
+    },
+    {
+      "label": "duplicate context 2",
+      "path": "/api/portal/me",
+      "status": 200,
+      "ms": 14.4,
+      "perfRequestId": "ba2c05bb-7931-4639-8d27-9bc5069ead42"
+    },
+    {
+      "label": "duplicate context 3",
+      "path": "/api/portal/me",
+      "status": 200,
+      "ms": 17.63,
+      "perfRequestId": "991d3883-ddaa-4fd5-9b4b-df4208fcffca"
+    }
+  ],
+  "requestSummaries": [
+    {
+      "path": "/api/portal/me",
+      "totalMs": 3.19,
+      "counts": {
+        "supabase": 0,
+        "salesforce": 0,
+        "permission": 0,
+        "sharing": 0,
+        "layout": 0,
+        "metadata": 0,
+        "related": 0,
+        "activity": 0,
+        "chatter": 0
+      },
+      "totals": {
+        "node": 3.19,
+        "supabase": 0,
+        "salesforce": 0,
+        "permission": 0,
+        "sharing": 0,
+        "layout": 0,
+        "metadata": 0,
+        "related": 0,
+        "activity": 0,
+        "chatter": 0
+      }
+    },
+    {
+      "path": "/api/portal/layouts/Account",
+      "totalMs": 3.28,
+      "counts": {
+        "supabase": 0,
+        "salesforce": 0,
+        "permission": 0,
+        "sharing": 0,
+        "layout": 0,
+        "metadata": 0,
+        "related": 0,
+        "activity": 0,
+        "chatter": 0
+      },
+      "totals": {
+        "node": 3.28,
+        "supabase": 0,
+        "salesforce": 0,
+        "permission": 0,
+        "sharing": 0,
+        "layout": 0,
+        "metadata": 0,
+        "related": 0,
+        "activity": 0,
+        "chatter": 0
+      }
+    },
+    {
+      "path": "/api/portal/compact-layouts/Account",
+      "totalMs": 2.78,
+      "counts": {
+        "supabase": 0,
+        "salesforce": 0,
+        "permission": 0,
+        "sharing": 0,
+        "layout": 0,
+        "metadata": 0,
+        "related": 0,
+        "activity": 0,
+        "chatter": 0
+      },
+      "totals": {
+        "node": 2.78,
+        "supabase": 0,
+        "salesforce": 0,
+        "permission": 0,
+        "sharing": 0,
+        "layout": 0,
+        "metadata": 0,
+        "related": 0,
+        "activity": 0,
+        "chatter": 0
+      }
+    },
+    {
+      "path": "/api/portal/record-pages/Account",
+      "totalMs": 4.01,
+      "counts": {
+        "supabase": 0,
+        "salesforce": 0,
+        "permission": 0,
+        "sharing": 0,
+        "layout": 0,
+        "metadata": 0,
+        "related": 0,
+        "activity": 0,
+        "chatter": 0
+      },
+      "totals": {
+        "node": 4.01,
+        "supabase": 0,
+        "salesforce": 0,
+        "permission": 0,
+        "sharing": 0,
+        "layout": 0,
+        "metadata": 0,
+        "related": 0,
+        "activity": 0,
+        "chatter": 0
+      }
+    },
+    {
+      "path": "/api/Account/001C100000R25I7IAJ",
+      "totalMs": 3.86,
+      "counts": {
+        "supabase": 0,
+        "salesforce": 0,
+        "permission": 1,
+        "sharing": 0,
+        "layout": 0,
+        "metadata": 0,
+        "related": 0,
+        "activity": 0,
+        "chatter": 0
+      },
+      "totals": {
+        "node": 3.86,
+        "supabase": 0,
+        "salesforce": 0,
+        "permission": 0.01,
+        "sharing": 0,
+        "layout": 0,
+        "metadata": 0,
+        "related": 0,
+        "activity": 0,
+        "chatter": 0
+      }
+    },
+    {
+      "path": "/api/Account",
+      "totalMs": 751.92,
+      "counts": {
+        "supabase": 0,
+        "salesforce": 1,
+        "permission": 1,
+        "sharing": 1,
+        "layout": 0,
+        "metadata": 0,
+        "related": 0,
+        "activity": 0,
+        "chatter": 0
+      },
+      "totals": {
+        "node": 751.92,
+        "supabase": 0,
+        "salesforce": 736.98,
+        "permission": 0.01,
+        "sharing": 0.02,
+        "layout": 0,
+        "metadata": 0,
+        "related": 0,
+        "activity": 0,
+        "chatter": 0
+      }
+    },
+    {
+      "path": "/api/Account/001C100000R25I7IAJ/chatter",
+      "totalMs": 253.08,
+      "counts": {
+        "supabase": 0,
+        "salesforce": 0,
+        "permission": 0,
+        "sharing": 0,
+        "layout": 0,
+        "metadata": 0,
+        "related": 0,
+        "activity": 0,
+        "chatter": 1
+      },
+      "totals": {
+        "node": 253.08,
+        "supabase": 0,
+        "salesforce": 0,
+        "permission": 0,
+        "sharing": 0,
+        "layout": 0,
+        "metadata": 0,
+        "related": 0,
+        "activity": 0,
+        "chatter": 245.54
+      }
+    },
+    {
+      "path": "/api/portal/me",
+      "totalMs": 3.63,
+      "counts": {
+        "supabase": 0,
+        "salesforce": 0,
+        "permission": 0,
+        "sharing": 0,
+        "layout": 0,
+        "metadata": 0,
+        "related": 0,
+        "activity": 0,
+        "chatter": 0
+      },
+      "totals": {
+        "node": 3.63,
+        "supabase": 0,
+        "salesforce": 0,
+        "permission": 0,
+        "sharing": 0,
+        "layout": 0,
+        "metadata": 0,
+        "related": 0,
+        "activity": 0,
+        "chatter": 0
+      }
+    },
+    {
+      "path": "/api/portal/me",
+      "totalMs": 3.72,
+      "counts": {
+        "supabase": 0,
+        "salesforce": 0,
+        "permission": 0,
+        "sharing": 0,
+        "layout": 0,
+        "metadata": 0,
+        "related": 0,
+        "activity": 0,
+        "chatter": 0
+      },
+      "totals": {
+        "node": 3.72,
+        "supabase": 0,
+        "salesforce": 0,
+        "permission": 0,
+        "sharing": 0,
+        "layout": 0,
+        "metadata": 0,
+        "related": 0,
+        "activity": 0,
+        "chatter": 0
+      }
+    },
+    {
+      "path": "/api/portal/me",
+      "totalMs": 3.57,
+      "counts": {
+        "supabase": 0,
+        "salesforce": 0,
+        "permission": 0,
+        "sharing": 0,
+        "layout": 0,
+        "metadata": 0,
+        "related": 0,
+        "activity": 0,
+        "chatter": 0
+      },
+      "totals": {
+        "node": 3.57,
+        "supabase": 0,
+        "salesforce": 0,
+        "permission": 0,
+        "sharing": 0,
+        "layout": 0,
+        "metadata": 0,
+        "related": 0,
+        "activity": 0,
+        "chatter": 0
+      }
+    }
+  ],
+  "requestContextStats": {
+    "hits": 21,
+    "misses": 1,
+    "duplicatePermissionPrevented": 0,
+    "userContextCache": {
+      "hits": 21,
+      "misses": 1,
+      "builds": 1,
+      "invalidations": 0,
+      "size": 1,
+      "hitRatio": 0.9545
+    }
+  },
+  "userContextStats": {
+    "hits": 22,
+    "misses": 1,
+    "builds": 1,
+    "invalidations": 0,
+    "size": 1,
+    "hitRatio": 0.9565
+  }
+}
