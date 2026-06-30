@@ -2134,6 +2134,7 @@ async function completePortalLogin(data) {
   setAuthToken(data.token);
   setStoredPerms(data.permissions || {});
   window.portalUser = data.user;
+  renderCrmGreeting();
   const route = crmRouteFromLocation();
   currentObject = initialReadableObject();
   if (route?.view !== "record") writeCrmHistory(currentObject, true);
@@ -2303,6 +2304,10 @@ function revealAuthorizedSidebar() {
 
 function holdSidebarUntilPermissions() {
   document.body.classList.add("nav-loading");
+}
+
+function renderCrmGreeting() {
+  window.SaaSRAYGreeting?.render?.("crmGreetingMount", window.portalUser || {});
 }
 
 function showNoObjectAccess() {
@@ -9721,6 +9726,7 @@ document.addEventListener("DOMContentLoaded", async () => {
           if (me) {
             setStoredPerms(me.permissions || {});
             window.portalUser = me;
+            renderCrmGreeting();
             route = crmRouteFromLocation();
             currentObject = initialReadableObject();
             if (route?.view !== "record") writeCrmHistory(currentObject, true);

@@ -9,6 +9,7 @@
   <link
     href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap"
     rel="stylesheet">
+  <link rel="stylesheet" href="/greeting.css?v=1">
   <style>
     *,
     *::before,
@@ -2309,6 +2310,7 @@
     </header>
 
     <div class="content">
+      <div id="adminGreetingMount"></div>
 
       <!-- ══ USERS PANEL ══════════════════════════════════ -->
       <div class="panel active" id="panel-users">
@@ -3298,6 +3300,7 @@
 
   <script src="/client-performance.js?v=1"></script>
   <script src="/session.js?v=1"></script>
+  <script src="/greeting.js?v=1"></script>
   <script>
     // ═══════════════════════════════════════════════════════
     // STATE
@@ -3467,6 +3470,7 @@
 
         // Render full admin info card
         renderAdminInfoCard(me);
+        window.SaaSRAYGreeting?.render?.('adminGreetingMount', me);
 
         // Show SF disconnect only to system_administrator
         if (me.role === 'system_administrator') {

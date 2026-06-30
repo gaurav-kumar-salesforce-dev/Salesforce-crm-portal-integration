@@ -1,0 +1,174 @@
+.enterprise-greeting {
+  position: relative;
+  overflow: hidden;
+  min-height: 74px;
+  margin: -4px 0 14px;
+  padding: 16px 24px;
+  border: 1px solid var(--border, #d8e2ef);
+  border-radius: var(--radius-lg, 10px);
+  box-shadow: 0 1px 2px rgba(16, 24, 40, 0.05), 0 6px 18px rgba(16, 24, 40, 0.06);
+  color: var(--text-1, var(--text-primary, #0a0e1a));
+  background: linear-gradient(105deg, rgba(255, 255, 255, 0.98), rgba(255, 247, 211, 0.55));
+  animation: enterpriseGreetingIn 200ms ease-out both;
+}
+
+.enterprise-greeting-morning {
+  background: linear-gradient(105deg, rgba(255, 255, 255, 0.98), rgba(255, 244, 181, 0.48));
+}
+
+.enterprise-greeting-afternoon {
+  background: linear-gradient(105deg, rgba(255, 255, 255, 0.98), rgba(255, 227, 188, 0.46));
+}
+
+.enterprise-greeting-evening {
+  background: linear-gradient(105deg, rgba(255, 255, 255, 0.98), rgba(255, 209, 179, 0.44));
+}
+
+.enterprise-greeting-night {
+  background: linear-gradient(105deg, rgba(255, 255, 255, 0.98), rgba(211, 219, 255, 0.45));
+}
+
+.enterprise-greeting-main {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  min-width: 0;
+}
+
+.enterprise-greeting-icon {
+  width: 38px;
+  height: 38px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.5);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.64);
+  font-size: 23px;
+}
+
+.enterprise-greeting-copy h2 {
+  margin: 0 0 2px;
+  color: var(--text-1, var(--text-primary, #0a0e1a));
+  font-size: 31px;
+  line-height: 1.05;
+  font-weight: 850;
+  letter-spacing: 0;
+}
+
+.enterprise-greeting-copy p {
+  margin: 0;
+  color: var(--text-2, var(--text-secondary, #5a6070));
+  font-size: 13px;
+  line-height: 1.55;
+  font-weight: 500;
+}
+
+.enterprise-greeting-art {
+  position: absolute;
+  inset: auto 18px 0 auto;
+  width: 220px;
+  height: 72px;
+  pointer-events: none;
+  opacity: 0.34;
+}
+
+.enterprise-greeting-sun {
+  position: absolute;
+  right: 36px;
+  bottom: 21px;
+  width: 46px;
+  height: 46px;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(255, 204, 78, 0.88), rgba(255, 204, 78, 0.08) 68%);
+}
+
+@keyframes enterpriseGreetingIn {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.enterprise-greeting-hill {
+  position: absolute;
+  right: 0;
+  bottom: -24px;
+  display: block;
+  border-radius: 999px 999px 0 0;
+  background: rgba(255, 195, 91, 0.28);
+}
+
+.enterprise-greeting-hill-a {
+  width: 168px;
+  height: 68px;
+}
+
+.enterprise-greeting-hill-b {
+  right: 78px;
+  width: 124px;
+  height: 48px;
+  background: rgba(255, 214, 128, 0.26);
+}
+
+html[data-theme="dark"] .enterprise-greeting {
+  border-color: rgba(255, 255, 255, 0.1);
+  background: linear-gradient(105deg, rgba(26, 29, 39, 0.98), rgba(51, 57, 87, 0.6));
+}
+
+html[data-theme="dark"] .enterprise-greeting-copy h2 {
+  color: var(--text-1, var(--text-primary, #e8e9f0));
+}
+
+html[data-theme="dark"] .enterprise-greeting-copy p {
+  color: var(--text-2, var(--text-secondary, #a0a3c0));
+}
+
+html[data-theme="dark"] .enterprise-greeting-icon {
+  background: rgba(255, 255, 255, 0.08);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.1);
+}
+
+@media (max-width: 1024px) {
+  .enterprise-greeting-copy h2 {
+    font-size: 26px;
+  }
+}
+
+@media (max-width: 700px) {
+  .enterprise-greeting {
+    min-height: 66px;
+    margin: -2px 0 12px;
+    padding: 14px 16px;
+  }
+
+  .enterprise-greeting-main {
+    gap: 12px;
+  }
+
+  .enterprise-greeting-icon {
+    width: 34px;
+    height: 34px;
+    font-size: 20px;
+  }
+
+  .enterprise-greeting-copy h2 {
+    font-size: 22px;
+    line-height: 1.12;
+  }
+
+  .enterprise-greeting-copy p {
+    font-size: 12.5px;
+  }
+
+  .enterprise-greeting-art {
+    display: none;
+  }
+}
