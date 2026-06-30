@@ -4174,6 +4174,43 @@ body {
   gap: 5px;
 }
 
+body.nav-loading .sidebar-nav {
+  pointer-events: none;
+}
+
+body.nav-loading .sidebar-nav .nav-item {
+  display: none;
+}
+
+body.nav-loading .sidebar-nav::before {
+  content: "";
+  display: block;
+  height: 42px;
+  margin: 4px 2px 8px;
+  border-radius: 8px;
+  background: linear-gradient(90deg, rgba(255,255,255,0.08), rgba(255,255,255,0.16), rgba(255,255,255,0.08));
+  background-size: 180% 100%;
+  animation: navSkeleton 1.2s ease-in-out infinite;
+}
+
+body.nav-loading .sidebar-nav::after {
+  content: "";
+  display: block;
+  height: 210px;
+  margin: 0 2px;
+  border-radius: 8px;
+  background:
+    linear-gradient(rgba(255,255,255,0.09), rgba(255,255,255,0.09)) 0 0 / 100% 38px no-repeat,
+    linear-gradient(rgba(255,255,255,0.07), rgba(255,255,255,0.07)) 0 52px / 88% 38px no-repeat,
+    linear-gradient(rgba(255,255,255,0.07), rgba(255,255,255,0.07)) 0 104px / 94% 38px no-repeat,
+    linear-gradient(rgba(255,255,255,0.07), rgba(255,255,255,0.07)) 0 156px / 76% 38px no-repeat;
+}
+
+@keyframes navSkeleton {
+  0% { background-position: 100% 0; }
+  100% { background-position: -100% 0; }
+}
+
 .nav-item {
   min-height: 42px;
   padding: 10px 12px;

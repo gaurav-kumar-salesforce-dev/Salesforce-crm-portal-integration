@@ -739,6 +739,7 @@ function getAuthToken() {
 
 function setAuthToken(token) {
   localStorage.setItem("saasray_token", token);
+  window.SaaSRAYSession?.markActivity?.(true);
 }
 
 function clearAuthToken() {
@@ -746,6 +747,7 @@ function clearAuthToken() {
   localStorage.removeItem("saasray_perms");
   window.userPerms = {};
   window.portalUser = null;
+  holdSidebarUntilPermissions();
 }
 
 function getStoredPerms() {
@@ -1216,11 +1218,14 @@ async function api(path, options = {}) {
 
    let response;
   try {
-    response = await fetch(path, {
+    const requestOptions = {
       headers,
       ...options,
       headers: { ...headers, ...(options.headers || {}) }
-    });
+    };
+    response = window.SaaSRAYSession?.authorizedFetch
+      ? await window.SaaSRAYSession.authorizedFetch(path, requestOptions)
+      : await fetch(path, requestOptions);
   } catch (networkErr) {
     // Pure network failure — no response at all
     toast('Network error — check your connection and try again.', 'err', 8000);
@@ -2129,10 +2134,10 @@ async function completePortalLogin(data) {
   setAuthToken(data.token);
   setStoredPerms(data.permissions || {});
   window.portalUser = data.user;
-  applyAllPermissionGuards();
   const route = crmRouteFromLocation();
   currentObject = initialReadableObject();
   if (route?.view !== "record") writeCrmHistory(currentObject, true);
+  revealAuthorizedSidebar();
 
   hideLoginPage();
 
@@ -2143,7 +2148,6 @@ async function completePortalLogin(data) {
     );
   }
 
-  applyAllPermissionGuards();
   await checkConnection();
   if (route?.view === "record" && route.recordId) {
     loadListViews().catch((err) => console.warn("List views warmup failed:", err.message || err));
@@ -2288,9 +2292,17 @@ function readableObjectNames(objectNames) {
 }
 
 function firstReadableNavObject() {
-  return ["Account", "Contact", "Opportunity", "Case", "Lead", "Campaign"].find(
-    (objectName) => canReadObject(objectName),
-  );
+  const navObjects = Array.from(document.querySelectorAll(".nav-item[data-obj]")).map((item) => item.dataset.obj);
+  return navObjects.find((objectName) => canReadObject(objectName));
+}
+
+function revealAuthorizedSidebar() {
+  applyAllPermissionGuards();
+  document.body.classList.remove("nav-loading");
+}
+
+function holdSidebarUntilPermissions() {
+  document.body.classList.add("nav-loading");
 }
 
 function showNoObjectAccess() {
@@ -2902,14 +2914,16 @@ async function saveOrgAndConnect() {
 
 function connectSalesforce() {
   const activeKey = orgSettings.activeOrgKey || getActiveOrg()?.key;
+  const returnTo = encodeURIComponent(`${window.location.pathname}${window.location.search}${window.location.hash}`);
   window.location.href = activeKey
-    ? `/auth/salesforce?org=${encodeURIComponent(activeKey)}`
-    : "/auth/salesforce";
+    ? `/auth/salesforce?org=${encodeURIComponent(activeKey)}&returnTo=${returnTo}`
+    : `/auth/salesforce?returnTo=${returnTo}`;
 }
 
 async function logoutSalesforce() {
   // This is now PORTAL logout only
-  await fetch("/api/auth/logout", {
+  const fetcher = window.SaaSRAYSession?.authorizedFetch || fetch;
+  await fetcher("/api/auth/logout", {
     method: "POST",
     headers: { Authorization: `Bearer ${getAuthToken()}` },
   }).catch(() => null);
@@ -9694,21 +9708,14 @@ document.addEventListener("DOMContentLoaded", async () => {
     showLoginPage();
     return; // Don't load any data until logged in
   }
-  // Token exists — load cached perms immediately (so UI guards work instantly)
-  window.userPerms = getStoredPerms();
+  holdSidebarUntilPermissions();
   let route = crmRouteFromLocation();
-  currentObject = initialReadableObject();
-  if (route?.view !== "record") writeCrmHistory(currentObject, true);
-  applyAllPermissionGuards();
 
   // Then boot the app normally
   loadOrgSettings()
     .then(() => checkConnection())
     .then(async (connection) => {
       if (connection?.success) {
-        restoreCrmSpaStateFromStorage();
-        syncSidebarBadgesFromCache();
-        // Refresh permissions from server (in case they changed)
         try {
           const me = await api("/api/portal/me");
           if (me) {
@@ -9717,11 +9724,15 @@ document.addEventListener("DOMContentLoaded", async () => {
             route = crmRouteFromLocation();
             currentObject = initialReadableObject();
             if (route?.view !== "record") writeCrmHistory(currentObject, true);
-            applyAllPermissionGuards();
+            revealAuthorizedSidebar();
           }
-        } catch {
-          // If /portal/me fails, cached perms are still used
+        } catch (err) {
+          clearAuthToken();
+          showLoginPage(err.message || "Your session expired. Please log in again.");
+          return;
         }
+        restoreCrmSpaStateFromStorage();
+        syncSidebarBadgesFromCache();
         if (route?.view === "record" && route.recordId) {
           loadListViews().catch((err) => console.warn("List views warmup failed:", err.message || err));
           await openRecordDetail(route.objectName, route.recordId, { preserveHistory: true });

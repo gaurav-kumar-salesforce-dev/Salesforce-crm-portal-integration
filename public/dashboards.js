@@ -195,6 +195,8 @@ function bindEvents() {
 }
 
 async function api(path, options = {}) {
+  window.SaaSRAYSession?.markActivity?.();
+  await window.SaaSRAYSession?.refreshSession?.().catch(() => null);
   const token = localStorage.getItem('saasray_token');
   if (!token) {
     window.location.href = '/';
@@ -226,7 +228,8 @@ async function api(path, options = {}) {
       return sharedRequest;
     }
   }
-  const request = fetch(path, {
+  const fetcher = window.SaaSRAYSession?.authorizedFetch || fetch;
+  const request = fetcher(path, {
     ...options,
     headers: {
       'Content-Type': 'application/json',

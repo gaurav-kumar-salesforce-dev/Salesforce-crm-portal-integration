@@ -3297,6 +3297,7 @@
   <div class="toast-stack" id="toastStack"></div>
 
   <script src="/client-performance.js?v=1"></script>
+  <script src="/session.js?v=1"></script>
   <script>
     // ═══════════════════════════════════════════════════════
     // STATE
@@ -3385,8 +3386,11 @@
     }
 
     async function api(path, options = {}) {
+      window.SaaSRAYSession?.markActivity?.();
+      await window.SaaSRAYSession?.refreshSession?.().catch(() => null);
       const token = getToken();
-      const res = await fetch(path, {
+      const fetcher = window.SaaSRAYSession?.authorizedFetch || fetch;
+      const res = await fetcher(path, {
         headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
         ...options
       });
@@ -3474,9 +3478,7 @@
         return;
       }
 
-      await loadUsers();
-      loadProfiles();
-      loadPermSets();
+      await loadUsersBootstrap();
       handleRouting(true);
     });
 
@@ -3678,20 +3680,9 @@
     // ═══════════════════════════════════════════════════════
     // USERS
     // ═══════════════════════════════════════════════════════
-  async function loadUsers() {
-  $('usersBody').innerHTML = '<tr><td colspan="8"><div class="spinner"></div></td></tr>';
-
-  try {
-    const data = await api('/api/portal/users');
-
-    allUsers = data.users || [];
-
-    updateUserStats();
-    renderUsers(allUsers);
-
-    // Populate Profile Filter
-    const profileFilter = $('profileFilter');
-    if (profileFilter) {
+    function populateUserProfileFilter() {
+      const profileFilter = $('profileFilter');
+      if (!profileFilter) return;
       const uniqueProfiles = [...new Map(
         allUsers
           .filter(u => u.profile?.name)
@@ -3705,13 +3696,53 @@
           .join('');
     }
 
-    $('nav-users-count').textContent = allUsers.length;
+    function applyUsersPayload(data, options = {}) {
+      allUsers = data.users || [];
+      if (Array.isArray(data.profiles)) allProfiles = data.profiles;
+      if (Array.isArray(data.permissionSets)) allPermSets = data.permissionSets;
 
-  } catch (e) {
-    $('usersBody').innerHTML =
-      `<tr><td colspan="6" style="text-align:center;color:var(--danger);padding:24px">${e.message}</td></tr>`;
-  }
-}
+      updateUserStats();
+      renderUsers(allUsers);
+      populateUserProfileFilter();
+      $('nav-users-count').textContent = allUsers.length;
+
+      if (options.renderAdminMetadata) {
+        renderProfiles();
+        renderPermSets();
+        $('nav-profiles-count').textContent = allProfiles.length;
+        $('nav-permsets-count').textContent = allPermSets.length;
+      }
+    }
+
+    async function loadUsersBootstrap() {
+      $('usersBody').innerHTML = '<tr><td colspan="8"><div class="spinner"></div></td></tr>';
+      $('profilesBody').innerHTML = '<tr><td colspan="5"><div class="spinner"></div></td></tr>';
+      $('permSetsBody').innerHTML = '<tr><td colspan="4"><div class="spinner"></div></td></tr>';
+
+      try {
+        const data = await api('/api/portal/admin/users-bootstrap');
+        applyUsersPayload(data, { renderAdminMetadata: true });
+      } catch (e) {
+        $('usersBody').innerHTML =
+          `<tr><td colspan="8" style="text-align:center;color:var(--danger);padding:24px">${e.message}</td></tr>`;
+        $('profilesBody').innerHTML =
+          `<tr><td colspan="5" style="text-align:center;color:var(--danger);padding:24px">${e.message}</td></tr>`;
+        $('permSetsBody').innerHTML =
+          `<tr><td colspan="4" style="text-align:center;color:var(--danger);padding:24px">${e.message}</td></tr>`;
+      }
+    }
+
+    async function loadUsers() {
+      $('usersBody').innerHTML = '<tr><td colspan="8"><div class="spinner"></div></td></tr>';
+
+      try {
+        const data = await api('/api/portal/users');
+        applyUsersPayload(data);
+      } catch (e) {
+        $('usersBody').innerHTML =
+          `<tr><td colspan="8" style="text-align:center;color:var(--danger);padding:24px">${e.message}</td></tr>`;
+      }
+    }
 
     function updateUserStats() {
       const active = allUsers.filter(u => u.isActive).length;
