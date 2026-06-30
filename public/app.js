@@ -5377,7 +5377,7 @@ function renderRecordDetailPage(
             <ul class="custom-tab-nav" style="display: flex; gap: 24px; border-bottom: 1px solid var(--border); margin: 0; padding: 0 20px; list-style: none; background: transparent;">
               ${headersHtml}
             </ul>
-            <div class="custom-tab-contents" style="padding: 20px;">
+            <div class="custom-tab-contents" style="padding: 12px;">
               ${contentsHtml}
             </div>
           </div>
@@ -5704,9 +5704,6 @@ function renderRelatedListShell(config, noMargin = false) {
             <span aria-hidden="true">+</span>
             New
           </button>
-          ${isSingle ? `<button class="related-menu-btn" type="button" title="Show related actions" aria-label="Show related actions" onclick="viewAllRelatedRecords('${escapeJs(config.key)}')">
-            ${utilityIconSvg("chevronDown")}
-          </button>` : ""}
         </div>
       </div>
       <div class="related-list-body" id="relatedList-${escapeHtml(config.key)}">
@@ -5870,9 +5867,6 @@ function renderRelatedCardItem(config, record) {
             ${escapeHtml(primaryVal)}
           </button>
         </div>
-        <button class="related-menu-btn related-card-menu" type="button" title="Open related record" aria-label="Open related record" onclick="event.stopPropagation(); openRecordDetail('${config.objectName}', '${escapeJs(record.Id)}')">
-          ${utilityIconSvg("chevronDown")}
-        </button>
       </div>
       ${detailFields.length ? `
         <div class="related-card-fields">

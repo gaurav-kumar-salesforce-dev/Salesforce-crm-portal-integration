@@ -2175,6 +2175,18 @@ textarea.form-ctrl { resize: vertical; min-height: 80px; line-height: 1.5; }
   min-height: 300px;
 }
 
+.record-details-body {
+  padding: 12px;
+}
+
+.record-activity-body {
+  padding: 0;
+}
+
+.record-chatter-body {
+  padding: 0;
+}
+
 .side-tabs {
   display: flex;
   gap: 18px;
@@ -2994,11 +3006,12 @@ textarea.form-ctrl { resize: vertical; min-height: 80px; line-height: 1.5; }
 }
 
 .related-panel-single .btn-related-new {
-  min-height: 48px;
-  padding: 8px 19px;
-  border-radius: 8px;
-  box-shadow: 0 14px 28px rgba(1, 118, 211, 0.22);
-  font-size: 15px;
+  min-height: 36px;
+  height: 36px;
+  padding: 7px 13px;
+  border-radius: 7px;
+  box-shadow: 0 8px 18px rgba(1, 118, 211, 0.18);
+  font-size: 13px;
 }
 
 .related-cards-list-wrap {
@@ -3101,34 +3114,10 @@ textarea.form-ctrl { resize: vertical; min-height: 80px; line-height: 1.5; }
   font-weight: 500;
 }
 
-.related-menu-btn {
-  display: inline-flex;
+.related-panel-single .related-actions {
+  gap: 8px;
+  flex-wrap: nowrap;
   align-items: center;
-  justify-content: center;
-  flex: 0 0 20px;
-  width: 20px;
-  height: 20px;
-  padding: 0;
-  border: 1px solid #b9c7d8;
-  border-radius: 999px;
-  background: var(--surface);
-  color: #1b4f8c;
-  cursor: pointer;
-}
-
-.related-menu-btn:hover {
-  border-color: #0176d3;
-  background: #f3f8ff;
-}
-
-.related-menu-btn svg {
-  width: 12px;
-  height: 12px;
-  stroke-width: 2.4;
-}
-
-.related-card-menu {
-  margin-right: 1px;
 }
 
 .related-empty {
@@ -6202,12 +6191,6 @@ html[data-theme="dark"] .related-item {
 html[data-theme="dark"] .related-panel-single .related-card-item:hover,
 html[data-theme="dark"] .related-item:hover {
   background: #1f2235;
-}
-
-html[data-theme="dark"] .related-menu-btn {
-  background: #1a1d27;
-  border-color: #3b4660;
-  color: #9ecbff;
 }
 
 /* ── Kanban headers ────────────────────────────────────── */
