@@ -9,7 +9,7 @@
   <link
     href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap"
     rel="stylesheet">
-  <link rel="stylesheet" href="/greeting.css?v=1">
+  <link rel="stylesheet" href="/production-readiness.css?v=1">
   <style>
     *,
     *::before,
@@ -2233,6 +2233,13 @@
     </button>
 
     <div class="sidebar-section">System</div>
+    <button class="nav-item" onclick="showPanel('announcements')">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <path d="M4 15V9a2 2 0 0 1 2-2h3l5-3v16l-5-3H6a2 2 0 0 1-2-2z" />
+        <path d="M18 9a3 3 0 0 1 0 6" />
+      </svg>
+      System Announcements
+    </button>
     <button class="nav-item" onclick="showPanel('audit')">
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
         <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
@@ -2491,6 +2498,83 @@
                       <div class="spinner"></div>
                     </td>
                   </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel" id="panel-announcements">
+        <div class="page-header">
+          <div>
+            <h1>System Announcements</h1>
+            <p>Manage permanent greetings separately from temporary administrator announcements</p>
+          </div>
+        </div>
+        <div class="card" style="margin-bottom:20px">
+          <div class="toolbar">
+            <div>
+              <div style="font-weight:800;color:var(--text-primary)">System Greetings</div>
+              <div style="font-size:13px;color:var(--text-secondary);margin-top:3px">Permanent fallback banner text used when no announcement is active.</div>
+            </div>
+            <div class="toolbar-right">
+              <button class="btn btn-ghost btn-sm" onclick="loadGreetings()">Refresh</button>
+            </div>
+          </div>
+          <div class="card-body">
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Period</th>
+                    <th>Title</th>
+                    <th>Subtitle</th>
+                    <th>Icon</th>
+                    <th>Background</th>
+                    <th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody id="greetingsBody">
+                  <tr><td colspan="6"><div class="spinner"></div></td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+        <div class="card">
+          <div class="toolbar">
+            <div>
+              <div style="font-weight:800;color:var(--text-primary)">Announcements</div>
+              <div style="font-size:13px;color:var(--text-secondary);margin-top:3px">Highest priority active announcement appears in the CRM banner.</div>
+            </div>
+            <div class="toolbar-right">
+              <button class="btn btn-ghost btn-sm" onclick="loadAnnouncements()">Refresh</button>
+              <button class="btn btn-primary btn-sm" onclick="openAnnouncementModal()">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                  <line x1="12" y1="5" x2="12" y2="19" />
+                  <line x1="5" y1="12" x2="19" y2="12" />
+                </svg>
+                New
+              </button>
+            </div>
+          </div>
+          <div class="card-body">
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Title</th>
+                    <th>Type</th>
+                    <th>Enabled</th>
+                    <th>Priority</th>
+                    <th>Start</th>
+                    <th>End</th>
+                    <th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody id="announcementsBody">
+                  <tr><td colspan="7"><div class="spinner"></div></td></tr>
                 </tbody>
               </table>
             </div>
@@ -3298,9 +3382,9 @@
   <!-- Toast Stack -->
   <div class="toast-stack" id="toastStack"></div>
 
+  <script src="/production-readiness.js?v=1"></script>
   <script src="/client-performance.js?v=1"></script>
   <script src="/session.js?v=1"></script>
-  <script src="/greeting.js?v=1"></script>
   <script>
     // ═══════════════════════════════════════════════════════
     // STATE
@@ -3350,10 +3434,42 @@
     let invitationCooldownTimer = null;
     let confirmCallback = null;
     let confirmLoadingLabel = 'Working...';
+    let greetingAssetsPromise = null;
+    let allAnnouncements = [];
+    let editingAnnouncementId = null;
+    let allGreetings = [];
+    let editingGreetingPeriod = null;
 
     const SF_OBJECTS = ['Account', 'Contact', 'Opportunity', 'Lead', 'Case', 'Campaign', 'Quote', 'Product2', 'OpportunityLineItem', 'QuoteLineItem', 'Task', 'Event'];
 
     function getToken() { return localStorage.getItem('saasray_token'); }
+
+    function ensureGreetingAssets() {
+      if (window.SaaSRAYGreeting) return Promise.resolve();
+      if (greetingAssetsPromise) return greetingAssetsPromise;
+      greetingAssetsPromise = new Promise((resolve, reject) => {
+        if (!document.querySelector('link[data-module="greeting"]')) {
+          const link = document.createElement('link');
+          link.rel = 'stylesheet';
+          link.href = `/greeting.css?v=${encodeURIComponent(window.SAASRAY_BUILD_HASH || '1')}`;
+          link.dataset.module = 'greeting';
+          document.head.appendChild(link);
+        }
+        const script = document.createElement('script');
+        script.src = `/greeting.js?v=${encodeURIComponent(window.SAASRAY_BUILD_HASH || '1')}`;
+        script.dataset.module = 'greeting';
+        script.onload = () => resolve();
+        script.onerror = () => reject(new Error('Greeting module failed to load'));
+        document.head.appendChild(script);
+      });
+      return greetingAssetsPromise;
+    }
+
+    function renderAdminGreeting(user) {
+      ensureGreetingAssets()
+        .then(() => window.SaaSRAYGreeting?.render?.('adminGreetingMount', user || {}))
+        .catch(() => {});
+    }
 
     function clearPendingUserAction(id) {
       pendingUserActions.delete(id);
@@ -3470,7 +3586,7 @@
 
         // Render full admin info card
         renderAdminInfoCard(me);
-        window.SaaSRAYGreeting?.render?.('adminGreetingMount', me);
+        renderAdminGreeting(me);
 
         // Show SF disconnect only to system_administrator
         if (me.role === 'system_administrator') {
@@ -3583,9 +3699,350 @@
     // ═══════════════════════════════════════════════════════
     // NAVIGATION
     // ═══════════════════════════════════════════════════════
+    function formatAnnouncementDate(value) {
+      if (!value) return '-';
+      const date = new Date(value);
+      return Number.isNaN(date.getTime()) ? '-' : date.toLocaleString();
+    }
+
+    function toDateTimeLocal(value) {
+      if (!value) return '';
+      const date = new Date(value);
+      if (Number.isNaN(date.getTime())) return '';
+      const local = new Date(date.getTime() - date.getTimezoneOffset() * 60000);
+      return local.toISOString().slice(0, 16);
+    }
+
+    function fromDateTimeLocal(value) {
+      if (!value) return null;
+      const date = new Date(value);
+      return Number.isNaN(date.getTime()) ? null : date.toISOString();
+    }
+
+    function announcementPayloadFromForm() {
+      return {
+        title: $('ann-title').value.trim(),
+        subtitle: $('ann-subtitle').value.trim(),
+        type: $('ann-type').value,
+        enabled: $('ann-enabled').checked,
+        priority: Number($('ann-priority').value || 1),
+        startDate: fromDateTimeLocal($('ann-start').value),
+        endDate: fromDateTimeLocal($('ann-end').value)
+      };
+    }
+
+    function payloadFromAnnouncement(announcement, overrides = {}) {
+      return {
+        title: announcement.title || '',
+        subtitle: announcement.subtitle || '',
+        type: announcement.type || 'general',
+        enabled: Boolean(announcement.enabled),
+        priority: Number(announcement.priority || 1),
+        startDate: announcement.startDate || null,
+        endDate: announcement.endDate || null,
+        backgroundStyle: announcement.backgroundStyle || '',
+        icon: announcement.icon || '',
+        ...overrides
+      };
+    }
+
+    function announcementTypeLabel(type) {
+      return String(type || 'general')
+        .replace(/-/g, ' ')
+        .replace(/\b\w/g, ch => ch.toUpperCase());
+    }
+
+    function announcementPreviewIcon(type) {
+      return {
+        general: 'i',
+        maintenance: '!',
+        release: '>',
+        warning: '!',
+        success: '✓',
+        security: '⌂',
+        holiday: '*'
+      }[type] || 'i';
+    }
+
+    function renderAnnouncementPreview() {
+      const preview = $('announcementPreview');
+      if (!preview) return;
+      const title = $('ann-title')?.value.trim() || 'Announcement title';
+      const subtitle = $('ann-subtitle')?.value.trim() || 'Short announcement text appears here.';
+      const type = $('ann-type')?.value || 'general';
+      preview.innerHTML = `
+        <div style="display:flex;align-items:center;gap:12px">
+          <div style="width:34px;height:34px;border-radius:9px;background:var(--accent);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:800">${esc(announcementPreviewIcon(type))}</div>
+          <div>
+            <div style="font-weight:800;color:var(--text-primary);font-size:15px">${esc(title)}</div>
+            <div style="font-size:13px;color:var(--text-secondary);margin-top:2px">${esc(subtitle)}</div>
+          </div>
+          <span class="badge" style="margin-left:auto">${esc(announcementTypeLabel(type))}</span>
+        </div>
+      `;
+    }
+
+    async function refreshAdminGreetingBanner() {
+      try {
+        await ensureGreetingAssets();
+        window.SaaSRAYGreeting?.refresh?.('adminGreetingMount', window._adminUser || {});
+      } catch {}
+    }
+
+    function greetingPayloadFromForm() {
+      return {
+        title: $('greeting-title').value.trim(),
+        subtitle: $('greeting-subtitle').value.trim(),
+        icon: $('greeting-icon').value.trim(),
+        backgroundStyle: $('greeting-background').value.trim()
+      };
+    }
+
+    function renderGreetingPreview() {
+      const preview = $('greetingPreview');
+      if (!preview) return;
+      const title = $('greeting-title')?.value.trim() || 'Greeting title';
+      const subtitle = $('greeting-subtitle')?.value.trim() || 'Greeting subtitle appears here.';
+      const icon = $('greeting-icon')?.value.trim() || editingGreetingPeriod?.toLowerCase() || 'morning';
+      preview.innerHTML = `
+        <div style="display:flex;align-items:center;gap:12px">
+          <div style="width:34px;height:34px;border-radius:9px;background:var(--accent);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:800">${esc(icon)}</div>
+          <div>
+            <div style="font-weight:800;color:var(--text-primary);font-size:15px">${esc(title)}</div>
+            <div style="font-size:13px;color:var(--text-secondary);margin-top:2px">${esc(subtitle)}</div>
+          </div>
+          <span class="badge" style="margin-left:auto">${esc(editingGreetingPeriod || 'Greeting')}</span>
+        </div>
+      `;
+    }
+
+    async function loadGreetings() {
+      const tbody = $('greetingsBody');
+      if (tbody) tbody.innerHTML = '<tr><td colspan="6"><div class="spinner"></div></td></tr>';
+      try {
+        const data = await api('/api/portal/admin/greetings');
+        allGreetings = Array.isArray(data.greetings) ? data.greetings : [];
+        renderGreetings();
+      } catch (err) {
+        if (tbody) tbody.innerHTML = `<tr><td colspan="6" style="color:var(--danger)">Failed to load greetings: ${esc(err.message)}</td></tr>`;
+      }
+    }
+
+    function renderGreetings() {
+      const tbody = $('greetingsBody');
+      if (!tbody) return;
+      if (!allGreetings.length) {
+        tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--text-muted);padding:26px">No greeting configuration found.</td></tr>';
+        return;
+      }
+      tbody.innerHTML = allGreetings.map((item) => `
+        <tr>
+          <td><strong>${esc(item.period)}</strong></td>
+          <td>${esc(item.title)}</td>
+          <td>${esc(item.subtitle)}</td>
+          <td>${esc(item.icon || '-')}</td>
+          <td>${item.backgroundStyle ? `<span class="badge">Custom</span>` : '<span style="color:var(--text-muted)">Default</span>'}</td>
+          <td>
+            <div class="action-buttons">
+              <button class="icon-btn" title="Edit greeting" onclick="openGreetingModal('${esc(item.period)}')">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z"/></svg>
+              </button>
+            </div>
+          </td>
+        </tr>
+      `).join('');
+    }
+
+    function openGreetingModal(period) {
+      const item = allGreetings.find((greeting) => greeting.period === period);
+      if (!item) return;
+      editingGreetingPeriod = period;
+      $('greetingModalTitle').textContent = `Edit ${period} Greeting`;
+      $('greeting-period').value = item.period;
+      $('greeting-title').value = item.title || '';
+      $('greeting-subtitle').value = item.subtitle || '';
+      $('greeting-icon').value = item.icon || item.key || '';
+      $('greeting-background').value = item.backgroundStyle || '';
+      renderGreetingPreview();
+      $('greetingModal').classList.add('open');
+    }
+
+    function closeGreetingModal() {
+      $('greetingModal')?.classList.remove('open');
+      editingGreetingPeriod = null;
+    }
+
+    async function saveGreeting() {
+      if (!editingGreetingPeriod) return;
+      const payload = greetingPayloadFromForm();
+      if (!payload.title || !payload.subtitle) {
+        toast('Title and subtitle are required', 'error');
+        return;
+      }
+      const saveBtn = $('greetingSaveBtn');
+      const original = saveBtn?.innerHTML;
+      if (saveBtn) {
+        saveBtn.disabled = true;
+        saveBtn.innerHTML = '<span class="spinner sm"></span> Saving...';
+      }
+      try {
+        await api(`/api/portal/admin/greetings/${encodeURIComponent(editingGreetingPeriod)}`, {
+          method: 'PATCH',
+          body: JSON.stringify(payload)
+        });
+        closeGreetingModal();
+        await loadGreetings();
+        await refreshAdminGreetingBanner();
+        toast('Greeting saved', 'success');
+      } catch (err) {
+        toast(err.message || 'Failed to save greeting', 'error');
+      } finally {
+        if (saveBtn) {
+          saveBtn.disabled = false;
+          saveBtn.innerHTML = original || 'Save';
+        }
+      }
+    }
+
+    async function loadAnnouncements() {
+      const tbody = $('announcementsBody');
+      if (tbody) tbody.innerHTML = '<tr><td colspan="7"><div class="spinner"></div></td></tr>';
+      try {
+        const data = await api('/api/portal/admin/announcements');
+        allAnnouncements = Array.isArray(data.announcements) ? data.announcements : [];
+        renderAnnouncements();
+      } catch (err) {
+        if (tbody) tbody.innerHTML = `<tr><td colspan="7" style="color:var(--danger)">Failed to load announcements: ${esc(err.message)}</td></tr>`;
+      }
+    }
+
+    function renderAnnouncements() {
+      const tbody = $('announcementsBody');
+      if (!tbody) return;
+      if (!allAnnouncements.length) {
+        tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;color:var(--text-muted);padding:26px">No announcements yet.</td></tr>';
+        return;
+      }
+      tbody.innerHTML = allAnnouncements.map((item) => `
+        <tr>
+          <td>
+            <strong>${esc(item.title)}</strong>
+            ${item.subtitle ? `<div style="font-size:12px;color:var(--text-muted);margin-top:3px">${esc(item.subtitle)}</div>` : ''}
+          </td>
+          <td><span class="badge">${esc(announcementTypeLabel(item.type))}</span></td>
+          <td><span class="badge ${item.enabled ? 'success' : ''}">${item.enabled ? 'Enabled' : 'Disabled'}</span></td>
+          <td>${esc(item.priority)}</td>
+          <td>${esc(formatAnnouncementDate(item.startDate))}</td>
+          <td>${esc(formatAnnouncementDate(item.endDate))}</td>
+          <td>
+            <div class="action-buttons">
+              <button class="icon-btn" title="Preview" onclick="openAnnouncementModal('${esc(item.id)}')">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/></svg>
+              </button>
+              <button class="icon-btn" title="Edit" onclick="openAnnouncementModal('${esc(item.id)}')">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z"/></svg>
+              </button>
+              <button class="icon-btn" title="${item.enabled ? 'Disable' : 'Enable'}" onclick="toggleAnnouncement('${esc(item.id)}')">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">${item.enabled ? '<path d="M18.36 6.64A9 9 0 1 1 5.64 19.36"/><path d="M12 2v10"/>' : '<path d="M12 2v10"/><path d="M18.36 6.64a9 9 0 1 1-12.72 0"/>'}</svg>
+              </button>
+              <button class="icon-btn danger" title="Delete" onclick="deleteAnnouncement('${esc(item.id)}')">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/></svg>
+              </button>
+            </div>
+          </td>
+        </tr>
+      `).join('');
+    }
+
+    function openAnnouncementModal(id = null) {
+      editingAnnouncementId = id;
+      const item = id ? allAnnouncements.find((announcement) => announcement.id === id) : null;
+      $('announcementModalTitle').textContent = item ? 'Edit Announcement' : 'New Announcement';
+      $('ann-title').value = item?.title || '';
+      $('ann-subtitle').value = item?.subtitle || '';
+      $('ann-type').value = item?.type || 'general';
+      $('ann-priority').value = item?.priority ?? 1;
+      $('ann-enabled').checked = item ? Boolean(item.enabled) : true;
+      $('ann-start').value = toDateTimeLocal(item?.startDate);
+      $('ann-end').value = toDateTimeLocal(item?.endDate);
+      renderAnnouncementPreview();
+      $('announcementModal').classList.add('open');
+    }
+
+    function closeAnnouncementModal() {
+      $('announcementModal')?.classList.remove('open');
+      editingAnnouncementId = null;
+    }
+
+    async function saveAnnouncement() {
+      const payload = announcementPayloadFromForm();
+      if (!payload.title) {
+        toast('Title is required', 'error');
+        return;
+      }
+      const saveBtn = $('announcementSaveBtn');
+      const original = saveBtn?.innerHTML;
+      if (saveBtn) {
+        saveBtn.disabled = true;
+        saveBtn.innerHTML = '<span class="spinner sm"></span> Saving...';
+      }
+      try {
+        const path = editingAnnouncementId
+          ? `/api/portal/admin/announcements/${editingAnnouncementId}`
+          : '/api/portal/admin/announcements';
+        await api(path, {
+          method: editingAnnouncementId ? 'PATCH' : 'POST',
+          body: JSON.stringify(payload)
+        });
+        closeAnnouncementModal();
+        await loadAnnouncements();
+        await refreshAdminGreetingBanner();
+        toast('Announcement saved', 'success');
+      } catch (err) {
+        toast(err.message || 'Failed to save announcement', 'error');
+      } finally {
+        if (saveBtn) {
+          saveBtn.disabled = false;
+          saveBtn.innerHTML = original || 'Save';
+        }
+      }
+    }
+
+    async function toggleAnnouncement(id) {
+      const item = allAnnouncements.find((announcement) => announcement.id === id);
+      if (!item) return;
+      try {
+        await api(`/api/portal/admin/announcements/${id}`, {
+          method: 'PATCH',
+          body: JSON.stringify(payloadFromAnnouncement(item, { enabled: !item.enabled }))
+        });
+        await loadAnnouncements();
+        await refreshAdminGreetingBanner();
+      } catch (err) {
+        toast(err.message || 'Failed to update announcement', 'error');
+      }
+    }
+
+    async function deleteAnnouncement(id) {
+      const item = allAnnouncements.find((announcement) => announcement.id === id);
+      if (!item) return;
+      openConfirm(
+        'Delete announcement?',
+        `Delete "${item.title}"? This cannot be undone.`,
+        async () => {
+          await api(`/api/portal/admin/announcements/${id}`, { method: 'DELETE' });
+          await loadAnnouncements();
+          await refreshAdminGreetingBanner();
+          toast('Announcement deleted', 'success');
+        },
+        'Delete'
+      );
+    }
+
     const PANEL_TITLES = {
       users: 'User Management', profiles: 'Profiles',
       permsets: 'Permission Sets', audit: 'Audit Log',
+      announcements: 'System Announcements',
       fieldsecurity: 'Field Security', owd: 'Org-Wide Defaults',
       sharing: 'Sharing Rules', psggroups: 'Permission Set Groups',
       orgroles: 'Role Hierarchy',
@@ -3658,6 +4115,7 @@
       loadedPanels.add(name);
       try {
         if (name === 'audit') await loadAuditLog();
+        if (name === 'announcements') await Promise.all([loadGreetings(), loadAnnouncements()]);
         if (name === 'fieldsecurity') await initFieldSecurity();
         if (name === 'owd') await loadOWD();
         if (name === 'sharing') await loadSharingRules();
@@ -6517,7 +6975,7 @@ function deletePublicGroup(id, name) {
         activatePanelDirect('object-manager', isPopState);
       } else {
         const panelName = path.split('/')[2] || 'users';
-        const validPanels = ['users', 'profiles', 'permsets', 'fieldsecurity', 'owd', 'sharing', 'psggroups', 'orgroles', 'publicgroups', 'audit'];
+        const validPanels = ['users', 'profiles', 'permsets', 'fieldsecurity', 'owd', 'sharing', 'psggroups', 'orgroles', 'publicgroups', 'announcements', 'audit'];
         const activePanel = validPanels.includes(panelName) ? panelName : 'users';
         activatePanelDirect(activePanel, isPopState);
       }
@@ -9898,6 +10356,118 @@ function deletePublicGroup(id, name) {
 
 
 
+
+<div class="overlay" id="greetingModal" onclick="if(event.target===this)closeGreetingModal()">
+  <div class="modal modal-wide">
+    <div class="modal-head">
+      <div>
+        <h2 id="greetingModalTitle">Edit Greeting</h2>
+        <p style="font-size:12px;color:var(--text-muted);margin-top:3px">Permanent fallback greeting shown when no announcement is active.</p>
+      </div>
+      <button class="close-btn" onclick="closeGreetingModal()">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+        </svg>
+      </button>
+    </div>
+    <div class="modal-body">
+      <div class="form-grid" style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
+        <div class="form-group">
+          <label class="form-label">Period</label>
+          <input class="form-ctrl" id="greeting-period" disabled>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Icon</label>
+          <input class="form-ctrl" id="greeting-icon" oninput="renderGreetingPreview()">
+        </div>
+        <div class="form-group" style="grid-column:1 / -1">
+          <label class="form-label">Title <span class="req">*</span></label>
+          <input class="form-ctrl" id="greeting-title" oninput="renderGreetingPreview()">
+        </div>
+        <div class="form-group" style="grid-column:1 / -1">
+          <label class="form-label">Subtitle <span class="req">*</span></label>
+          <textarea class="form-ctrl" id="greeting-subtitle" rows="3" oninput="renderGreetingPreview()"></textarea>
+        </div>
+        <div class="form-group" style="grid-column:1 / -1">
+          <label class="form-label">Background</label>
+          <input class="form-ctrl" id="greeting-background" placeholder="Optional CSS background style">
+        </div>
+      </div>
+      <div style="margin-top:18px">
+        <label class="form-label">Preview</label>
+        <div id="greetingPreview" style="padding:16px 18px;border:1px solid var(--border);border-radius:var(--radius);background:linear-gradient(105deg,#fff,rgba(255,247,211,.55))"></div>
+      </div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn btn-ghost" onclick="closeGreetingModal()">Cancel</button>
+      <button class="btn btn-primary" id="greetingSaveBtn" onclick="saveGreeting()">Save</button>
+    </div>
+  </div>
+</div>
+
+<div class="overlay" id="announcementModal" onclick="if(event.target===this)closeAnnouncementModal()">
+  <div class="modal modal-wide">
+    <div class="modal-head">
+      <div>
+        <h2 id="announcementModalTitle">New Announcement</h2>
+        <p style="font-size:12px;color:var(--text-muted);margin-top:3px">Plain text banner message shown at the top of CRM.</p>
+      </div>
+      <button class="close-btn" onclick="closeAnnouncementModal()">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+        </svg>
+      </button>
+    </div>
+    <div class="modal-body">
+      <div class="form-grid" style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
+        <div class="form-group" style="grid-column:1 / -1">
+          <label class="form-label">Title <span class="req">*</span></label>
+          <input class="form-ctrl" id="ann-title" oninput="renderAnnouncementPreview()">
+        </div>
+        <div class="form-group" style="grid-column:1 / -1">
+          <label class="form-label">Subtitle</label>
+          <textarea class="form-ctrl" id="ann-subtitle" rows="3" oninput="renderAnnouncementPreview()"></textarea>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Type</label>
+          <select class="form-ctrl" id="ann-type" onchange="renderAnnouncementPreview()">
+            <option value="general">General</option>
+            <option value="maintenance">Maintenance</option>
+            <option value="release">Release</option>
+            <option value="warning">Warning</option>
+            <option value="success">Success</option>
+            <option value="security">Security</option>
+            <option value="holiday">Holiday</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Priority</label>
+          <input class="form-ctrl" id="ann-priority" type="number" value="1" oninput="renderAnnouncementPreview()">
+        </div>
+        <label style="display:flex;align-items:center;gap:9px;font-size:13px;color:var(--text-secondary)">
+          <input type="checkbox" id="ann-enabled" checked onchange="renderAnnouncementPreview()"> Enabled
+        </label>
+        <div></div>
+        <div class="form-group">
+          <label class="form-label">Start Date</label>
+          <input class="form-ctrl" id="ann-start" type="datetime-local">
+        </div>
+        <div class="form-group">
+          <label class="form-label">End Date</label>
+          <input class="form-ctrl" id="ann-end" type="datetime-local">
+        </div>
+      </div>
+      <div style="margin-top:18px">
+        <label class="form-label">Preview</label>
+        <div id="announcementPreview" style="padding:16px 18px;border:1px solid var(--border);border-radius:var(--radius);background:linear-gradient(105deg,#fff,rgba(255,247,211,.55))"></div>
+      </div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn btn-ghost" onclick="closeAnnouncementModal()">Cancel</button>
+      <button class="btn btn-primary" id="announcementSaveBtn" onclick="saveAnnouncement()">Save</button>
+    </div>
+  </div>
+</div>
 
 <div class="overlay" id="assignRoleModal" onclick="if(event.target===this)closeAssignRoleModal()">
   <div class="modal modal-wide">

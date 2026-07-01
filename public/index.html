@@ -9,8 +9,8 @@
   <link
     href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap"
     rel="stylesheet">
-  <link rel="stylesheet" href="style.css?v=6">
-  <link rel="stylesheet" href="greeting.css?v=1">
+  <link rel="stylesheet" href="style.css?v=7">
+  <link rel="stylesheet" href="production-readiness.css?v=1">
 </head>
 
 <body class="nav-loading">
@@ -386,7 +386,7 @@
     </div>
   </div>
 
-  <div class="overlay" id="orgOverlay" onclick="overlayClick(event, 'orgOverlay', closeOrgModal)">
+  <div class="overlay" id="orgOverlay" data-unsaved-ignore="true" onclick="overlayClick(event, 'orgOverlay', closeOrgModal)">
     <div class="modal modal-sm" onclick="event.stopPropagation()">
       <div class="modal-head">
         <div class="modal-title-group">
@@ -441,7 +441,7 @@
       </div>
       <div class="modal-foot">
         <button class="btn btn-ghost" onclick="closeOrgModal()">Cancel</button>
-        <button class="btn btn-primary" onclick="saveOrgAndConnect()">Save & Connect</button>
+        <button class="btn btn-primary" data-trusted-navigation="salesforce-oauth" onclick="saveOrgAndConnect()">Save & Connect</button>
       </div>
     </div>
   </div>
@@ -645,11 +645,12 @@
   <div class="toast-stack" id="toastStack"></div>
 
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="production-readiness.js?v=1"></script>
   <script src="perf-audit.js?v=1"></script>
   <script src="client-performance.js?v=1"></script>
   <script src="session.js?v=1"></script>
-  <script src="greeting.js?v=1"></script>
-  <script src="app.js?v=26"></script>
+  <script src="object-registry.js?v=1"></script>
+  <script src="app.js?v=27"></script>
 </body>
 
 </html>

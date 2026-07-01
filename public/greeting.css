@@ -2,7 +2,7 @@
   position: relative;
   overflow: hidden;
   min-height: 74px;
-  margin: -4px 0 14px;
+  margin: -12px 0 4px;
   padding: 16px 24px;
   border: 1px solid var(--border, #d8e2ef);
   border-radius: var(--radius-lg, 10px);
@@ -26,6 +26,28 @@
 
 .enterprise-greeting-night {
   background: linear-gradient(105deg, rgba(255, 255, 255, 0.98), rgba(211, 219, 255, 0.45));
+}
+
+.enterprise-greeting-general,
+.enterprise-greeting-release {
+  background: linear-gradient(105deg, rgba(255, 255, 255, 0.98), rgba(219, 234, 254, 0.5));
+}
+
+.enterprise-greeting-maintenance,
+.enterprise-greeting-warning {
+  background: linear-gradient(105deg, rgba(255, 255, 255, 0.98), rgba(254, 243, 199, 0.58));
+}
+
+.enterprise-greeting-success {
+  background: linear-gradient(105deg, rgba(255, 255, 255, 0.98), rgba(220, 252, 231, 0.55));
+}
+
+.enterprise-greeting-security {
+  background: linear-gradient(105deg, rgba(255, 255, 255, 0.98), rgba(237, 233, 254, 0.55));
+}
+
+.enterprise-greeting-holiday {
+  background: linear-gradient(105deg, rgba(255, 255, 255, 0.98), rgba(255, 237, 213, 0.55));
 }
 
 .enterprise-greeting-main {
@@ -145,7 +167,7 @@ html[data-theme="dark"] .enterprise-greeting-icon {
 @media (max-width: 700px) {
   .enterprise-greeting {
     min-height: 66px;
-    margin: -2px 0 12px;
+    margin: -8px 0 4px;
     padding: 14px 16px;
   }
 

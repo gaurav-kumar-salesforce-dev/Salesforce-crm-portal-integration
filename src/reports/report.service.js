@@ -2,7 +2,7 @@ const { supabase } = require('../../db');
 const { normalizeReportDefinition } = require('./report-validator');
 const { runTabularReport } = require('./report-engine');
 const { toCsv, toXlsx } = require('./report-exporter');
-const reportCache = require('./report-cache');
+const reportCache = require('../cache/report-cache');
 
 async function listFolders(user) {
   const { data, error } = await supabase
@@ -410,14 +410,14 @@ async function exportReportXlsx(reportId, user, deps) {
 
 async function metadata(user, deps) {
   const objects = Object.keys(deps.objects)
-    .filter((name) => !['Task', 'Event', 'EmailMessage', 'Pricebook2', 'User'].includes(name));
+    .filter((name) => deps.getObjectConfig?.(name)?.supportsReports !== false);
 
   const readable = [];
   await Promise.all(objects.map(async (objectName) => {
     const perms = await deps.getEffectivePermissions(user.id, objectName);
     if (user.isSystemAdmin || perms?.can_read) readable.push({
       apiName: objectName,
-      label: objectName === 'Product2' ? 'Product' : objectName === 'OpportunityLineItem' ? 'Opportunity Product' : objectName === 'QuoteLineItem' ? 'Quote Line Item' : objectName
+      label: deps.getObjectConfig?.(objectName)?.label || objectName
     });
   }));
   return readable.sort((a, b) => a.label.localeCompare(b.label));

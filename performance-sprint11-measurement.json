@@ -1,0 +1,149 @@
+{
+  "sprint": "Sprint 11 - Enterprise Salesforce Composite Engine",
+  "date": "2026-06-30",
+  "branch": "feature/enterprise-backend-architecture",
+  "scope": "Backend Salesforce round-trip reduction only. Frontend, API URLs, response schemas, auth, RBAC, FLS, sharing, reports, dashboards, admin, layouts, and business behavior were preserved.",
+  "filesModified": [
+    "src/app.js",
+    "src/salesforce/composite.client.js",
+    "performance-sprint11-measurement.json"
+  ],
+  "architectureSummary": {
+    "compositeLayer": {
+      "file": "src/salesforce/composite.client.js",
+      "capabilities": [
+        "Composite API GET orchestration",
+        "Automatic fallback to the existing REST implementation",
+        "Composite Graph placeholder foundation",
+        "Batch API placeholder foundation",
+        "Developer/admin instrumentation counters"
+      ]
+    },
+    "integrationPoints": [
+      {
+        "area": "Record detail cold metadata path",
+        "behavior": "Fetches record and object describe through one Composite request when describe metadata is not already cached. If describe metadata is cached, existing one-record REST path remains."
+      },
+      {
+        "area": "Lookup label resolution",
+        "behavior": "Batches multiple lookup-label SOQL queries into one Composite request when a record references multiple object types."
+      },
+      {
+        "area": "Activity panel",
+        "behavior": "Batches EmailMessage, Task, and Event read queries into one Composite request with per-query fallback warnings preserved."
+      },
+      {
+        "area": "Developer diagnostics",
+        "behavior": "Adds admin-only /api/debug/composite and /api/debug/composite/reset endpoints for composite counters."
+      }
+    ]
+  },
+  "beforeAfterSalesforceRequestCounts": {
+    "recordDetailColdDescribe": {
+      "before": 2,
+      "after": 1,
+      "requestsSaved": 1,
+      "notes": "Record + describe are composite-batched only when metadata is cold. Warm metadata remains one record request."
+    },
+    "lookupLabels": {
+      "before": "1 Salesforce query per referenced object type",
+      "after": "1 Composite request for all referenced object-type label queries when more than one group exists",
+      "requestsSavedFormula": "max(lookupObjectGroups - 1, 0)"
+    },
+    "activityPanel": {
+      "before": 3,
+      "after": 1,
+      "requestsSaved": 2,
+      "notes": "EmailMessage, Task, and Event queries are safe independent reads."
+    }
+  },
+  "beforeAfterLatency": {
+    "expectedImpact": "Latency improvement is proportional to removed Salesforce HTTP round trips. The largest expected win is Activity, followed by cold record detail and multi-object lookup label hydration.",
+    "liveTiming": {
+      "status": "not_run",
+      "reason": "Static validation was performed in this environment. Runtime counters are now available at /api/debug/composite for admin users."
+    }
+  },
+  "compositeCoverage": {
+    "implemented": [
+      "Composite API safe GET batching",
+      "Record detail record+describe cold path",
+      "Lookup label query batching",
+      "Activity query batching",
+      "Instrumentation counters"
+    ],
+    "preparedFoundation": [
+      "Composite Graph placeholder",
+      "Batch API placeholder"
+    ],
+    "notChanged": [
+      "Create/update/delete Salesforce calls",
+      "Reports",
+      "Dashboards",
+      "Admin",
+      "Layouts",
+      "Related list response schemas",
+      "Object list API schemas",
+      "Frontend behavior"
+    ]
+  },
+  "fallbackStrategy": {
+    "automatic": true,
+    "details": [
+      "Composite is skipped for zero or one eligible subrequest.",
+      "If Composite API fails or returns any non-2xx subresponse, the client falls back to each subrequest's existing REST implementation.",
+      "Fallbacks reuse the existing sfGet path, including auth refresh retry and perf instrumentation.",
+      "User-visible responses preserve the same shape because only backend Salesforce transport changed."
+    ]
+  },
+  "instrumentation": {
+    "adminOnlyEndpoints": [
+      "GET /api/debug/composite",
+      "POST /api/debug/composite/reset"
+    ],
+    "metrics": [
+      "compositeRequests",
+      "graphRequests",
+      "batchRequests",
+      "fallbacks",
+      "requestsSaved",
+      "totalLatencyMs",
+      "averageLatencyMs",
+      "failures"
+    ]
+  },
+  "validation": {
+    "commands": [
+      {
+        "command": "node --check server.js",
+        "status": "passed"
+      },
+      {
+        "command": "node --check src/app.js",
+        "status": "passed"
+      },
+      {
+        "command": "node --check src/salesforce/composite.client.js",
+        "status": "passed"
+      },
+      {
+        "command": "module-load check for src/salesforce/composite.client.js",
+        "status": "passed"
+      }
+    ]
+  },
+  "remainingBottlenecks": [
+    "Related list queries still have opportunities for deeper batching, but relationship-specific fallbacks should be covered by parity tests before expanding.",
+    "Large SOQL result payload parsing is unchanged.",
+    "Composite Graph remains a prepared foundation and was not enabled in Sprint 11."
+  ],
+  "confirmation": {
+    "frontendChanged": false,
+    "apiSchemaChanged": false,
+    "authChanged": false,
+    "rbacChanged": false,
+    "flsChanged": false,
+    "sharingChanged": false,
+    "sprint12Started": false
+  }
+}

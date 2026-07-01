@@ -1,0 +1,172 @@
+{
+  "sprint": "Sprint 12 - Generic Object Engine",
+  "date": "2026-07-01",
+  "branch": "feature/enterprise-backend-architecture",
+  "scope": "Generic object registry and safe metadata-driven integration only. Existing auth, OAuth, JWT, RBAC, FLS, sharing, reports behavior, dashboards behavior, caching, Composite API, frontend routes, API URLs, and response schemas were preserved.",
+  "filesModified": [
+    "src/config/object-registry.js",
+    "src/app.js",
+    "src/reports/report.service.js",
+    "src/reports/report-engine.js",
+    "public/index.html",
+    "public/app.js",
+    "public/reports.html",
+    "public/reports.js",
+    "architecture-sprint12-measurement.json"
+  ],
+  "registryDesign": {
+    "module": "src/config/object-registry.js",
+    "objectDefinitionFields": [
+      "apiName",
+      "label",
+      "pluralLabel",
+      "icon",
+      "color",
+      "fields",
+      "defaultSort",
+      "defaultListView",
+      "searchFields",
+      "listColumns",
+      "editableFields",
+      "lookupFields",
+      "relatedLists",
+      "reportRelationships",
+      "compactLayout",
+      "supportsReports",
+      "supportsDashboard",
+      "supportsGlobalSearch",
+      "supportsActivities",
+      "supportsChatter",
+      "supportsInlineEdit",
+      "supportsKanban",
+      "supportsImport",
+      "supportsExport",
+      "primary",
+      "internal"
+    ],
+    "exports": [
+      "getObjectConfig",
+      "getObjectDefinitions",
+      "getPrimaryObjectNames",
+      "getInternalObjectNames",
+      "getReportableObjectNames",
+      "getReportRelationshipMap",
+      "getFrontendRegistry",
+      "cloneObjectRegistry"
+    ],
+    "browserExposure": "GET /object-registry.js emits window.SaaSRAY_OBJECT_REGISTRY for SPA/report builder use."
+  },
+  "hardcodedLogicRemoved": [
+    "Backend OBJECTS literal is now derived from the object registry.",
+    "Primary CRM object list is now derived from registry primary flags.",
+    "Internal object list is now derived from registry internal flags.",
+    "Startup sf_objects labels now come from registry labels instead of object-name ternaries.",
+    "Report metadata object labels now come from registry labels.",
+    "Report metadata object eligibility now uses supportsReports.",
+    "Report cross-filter relationships now come from registry reportRelationships.",
+    "Standard related list definitions now come from registry relatedLists.",
+    "Frontend app object metadata is overlaid from the generated registry.",
+    "Report builder relationship options now read browser registry relationships."
+  ],
+  "genericEngineSummary": {
+    "backend": [
+      "Existing generic routes still use OBJECTS, but OBJECTS is now registry-generated.",
+      "Related list rendering can consume registry relationship definitions for standard child-object lookups.",
+      "Reports and dashboard report metadata can discover registered reportable objects through registry flags."
+    ],
+    "frontend": [
+      "The CRM SPA loads object-registry.js before app.js.",
+      "Existing OBJECT_META remains backward-compatible and is merged with registry metadata.",
+      "Reports page loads object-registry.js and derives custom report/cross-filter relationships from it."
+    ],
+    "newObjectPath": [
+      "Register the object in src/config/object-registry.js.",
+      "Grant permissions/profile access as before.",
+      "The backend list/detail/search/report metadata paths can consume the new registry entry without route duplication."
+    ]
+  },
+  "objectsMetadataDriven": {
+    "count": 15,
+    "primaryObjects": [
+      "Account",
+      "Contact",
+      "Opportunity",
+      "Case",
+      "Lead",
+      "Campaign",
+      "Quote",
+      "Product2",
+      "OpportunityLineItem",
+      "QuoteLineItem"
+    ],
+    "internalObjects": [
+      "Task",
+      "Event",
+      "EmailMessage",
+      "Pricebook2",
+      "User"
+    ],
+    "reportableObjects": [
+      "Account",
+      "Contact",
+      "Opportunity",
+      "Case",
+      "Lead",
+      "Campaign",
+      "Quote",
+      "Product2",
+      "OpportunityLineItem",
+      "QuoteLineItem"
+    ]
+  },
+  "validation": {
+    "commands": [
+      {
+        "command": "node --check server.js",
+        "status": "passed"
+      },
+      {
+        "command": "node --check src/app.js",
+        "status": "passed"
+      },
+      {
+        "command": "node --check src/config/object-registry.js",
+        "status": "passed"
+      },
+      {
+        "command": "node --check public/app.js",
+        "status": "passed"
+      },
+      {
+        "command": "node --check public/reports.js",
+        "status": "passed"
+      },
+      {
+        "command": "registry smoke test",
+        "status": "passed",
+        "result": {
+          "objects": 15,
+          "primary": 10,
+          "reportable": 10,
+          "relationshipParents": 2
+        }
+      }
+    ]
+  },
+  "remainingHardcodedAreas": [
+    "Global SOSL RETURNING clauses still use explicit object field lists to preserve current search response behavior.",
+    "Salesforce key-prefix object detection remains explicit because key prefixes are Salesforce-specific and should be validated per org before registry-only use.",
+    "Special related list logic remains for OpportunityContactRole and org-specific Opportunity-to-Case lookup detection.",
+    "Some report builder preferred-field display ordering remains hardcoded for user experience consistency.",
+    "Object-specific detail layout sections in public/app.js remain as UI layout definitions, not route/API behavior."
+  ],
+  "confirmation": {
+    "apiSchemasChanged": false,
+    "frontendRedesigned": false,
+    "authChanged": false,
+    "rbacChanged": false,
+    "flsChanged": false,
+    "sharingChanged": false,
+    "sprint13Started": false
+  }
+}

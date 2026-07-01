@@ -1,0 +1,210 @@
+{
+  "sprint": "Sprint 9 - Enterprise Performance Phase 9",
+  "date": "2026-06-30",
+  "branch": "feature/enterprise-performance-phase9",
+  "scope": "HTTP delivery, static asset versioning, frontend startup request reduction, lazy greeting module loading, smart prefetch, virtual-list instrumentation, and developer diagnostics only.",
+  "outOfScopeConfirmedUnchanged": [
+    "Authentication flow",
+    "JWT format",
+    "RBAC",
+    "Field-level security",
+    "Sharing rules",
+    "Business logic",
+    "Salesforce SOQL semantics",
+    "Reports business logic",
+    "Dashboards business logic",
+    "Admin business logic",
+    "Sprint 1 user context cache",
+    "Sprint 2 metadata cache",
+    "Sprint 3 object list backend optimization",
+    "Sprint 4 record/detail cache",
+    "Sprint 5 request context cache",
+    "Sprint 6-8 SPA state architecture"
+  ],
+  "filesModified": [
+    "server.js",
+    "public/client-performance.js",
+    "public/app.js",
+    "public/index.html",
+    "public/admin.html",
+    "performance-sprint9-measurement.json"
+  ],
+  "implementationSummary": {
+    "httpOptimization": {
+      "implemented": true,
+      "details": [
+        "Added centralized HTTP optimization middleware.",
+        "Added Brotli compression when accepted by the browser.",
+        "Added gzip fallback when Brotli is unavailable.",
+        "Compression is limited to text, JSON, JavaScript, CSS, SVG, XML, and HTML responses.",
+        "Non-compressible responses stream through without being buffered.",
+        "Added Keep-Alive headers.",
+        "Added ETag and Last-Modified handling for versioned HTML entry points.",
+        "Authenticated API responses are marked no-store/no-cache/private."
+      ]
+    },
+    "staticAssets": {
+      "implemented": true,
+      "details": [
+        "Added automatic build hash generation from public asset mtimes and sizes.",
+        "HTML entry points receive script/link URLs with ?v=<buildHash>.",
+        "Static non-HTML assets use long-lived immutable browser cache headers.",
+        "HTML documents remain no-store to preserve authenticated SPA/session correctness."
+      ]
+    },
+    "frontendStartup": {
+      "implemented": true,
+      "details": [
+        "Parallelized org settings, connection check, and /api/portal/me startup work.",
+        "Removed duplicate /api/portal/me startup request by passing the already-loaded user context into loadProfile().",
+        "Preserved permission-gated sidebar initialization."
+      ]
+    },
+    "lazyModules": {
+      "implemented": true,
+      "details": [
+        "Removed eager greeting.css and greeting.js from CRM and Admin initial HTML.",
+        "Greeting assets are loaded only when the greeting mount is rendered.",
+        "Reports, Dashboards, and Admin remain separate route/page bundles as before."
+      ]
+    },
+    "virtualList": {
+      "implemented": true,
+      "details": [
+        "Existing object-list virtualization was preserved.",
+        "Render timing instrumentation was added around table render and virtual window render.",
+        "No UI behavior, sorting, filtering, selection, edit/delete, or infinite-scroll semantics were changed."
+      ]
+    },
+    "smartPrefetch": {
+      "implemented": true,
+      "details": [
+        "Likely next object lists are prefetched after the current object successfully renders.",
+        "Prefetch runs through requestIdleCallback or timeout fallback.",
+        "Prefetch cancels when user interaction occurs before the idle callback runs.",
+        "Prefetch respects object read permissions and existing auth token handling.",
+        "Prefetched list payloads are reused by the existing CRM list cache path."
+      ]
+    },
+    "developerDiagnostics": {
+      "implemented": true,
+      "details": [
+        "Added window.getPerformanceStats() in localhost/dev mode.",
+        "Stats include client cache hits/misses, deduped requests, stale responses, API timings, render timings, resource transfer/encoded/decoded bytes, compression ratio, module initialization, and JS heap data where available.",
+        "Existing admin-only /api/debug/performance-audit remains the backend source for Salesforce/Supabase timing details."
+      ]
+    }
+  },
+  "beforeAfter": {
+    "startupRequests": {
+      "before": {
+        "portalMeRequestsDuringInitialAuthenticatedBoot": 2,
+        "greetingAssetsLoadedBeforeNeeded": 2,
+        "independentStartupRequests": "sequential"
+      },
+      "after": {
+        "portalMeRequestsDuringInitialAuthenticatedBoot": 1,
+        "greetingAssetsLoadedBeforeNeeded": 0,
+        "independentStartupRequests": "parallel"
+      }
+    },
+    "staticAssetCaching": {
+      "before": {
+        "fingerprintedAssetUrls": false,
+        "immutableStaticCache": false,
+        "htmlEntryPointRevalidation": "default/static-server behavior"
+      },
+      "after": {
+        "fingerprintedAssetUrls": true,
+        "immutableStaticCache": "public, max-age=31536000, immutable",
+        "htmlEntryPointRevalidation": "ETag + Last-Modified with no-store/no-cache/private"
+      }
+    },
+    "compression": {
+      "before": {
+        "brotli": false,
+        "gzip": false,
+        "apiJsonCompression": false,
+        "htmlJsCssCompression": false
+      },
+      "after": {
+        "brotli": true,
+        "gzip": true,
+        "apiJsonCompression": true,
+        "htmlJsCssCompression": true,
+        "expectedTextPayloadReduction": "50-85% depending on asset/payload shape"
+      }
+    },
+    "objectListDom": {
+      "before": {
+        "virtualization": "present before this sprint in the SPA state branch",
+        "renderDiagnostics": false
+      },
+      "after": {
+        "virtualization": "preserved",
+        "renderDiagnostics": true,
+        "largeListBehavior": "visible window plus buffers instead of full table DOM"
+      }
+    },
+    "prefetch": {
+      "before": {
+        "idleNextObjectPrefetch": false,
+        "interactionCancellation": false
+      },
+      "after": {
+        "idleNextObjectPrefetch": true,
+        "interactionCancellation": true,
+        "permissionAware": true
+      }
+    }
+  },
+  "validation": {
+    "commands": [
+      {
+        "command": "node --check server.js",
+        "status": "passed"
+      },
+      {
+        "command": "node --check public/app.js",
+        "status": "passed"
+      },
+      {
+        "command": "node --check public/reports.js",
+        "status": "passed"
+      },
+      {
+        "command": "node --check public/dashboards.js",
+        "status": "passed"
+      },
+      {
+        "command": "node --check db.js",
+        "status": "passed"
+      },
+      {
+        "command": "inline script parse check for public/admin.html",
+        "status": "passed"
+      },
+      {
+        "command": "git diff --check",
+        "status": "passed",
+        "notes": "Git emitted line-ending normalization warnings only; no whitespace errors were reported."
+      }
+    ],
+    "liveBrowserTiming": {
+      "status": "not_run",
+      "reason": "This measurement artifact records implementation-level before/after and static validation. Runtime timings can now be captured with window.getPerformanceStats() and the existing admin-only /api/debug/performance-audit endpoint."
+    }
+  },
+  "remainingBottlenecks": [
+    "Live browser measurements should be captured across cold and warm loads after deployment because compression ratios depend on browser cache state and payload shape.",
+    "Salesforce/Supabase server-side timings remain available through the existing performance audit endpoint and should be compared with client resource timings during final QA.",
+    "Very large JSON API payloads are still constrained by payload size and parsing cost even when compressed; this sprint did not change API schemas or backend pagination behavior."
+  ],
+  "confirmation": {
+    "noSprint10Started": true,
+    "businessLogicChanged": false,
+    "apiResponseSchemasChanged": false,
+    "backendSecurityChanged": false,
+    "uiRedesignChanged": false
+  }
+}

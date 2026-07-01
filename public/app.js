@@ -347,6 +347,189 @@ const OBJECT_META = {
   },
 };
 
+const REGISTERED_OBJECT_META = window.SaaSRAY_OBJECT_REGISTRY || {};
+Object.keys(REGISTERED_OBJECT_META).forEach((apiName) => {
+  OBJECT_META[apiName] = {
+    ...(REGISTERED_OBJECT_META[apiName] || {}),
+    ...(OBJECT_META[apiName] || {}),
+    lookups: {
+      ...(REGISTERED_OBJECT_META[apiName]?.lookups || {}),
+      ...(OBJECT_META[apiName]?.lookups || {}),
+    },
+  };
+});
+
+const WORKSPACE_STORAGE_KEY = "saasray_workspace_v1";
+const WORKSPACE_RECENT_KEY = "saasray_workspace_recent_v1";
+const WORKSPACE_PINNED_KEY = "saasray_workspace_pinned_v1";
+const WORKSPACE_MAX_RECENT = 20;
+const WORKSPACE_MAX_PINNED = 10;
+const WORKSPACE_MAX_TABS = 10;
+const workspaceState = {
+  tabs: [],
+  activeTabId: null,
+  favorites: [],
+  pinned: [],
+  recent: {},
+  commandOpen: false,
+  panelOpen: localStorage.getItem("saasray_workspace_panel_collapsed") !== "1",
+};
+
+function workspaceSafeParse(raw, fallback) {
+  try {
+    return raw ? JSON.parse(raw) : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function workspaceRecordKey(objectName, id) {
+  return `${objectName}:${id}`;
+}
+
+function workspaceRecordTitle(objectName, record = {}, fallbackId = "") {
+  return record.Name || record.Subject || record.CaseNumber || record.Email || record.Title || fallbackId || objectName;
+}
+
+function workspaceObjectLabel(objectName) {
+  return OBJECT_META[objectName]?.label || OBJECT_META[objectName]?.title?.replace(/s$/, "") || objectName;
+}
+
+function workspaceObjectPlural(objectName) {
+  return OBJECT_META[objectName]?.title || `${workspaceObjectLabel(objectName)}s`;
+}
+
+function loadWorkspaceState() {
+  const saved = workspaceSafeParse(localStorage.getItem(WORKSPACE_STORAGE_KEY), {});
+  workspaceState.tabs = Array.isArray(saved.tabs) ? saved.tabs.slice(0, WORKSPACE_MAX_TABS) : [];
+  workspaceState.activeTabId = saved.activeTabId || workspaceState.tabs[0]?.tabId || null;
+  workspaceState.favorites = Array.isArray(saved.favorites) ? saved.favorites : [];
+  workspaceState.pinned = workspaceSafeParse(localStorage.getItem(WORKSPACE_PINNED_KEY), []);
+  workspaceState.recent = workspaceSafeParse(sessionStorage.getItem(WORKSPACE_RECENT_KEY), {});
+}
+
+function saveWorkspaceState() {
+  localStorage.setItem(
+    WORKSPACE_STORAGE_KEY,
+    JSON.stringify({
+      tabs: workspaceState.tabs.slice(0, WORKSPACE_MAX_TABS),
+      activeTabId: workspaceState.activeTabId,
+      favorites: workspaceState.favorites,
+    }),
+  );
+  localStorage.setItem(WORKSPACE_PINNED_KEY, JSON.stringify(workspaceState.pinned.slice(0, WORKSPACE_MAX_PINNED)));
+  sessionStorage.setItem(WORKSPACE_RECENT_KEY, JSON.stringify(workspaceState.recent));
+}
+
+function workspaceFavoriteIndex(type, key) {
+  return workspaceState.favorites.findIndex((item) => item.type === type && item.key === key);
+}
+
+function workspacePinnedIndex(key) {
+  return workspaceState.pinned.findIndex((item) => item.key === key);
+}
+
+function isWorkspaceFavorite(type, key) {
+  return workspaceFavoriteIndex(type, key) >= 0;
+}
+
+function isWorkspacePinned(key) {
+  return workspacePinnedIndex(key) >= 0;
+}
+
+function workspaceRecordItem(objectName, id, record = {}) {
+  const meta = OBJECT_META[objectName] || {};
+  return {
+    type: "record",
+    key: workspaceRecordKey(objectName, id),
+    objectName,
+    id,
+    title: workspaceRecordTitle(objectName, record, id),
+    subtitle: workspaceObjectLabel(objectName),
+    icon: meta.icon || objectName,
+    url: `#record=${encodeURIComponent(objectName)}/${encodeURIComponent(id)}`,
+    timestamp: Date.now(),
+  };
+}
+
+function rememberRecentRecord(objectName, id, record = {}) {
+  if (!objectName || !id || !OBJECT_META[objectName]) return;
+  const item = workspaceRecordItem(objectName, id, record);
+  const group = Array.isArray(workspaceState.recent[objectName]) ? workspaceState.recent[objectName] : [];
+  workspaceState.recent[objectName] = [item, ...group.filter((entry) => entry.key !== item.key)].slice(0, WORKSPACE_MAX_RECENT);
+  saveWorkspaceState();
+  renderWorkspaceShell();
+}
+
+function upsertWorkspaceTab(objectName, id, record = {}, options = {}) {
+  if (!objectName || !id || !OBJECT_META[objectName]) return;
+  const item = workspaceRecordItem(objectName, id, record);
+  const existing = workspaceState.tabs.find((tab) => tab.key === item.key);
+  const tab = existing || { ...item, tabId: `${item.key}:${Date.now()}` };
+  Object.assign(tab, item);
+  if (!existing) {
+    workspaceState.tabs = [tab, ...workspaceState.tabs].slice(0, WORKSPACE_MAX_TABS);
+  }
+  workspaceState.activeTabId = tab.tabId;
+  saveWorkspaceState();
+  if (!options.silent) renderWorkspaceShell();
+}
+
+function closeWorkspaceTab(tabId, event) {
+  event?.stopPropagation?.();
+  const idx = workspaceState.tabs.findIndex((tab) => tab.tabId === tabId);
+  if (idx < 0) return;
+  const wasActive = workspaceState.activeTabId === tabId;
+  workspaceState.tabs.splice(idx, 1);
+  if (wasActive) workspaceState.activeTabId = workspaceState.tabs[Math.max(0, idx - 1)]?.tabId || workspaceState.tabs[0]?.tabId || null;
+  saveWorkspaceState();
+  renderWorkspaceShell();
+  const next = workspaceState.tabs.find((tab) => tab.tabId === workspaceState.activeTabId);
+  if (wasActive && next) openRecordDetail(next.objectName, next.id);
+}
+
+function switchWorkspaceTab(tabId) {
+  const tab = workspaceState.tabs.find((item) => item.tabId === tabId);
+  if (!tab) return;
+  workspaceState.activeTabId = tabId;
+  saveWorkspaceState();
+  renderWorkspaceShell();
+  openRecordDetail(tab.objectName, tab.id);
+}
+
+function toggleWorkspaceFavorite(item) {
+  const idx = workspaceFavoriteIndex(item.type, item.key);
+  if (idx >= 0) workspaceState.favorites.splice(idx, 1);
+  else workspaceState.favorites.unshift({ ...item, timestamp: Date.now() });
+  saveWorkspaceState();
+  renderWorkspaceShell();
+}
+
+function toggleCurrentRecordFavorite() {
+  if (!detailRecordState?.id) return;
+  toggleWorkspaceFavorite(workspaceRecordItem(detailRecordState.objectName, detailRecordState.id, detailRecordState.record));
+  renderRecordWorkspaceActions();
+}
+
+function toggleCurrentRecordPinned() {
+  if (!detailRecordState?.id) return;
+  const item = workspaceRecordItem(detailRecordState.objectName, detailRecordState.id, detailRecordState.record);
+  const idx = workspacePinnedIndex(item.key);
+  if (idx >= 0) workspaceState.pinned.splice(idx, 1);
+  else workspaceState.pinned = [item, ...workspaceState.pinned.filter((entry) => entry.key !== item.key)].slice(0, WORKSPACE_MAX_PINNED);
+  saveWorkspaceState();
+  renderWorkspaceShell();
+  renderRecordWorkspaceActions();
+}
+
+function openWorkspaceItem(item) {
+  if (!item) return;
+  closeCommandPalette();
+  if (item.type === "object") switchObject(item.objectName);
+  else if (item.type === "record") openRecordDetail(item.objectName, item.id);
+  else if (item.url) window.location.href = item.url;
+}
+
 const OBJECT_FIELD_LAYOUTS = {
   Account: [
     {
@@ -731,6 +914,7 @@ let savingRecord = false;
 let supabaseAuthClient = null;
 let supabaseAuthClientPromise = null;
 let listViewDraft = null;
+let greetingAssetsPromise = null;
 
 // Token storage helpers
 function getAuthToken() {
@@ -921,6 +1105,48 @@ function scheduleObjectMetadataPrefetch(objectName = currentObject) {
       },
     });
   });
+}
+
+function scheduleLikelyObjectListPrefetch(objectName = currentObject) {
+  if (!sharedPerformanceCache?.prefetch) return;
+  const token = getAuthToken();
+  if (!token) return;
+  const likelyNext = {
+    Account: ["Contact", "Opportunity", "Lead"],
+    Contact: ["Account", "Opportunity", "Lead"],
+    Opportunity: ["Quote", "OpportunityLineItem", "Account"],
+    Lead: ["Account", "Contact", "Opportunity"],
+    Case: ["Account", "Contact"],
+    Campaign: ["Lead", "Contact"],
+    Quote: ["QuoteLineItem", "Opportunity", "Account"],
+    Product2: ["OpportunityLineItem", "QuoteLineItem"],
+    OpportunityLineItem: ["Opportunity", "Product2"],
+    QuoteLineItem: ["Quote", "Product2"],
+  }[objectName] || [];
+
+  likelyNext
+    .filter((target) => OBJECT_META[target] && canReadObject(target))
+    .slice(0, 3)
+    .forEach((target) => {
+      const path = `/api/${target}`;
+      const cacheKey = crmListCacheKey({
+        objectName: target,
+        path,
+        search: "",
+        viewId: "all",
+        sort: { field: null, direction: "asc" },
+        pageSize: RENDER_CHUNK_SIZE,
+      });
+      sharedPerformanceCache.prefetch(path, {
+        cacheKey: `saasray:list:${cacheKey}`,
+        cacheType: "resource",
+        ttlMs: 30000,
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+      });
+    });
 }
 
 function getCachedObjectFields(objectName = currentObject) {
@@ -1196,6 +1422,53 @@ function setValue(body, field, value) {
   if (value !== undefined && value !== null && String(value).trim() !== "") {
     body[field] = String(value).trim();
   }
+}
+
+function isEditableCompoundNameField(objectName, field, fieldMeta = {}) {
+  if (field !== "Name") return false;
+  if (!["Contact", "Lead"].includes(objectName)) return false;
+  if (fieldMeta.readOnly || fieldMeta.fieldSecurityReadOnly) return false;
+  return true;
+}
+
+function applyCompoundNameToBody(objectName, fullName, body) {
+  if (!["Contact", "Lead"].includes(objectName)) return;
+  const value = String(fullName || "").trim();
+  if (!value) return;
+  const parts = value.split(/\s+/).filter(Boolean);
+  if (parts.length > 1) {
+    if (!body.FirstName) body.FirstName = parts.slice(0, -1).join(" ");
+    if (!body.LastName) body.LastName = parts.slice(-1)[0];
+  } else if (!body.LastName) {
+    body.LastName = value;
+  }
+}
+
+const BACKEND_MODAL_FIELDS = new Set([
+  "Id",
+  "IsDeleted",
+  "OwnerId",
+  "CreatedDate",
+  "CreatedById",
+  "LastModifiedDate",
+  "LastModifiedById",
+  "SystemModstamp",
+  "LastActivityDate",
+  "LastViewedDate",
+  "LastReferencedDate",
+]);
+
+function isBackendModalField(field = {}) {
+  const name = typeof field === "string" ? field : field.name || "";
+  const label = typeof field === "string" ? labelFor(field) : field.label || field.layoutLabel || "";
+  if (BACKEND_MODAL_FIELDS.has(name)) return true;
+  if (/^Portal_/i.test(name)) return true;
+  if (/^Portal\s+/i.test(label)) return true;
+  return false;
+}
+
+function visibleModalFields(fields = []) {
+  return (fields || []).filter((field) => !isBackendModalField(field));
 }
 
 function labelFor(field) {
@@ -1691,6 +1964,18 @@ function setActiveNavObject(objectName) {
   });
 }
 
+function syncObjectListHeader(objectName = currentObject) {
+  const meta = OBJECT_META[objectName];
+  if (!meta) return;
+  const pageIcon = $("pageIcon");
+  const pageTitle = $("pageTitle");
+  if (pageIcon) pageIcon.innerHTML = objectIcon(objectName);
+  if (pageTitle) pageTitle.textContent = meta.title || objectName;
+  updateRecordCounts();
+  setActiveNavObject(objectName);
+  document.title = `${meta.title || objectName} - SaaSRAY CRM`;
+}
+
 function crmObjectFromLocation() {
   const hash = decodeURIComponent(window.location.hash || "");
   const match = hash.match(/^#(?:object=)?([A-Za-z]+)$/);
@@ -1830,9 +2115,7 @@ function restoreCrmPageState(objectName) {
   if (searchInput) searchInput.value = (stateIsFresh ? state.search : entryMeta.search) || "";
   const select = $("listViewSelect");
   if (select) select.value = currentViewId;
-  $("pageIcon").innerHTML = objectIcon(objectName);
-  $("pageTitle").textContent = getCurrentViewName();
-  setActiveNavObject(objectName);
+  syncObjectListHeader(objectName);
   syncSidebarBadgesFromCache();
   applyObjectNavGuards();
   updateViewToggle();
@@ -1910,6 +2193,18 @@ async function fetchCrmListPayload(path, cacheKey, cacheMeta, forceRefresh = fal
   }
   if (!forceRefresh && apiInFlightRequests.has(cacheKey)) {
     return apiInFlightRequests.get(cacheKey);
+  }
+  const prefetched = !forceRefresh
+    ? sharedPerformanceCache?.getCacheValue?.(`saasray:list:${cacheKey}`, "resource")
+    : null;
+  if (prefetched && !prefetched.error) {
+    setCrmListCache(cacheKey, {
+      ...cacheMeta,
+      payload: prefetched,
+      scrollPosition: 0,
+      selectedRecord: null,
+    });
+    return { payload: prefetched, fromCache: true, meta: getCrmListCache(cacheKey) };
   }
   const request = api(path).then((payload) => {
     if (payload && !payload.error) {
@@ -2149,7 +2444,8 @@ async function completePortalLogin(data) {
     );
   }
 
-  await checkConnection();
+  await checkConnection({ skipProfile: true });
+  loadProfile(data.user).catch((err) => console.warn("Profile warmup failed:", err.message || err));
   if (route?.view === "record" && route.recordId) {
     loadListViews().catch((err) => console.warn("List views warmup failed:", err.message || err));
     await openRecordDetail(route.objectName, route.recordId, { preserveHistory: true });
@@ -2307,7 +2603,30 @@ function holdSidebarUntilPermissions() {
 }
 
 function renderCrmGreeting() {
-  window.SaaSRAYGreeting?.render?.("crmGreetingMount", window.portalUser || {});
+  ensureGreetingAssets().then(() => {
+    window.SaaSRAYGreeting?.render?.("crmGreetingMount", window.portalUser || {});
+  }).catch(() => {});
+}
+
+function ensureGreetingAssets() {
+  if (window.SaaSRAYGreeting) return Promise.resolve();
+  if (greetingAssetsPromise) return greetingAssetsPromise;
+  greetingAssetsPromise = new Promise((resolve, reject) => {
+    if (!document.querySelector('link[data-module="greeting"]')) {
+      const link = document.createElement("link");
+      link.rel = "stylesheet";
+      link.href = `/greeting.css?v=${encodeURIComponent(window.SAASRAY_BUILD_HASH || "1")}`;
+      link.dataset.module = "greeting";
+      document.head.appendChild(link);
+    }
+    const script = document.createElement("script");
+    script.src = `/greeting.js?v=${encodeURIComponent(window.SAASRAY_BUILD_HASH || "1")}`;
+    script.dataset.module = "greeting";
+    script.onload = () => resolve();
+    script.onerror = () => reject(new Error("Greeting module failed to load"));
+    document.head.appendChild(script);
+  });
+  return greetingAssetsPromise;
 }
 
 function showNoObjectAccess() {
@@ -2447,7 +2766,7 @@ function formatValue(field, value, record = null) {
   return escapeHtml(String(value));
 }
 
-async function checkConnection() {
+async function checkConnection(options = {}) {
   const status = $("connStatus");
   const dot = status?.querySelector(".conn-dot");
   const text = status?.querySelector(".conn-text");
@@ -2462,7 +2781,7 @@ async function checkConnection() {
     if (dot) dot.className = "conn-dot connected";
     if (text) text.textContent = "Connected";
     if (authBtn) authBtn.style.display = "none";
-    await loadProfile();
+    if (!options.skipProfile) await loadProfile();
     return data;
   } catch (err) {
     if (dot) dot.className = "conn-dot error";
@@ -2473,7 +2792,7 @@ async function checkConnection() {
   }
 }
 
-async function loadProfile() {
+async function loadProfile(portalMe = null) {
   try {
   currentUser = await api("/api/me");
 
@@ -2485,7 +2804,7 @@ async function loadProfile() {
 
   // Update portal user info
   try {
-    const portalMe = await api("/api/portal/me");
+    portalMe = portalMe || await api("/api/portal/me");
     window.portalUser = portalMe;
 
     // Overwrite name/avatar with portal user
@@ -2819,11 +3138,19 @@ function renderOrgSelect() {
   ].join("");
 }
 
+function resetOrgModalDirtyState() {
+  const modal = $("orgOverlay")?.querySelector(".modal");
+  if (modal) {
+    setTimeout(() => window.SaaSRAYProduction?.resetDirtyState?.(modal), 0);
+  }
+}
+
 function openOrgModal() {
   closeProfileMenu();
   loadOrgSettings().then(() => {
     fillOrgForm(getActiveOrg());
     $("orgOverlay").classList.add("open");
+    resetOrgModalDirtyState();
   });
 }
 
@@ -2851,19 +3178,23 @@ function fillOrgForm(org = {}) {
 }
 
 function switchOrgFromSelect(key) {
+  window.SaaSRAYProduction?.allowTrustedNavigation?.(2000);
   if (key === "__new__") {
     fillOrgForm({
       key: "",
       environment: "production",
       loginUrl: "https://login.salesforce.com",
     });
+    resetOrgModalDirtyState();
     return;
   }
   const org = (orgSettings.orgs || []).find((item) => item.key === key);
   fillOrgForm(org);
+  resetOrgModalDirtyState();
 }
 
 async function switchOrg(key, reload = true) {
+  window.SaaSRAYProduction?.allowTrustedNavigation?.();
   const data = await api("/api/auth/orgs/active", {
     method: "POST",
     body: JSON.stringify({ key }),
@@ -2895,6 +3226,7 @@ function toggleOrgSecret(event) {
 }
 
 async function saveOrgAndConnect() {
+  window.SaaSRAYProduction?.allowTrustedNavigation?.();
   const payload = {
     label: $("orgLabel").value.trim(),
     key: $("orgKey").value.trim() || $("orgLabel").value.trim(),
@@ -2918,6 +3250,7 @@ async function saveOrgAndConnect() {
 }
 
 function connectSalesforce() {
+  window.SaaSRAYProduction?.allowTrustedNavigation?.();
   const activeKey = orgSettings.activeOrgKey || getActiveOrg()?.key;
   const returnTo = encodeURIComponent(`${window.location.pathname}${window.location.search}${window.location.hash}`);
   window.location.href = activeKey
@@ -2926,6 +3259,7 @@ function connectSalesforce() {
 }
 
 async function logoutSalesforce() {
+  window.SaaSRAYProduction?.allowTrustedNavigation?.();
   // This is now PORTAL logout only
   const fetcher = window.SaaSRAYSession?.authorizedFetch || fetch;
   await fetcher("/api/auth/logout", {
@@ -3109,8 +3443,7 @@ async function loadData(options = {}) {
   await loadObjectFields(currentObject);
   if (!isCurrentListRequest(requestVersion, requestObject)) return;
 
-  $("pageIcon").innerHTML = objectIcon(currentObject);
-  $("pageTitle").textContent = getCurrentViewName();
+  syncObjectListHeader(currentObject);
   try {
     let path = "";
     let cacheMeta = {
@@ -3192,6 +3525,7 @@ async function loadData(options = {}) {
     }
     queueLazyLoadIfNeeded();
     captureCrmPageState(currentObject);
+    scheduleLikelyObjectListPrefetch(currentObject);
  } catch (err) {
     loadFailed = true;
     clearObjectListLoadingState({ showList: false, hideError: false });
@@ -3390,6 +3724,7 @@ function applyLocalView() {
 }
 
 function renderTable() {
+  const renderStartedAt = performance.now();
   if (viewingDetail) return;
   renderFilterPills();
   const table = $("dataTable");
@@ -3433,6 +3768,12 @@ function renderTable() {
 
   setupVirtualTableBody($("tbody"), columnCount, showActions);
   renderVirtualTableWindow(true);
+  sharedPerformanceCache?.recordRenderTiming?.("table.render", performance.now() - renderStartedAt, {
+    object: currentObject,
+    records: currentRecords.length,
+    columns: currentColumns.length,
+    virtualized: true,
+  });
 }
 
 function renderFilterPills() {
@@ -3655,6 +3996,7 @@ function updateVirtualRow(row, record, showActions) {
 }
 
 function renderVirtualTableWindow(force = false) {
+  const renderStartedAt = performance.now();
   if (viewingDetail || currentViewMode !== "table") return;
   const tbody = $("tbody");
   if (!tbody || !$("virtualTopSpacer") || !$("virtualBottomSpacer")) return;
@@ -3689,6 +4031,13 @@ function renderVirtualTableWindow(force = false) {
   virtualTableState.start = start;
   virtualTableState.end = end;
   updateVirtualSentinel(columnCount);
+  sharedPerformanceCache?.recordRenderTiming?.("table.virtualWindow", performance.now() - renderStartedAt, {
+    object: currentObject,
+    start,
+    end,
+    pooledRows: virtualTableState.pool.length,
+    totalRecords: currentRecords.length,
+  });
 }
 
 function scheduleVirtualTableRender(force = false) {
@@ -4171,6 +4520,7 @@ function finalizeCachedObjectListRestore(scrollPosition = 0) {
   if (currentViewMode === "table") {
     renderVirtualTableWindow(true);
   }
+  syncObjectListHeader(currentObject);
   restoreWindowScrollPosition(scrollPosition || 0);
   queueLazyLoadIfNeeded();
   captureCrmPageState(currentObject);
@@ -4271,6 +4621,7 @@ function restoreListContent(shouldLoad = false, options = {}) {
   setActiveNavObject(currentObject);
   clearObjectListLoadingState();
   applyListCacheEntry(activeListCacheEntry());
+  syncObjectListHeader(currentObject);
   if (!options.preserveHistory && !restoringCrmHistory) {
     writeCrmHistory(currentObject, true);
   }
@@ -4478,7 +4829,7 @@ async function openRecordModal(
   const meta = OBJECT_META[objectName];
   $("modalObjIcon").innerHTML = objectIcon(objectName);
   $("modalTitle").textContent = title;
-  const fullFields = fields || (await getEditableFields(record, objectName));
+  const fullFields = visibleModalFields(fields || (await getEditableFields(record, objectName)));
   const sections = getLayoutSections(objectName, fullFields);
   $("modalBody").innerHTML = sections.length
     ? renderFormSections(sections, record, objectName)
@@ -4486,6 +4837,27 @@ async function openRecordModal(
   appendPresetHiddenFields();
   $("modalOverlay").classList.add("open");
   setupDependentPicklists(fullFields);
+  applyPresetLookupDisplays(objectName);
+  setTimeout(() => window.SaaSRAYProduction?.resetDirtyState?.($("modal")), 0);
+}
+
+function applyPresetLookupDisplays(objectName = modalObject || currentObject) {
+  const presets = modalPresetValues || {};
+  Object.keys(presets).forEach((field) => {
+    const hiddenInput = $(`field-${field}`);
+    const searchInput = $(`field-${field}-search`);
+    if (!hiddenInput || !searchInput) return;
+    if (presets[field] !== undefined && presets[field] !== null && presets[field] !== "") {
+      hiddenInput.value = presets[field];
+    }
+    const relationshipName = field.replace(/Id$/, "");
+    const label =
+      detailLookupLabels[field]?.name ||
+      getValue(presets, `${relationshipName}.Name`) ||
+      getValue(presets, field.replace(/Id$/, ".Name")) ||
+      "";
+    if (label) searchInput.value = label;
+  });
 }
 
 async function getEditableFields(record, objectName = currentObject) {
@@ -4494,36 +4866,23 @@ async function getEditableFields(record, objectName = currentObject) {
       api(`/api/${objectName}/fields`),
       loadLayoutForObject(objectName)
     ]);
-    const layoutSections = getLayoutSections(objectName, data.fields || []);
+    const layoutSections = getLayoutSections(objectName, visibleModalFields(data.fields || []));
     if (layoutSections.length)
       return layoutSections.flatMap((section) => section.fields);
 
     const fields = data.fields
       .filter((field) => (editingRecord ? field.updateable : field.createable))
-      .filter(
-        (field) =>
-          ![
-            "Id",
-            "IsDeleted",
-            "CreatedDate",
-            "CreatedById",
-            "LastModifiedDate",
-            "LastModifiedById",
-            "SystemModstamp",
-            "LastViewedDate",
-            "LastReferencedDate",
-          ].includes(field.name),
-      )
+      .filter((field) => !isBackendModalField(field))
       .filter((field) => field.type !== "address")
       .slice(0, 80);
     return fields.length
       ? fields
-      : OBJECT_META[objectName].editable.map((name) => ({
+      : visibleModalFields(OBJECT_META[objectName].editable).map((name) => ({
           name,
           label: labelFor(name),
         }));
   } catch (err) {
-    return OBJECT_META[objectName].editable.map((name) => ({
+    return visibleModalFields(OBJECT_META[objectName].editable).map((name) => ({
       name,
       label: labelFor(name),
     }));
@@ -4713,9 +5072,11 @@ function getLayoutSections(objectName, fields = []) {
     .map((section) => {
       const leftResolved = (section.leftFields || [])
         .map((entry) => resolveLayoutField(entry, fieldList))
+        .filter((field) => field && !isBackendModalField(field))
         .filter(Boolean);
       const rightResolved = (section.rightFields || [])
         .map((entry) => resolveLayoutField(entry, fieldList))
+        .filter((field) => field && !isBackendModalField(field))
         .filter(Boolean);
       return {
         title: section.title,
@@ -4817,6 +5178,7 @@ function renderFieldControl(
   fieldMeta = {},
   objectName = currentObject,
 ) {
+  if (isBackendModalField(fieldMeta?.name ? fieldMeta : { name: field })) return "";
   fieldMeta =
     typeof fieldMeta === "string"
       ? { name: field, label: labelFor(field) }
@@ -4839,12 +5201,16 @@ function renderFieldControl(
   const isRequired = fieldMeta.required || fieldMeta.nillable === false;
   const required = isRequired ? '<span class="form-req">*</span>' : "";
   const spanClass = shouldSpanField(field, type) ? "span-2" : "";
+  const editableCompoundName = isEditableCompoundNameField(objectName, field, fieldMeta);
+  const metadataReadOnly =
+    (editingRecord && fieldMeta.updateable === false) ||
+    (!editingRecord && fieldMeta.createable === false);
   const readOnly =
     Boolean(fieldMeta.readOnly) ||
     Boolean(fieldMeta.fieldSecurityReadOnly) ||
-    (editingRecord && fieldMeta.updateable === false) ||
-    (!editingRecord && fieldMeta.createable === false);
+    (metadataReadOnly && !editableCompoundName);
   const disabled = readOnly ? 'disabled data-readonly="true"' : "";
+  const compoundNameAttrs = editableCompoundName ? `data-compound-name="${escapeHtml(objectName)}"` : "";
   const readonlyClass = readOnly ? " readonly-field" : "";
 
   if (lookup) {
@@ -4930,7 +5296,7 @@ function renderFieldControl(
   return `
     <div class="form-group ${spanClass}${readonlyClass}">
       <label class="form-label" for="field-${field}">${escapeHtml(label)}${required}</label>
-      <input class="form-ctrl" id="field-${field}" name="${field}" type="${inputType}" value="${escapeHtml(formatEditableValue(value, type))}" ${disabled}>
+      <input class="form-ctrl" id="field-${field}" name="${field}" type="${inputType}" value="${escapeHtml(formatEditableValue(value, type))}" ${compoundNameAttrs} ${disabled}>
     </div>
   `;
 }
@@ -5113,14 +5479,18 @@ function lookupSearch(field, objectName, value) {
 }
 
 function selectLookup(field, id, name) {
-  $(`field-${field}`).value = id;
+  const valueInput = $(`field-${field}`);
+  if (!valueInput) return;
+  valueInput.value = id;
   $(`field-${field}-search`).value = decodeURIComponent(name);
   $(`lookup-${field}`).classList.remove("open");
+  valueInput.dispatchEvent(new Event("change", { bubbles: true }));
 }
 
 function closeModal() {
   if (savingRecord) return;
   $("modalOverlay").classList.remove("open");
+  window.SaaSRAYProduction?.resetDirtyState?.($("modal"));
   modalObject = null;
   modalPresetValues = {};
 }
@@ -5280,6 +5650,9 @@ async function openRecordDetail(objectName, id, options = {}) {
 
     const data = await recordPromise;
     const rendered = await renderRecordDetailFromData(objectName, id, data);
+    rememberRecentRecord(objectName, id, rendered.record);
+    upsertWorkspaceTab(objectName, id, rendered.record, { silent: true });
+    renderWorkspaceShell();
     setRecentRecordCache(objectName, id, {
       data,
       layouts: {
@@ -5296,6 +5669,7 @@ async function openRecordDetail(objectName, id, options = {}) {
         applyCachedRecordLayouts({ layouts });
         setRecentRecordCache(objectName, id, { data, layouts });
         await renderRecordDetailFromData(objectName, id, data);
+        renderWorkspaceShell();
         loadRecordSecondaryComponents(objectName, id, rendered.record);
       })
       .catch((err) => {
@@ -7075,11 +7449,32 @@ function openRelatedCreate(configKey) {
   if (!config) return;
 
   editingRecord = null;
-  detailLookupLabels = {};
   const record = buildRelatedCreateRecord(config);
+  seedRelatedCreateLookupLabel(config, record);
   openRecordModal(`New ${config.objectName}`, record, null, config.objectName, {
     presetValues: record,
   });
+}
+
+function seedRelatedCreateLookupLabel(config, record = {}) {
+  const lookupField = config?.parentLookup;
+  const lookupId = lookupField ? record[lookupField] : "";
+  if (!lookupField || !lookupId) return;
+  const parent = detailRecordState?.record || {};
+  const relationshipName = lookupField.replace(/Id$/, "");
+  const sourceName = config.sourceNameField
+    ? getValue(parent, config.sourceNameField)
+    : parent.Name || parent.Subject || parent.CaseNumber || "";
+  const relationshipNameFromRecord =
+    getValue(record, `${relationshipName}.Name`) ||
+    getValue(record, lookupField.replace(/Id$/, ".Name"));
+  detailLookupLabels = {
+    ...detailLookupLabels,
+    [lookupField]: {
+      id: lookupId,
+      name: sourceName || relationshipNameFromRecord || lookupId,
+    },
+  };
 }
 
 function buildRelatedCreateRecord(config) {
@@ -8837,6 +9232,10 @@ async function saveRecord() {
     .querySelectorAll("[name]")
     .forEach((input) => {
       if (input.disabled || input.dataset.readonly === "true") return;
+      if (input.dataset.compoundName) {
+        applyCompoundNameToBody(objectName, input.value, body);
+        return;
+      }
       if (input.type === "checkbox") {
         body[input.name] = input.checked;
         return;
@@ -9623,10 +10022,337 @@ function friendlyError(message = '') {
   return message || 'Something went wrong. Please try again.';
 }
 
+function workspaceItemButton(item, className = "workspace-list-item") {
+  const encoded = encodeURIComponent(JSON.stringify(item));
+  return `
+    <button class="${className}" type="button" onclick="openWorkspaceItem(JSON.parse(decodeURIComponent('${encoded}')))">
+      <span class="workspace-item-icon">${item.objectName ? objectIcon(item.objectName) : ">"}</span>
+      <span class="workspace-item-text">
+        <strong>${escapeHtml(item.title || item.label || item.key)}</strong>
+        <small>${escapeHtml(item.subtitle || item.type || "")}</small>
+      </span>
+    </button>
+  `;
+}
+
+function renderWorkspaceTabs() {
+  const mount = $("workspaceTabs");
+  if (!mount) return;
+  if (!workspaceState.tabs.length) {
+    mount.innerHTML = "";
+    document.body.classList.remove("workspace-tabs-visible");
+    return;
+  }
+  document.body.classList.add("workspace-tabs-visible");
+  mount.innerHTML = `
+    <button class="workspace-tab workspace-tab-nav" type="button" onclick="history.back()" title="Back">Back</button>
+    <button class="workspace-tab workspace-tab-nav" type="button" onclick="history.forward()" title="Forward">Forward</button>
+    ${workspaceState.tabs.map((tab) => `
+    <button class="workspace-tab ${tab.tabId === workspaceState.activeTabId ? "active" : ""}" type="button" onclick="switchWorkspaceTab('${escapeJs(tab.tabId)}')">
+      <span class="workspace-tab-icon">${objectIcon(tab.objectName)}</span>
+      <span class="workspace-tab-title">${escapeHtml(tab.title)}</span>
+      <span class="workspace-tab-close" onclick="closeWorkspaceTab('${escapeJs(tab.tabId)}', event)" title="Close tab">x</span>
+    </button>
+  `).join("")}
+  `;
+}
+
+function renderWorkspacePanel() {
+  const panel = $("workspacePanel");
+  if (!panel) return;
+  panel.classList.toggle("collapsed", !workspaceState.panelOpen);
+  const recentItems = Object.values(workspaceState.recent)
+    .flat()
+    .sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0))
+    .slice(0, WORKSPACE_MAX_RECENT);
+  const favorites = workspaceState.favorites.slice(0, 12);
+  const pinned = workspaceState.pinned.slice(0, WORKSPACE_MAX_PINNED);
+  panel.innerHTML = `
+    <button class="workspace-launcher" type="button" onclick="toggleWorkspacePanel()" aria-label="Open Workspace" title="Open Workspace">
+      <span class="workspace-launcher-icon">▦</span>
+      <span class="workspace-launcher-text">Workspace</span>
+    </button>
+    <div class="workspace-panel-body">
+      <div class="workspace-panel-head">
+        <div class="workspace-panel-title">
+          <strong>Workspace</strong>
+          <span>Your personal workspace</span>
+        </div>
+        <button class="icon-btn" type="button" onclick="toggleWorkspacePanel()" title="Collapse" aria-label="Close Workspace">x</button>
+      </div>
+      <section>
+        <h3>Pinned Records</h3>
+        ${pinned.length ? pinned.map((item) => workspaceItemButton(item)).join("") : '<p class="workspace-empty">No pinned records</p>'}
+      </section>
+      <section>
+        <h3>Recently Viewed</h3>
+        ${recentItems.length ? recentItems.map((item) => workspaceItemButton(item)).join("") : '<p class="workspace-empty">Open records to build history</p>'}
+      </section>
+      <section>
+        <h3>Favorites</h3>
+        ${favorites.length ? favorites.map((item) => workspaceItemButton(item)).join("") : '<p class="workspace-empty">Star records to save them</p>'}
+      </section>
+      <section>
+        <h3>Keyboard</h3>
+        <div class="shortcut-row"><kbd>Ctrl</kbd><kbd>K</kbd><span>Command palette</span></div>
+        <div class="shortcut-row"><kbd>Alt</kbd><kbd>1-5</kbd><span>Open core objects</span></div>
+        <div class="shortcut-row"><kbd>Ctrl</kbd><kbd>/</kbd><span>Shortcut help</span></div>
+      </section>
+    </div>
+  `;
+}
+
+function renderWorkspaceShell() {
+  renderWorkspaceTabs();
+  renderWorkspacePanel();
+  renderRecordWorkspaceActions();
+}
+
+function toggleWorkspacePanel() {
+  workspaceState.panelOpen = !workspaceState.panelOpen;
+  localStorage.setItem("saasray_workspace_panel_collapsed", workspaceState.panelOpen ? "0" : "1");
+  renderWorkspacePanel();
+}
+
+function ensureWorkspaceShell() {
+  if (!$("workspaceTabs")) {
+    const tabs = document.createElement("div");
+    tabs.id = "workspaceTabs";
+    tabs.className = "workspace-tabs";
+    document.body.appendChild(tabs);
+  }
+  if (!$("workspacePanel")) {
+    const panel = document.createElement("aside");
+    panel.id = "workspacePanel";
+    panel.className = "workspace-panel";
+    document.body.appendChild(panel);
+  }
+  if (!$("commandPaletteOverlay")) {
+    const overlay = document.createElement("div");
+    overlay.id = "commandPaletteOverlay";
+    overlay.className = "command-palette-overlay";
+    overlay.innerHTML = `
+      <div class="command-palette" role="dialog" aria-modal="true" aria-label="Command palette">
+        <div class="command-input-row">
+          <span>Search</span>
+          <input id="commandPaletteInput" autocomplete="off" placeholder="Objects, records, reports, dashboards, users, settings, commands...">
+          <kbd>Esc</kbd>
+        </div>
+        <div class="command-results" id="commandPaletteResults"></div>
+      </div>
+    `;
+    document.body.appendChild(overlay);
+    overlay.addEventListener("click", (event) => {
+      if (event.target === overlay) closeCommandPalette();
+    });
+    $("commandPaletteInput").addEventListener("input", debounceCommandPaletteSearch);
+    $("commandPaletteInput").addEventListener("keydown", handleCommandPaletteKeydown);
+  }
+  renderWorkspaceShell();
+}
+
+function renderRecordWorkspaceActions() {
+  if (!detailRecordState?.id) return;
+  const actions = document.querySelector(".record-title-row .page-actions");
+  if (!actions) return;
+  let container = $("recordWorkspaceActions");
+  if (!container) {
+    container = document.createElement("span");
+    container.id = "recordWorkspaceActions";
+    container.className = "record-workspace-actions";
+    actions.insertBefore(container, actions.firstChild);
+  }
+  const item = workspaceRecordItem(detailRecordState.objectName, detailRecordState.id, detailRecordState.record);
+  container.innerHTML = `
+    <button class="workspace-icon-action ${isWorkspaceFavorite("record", item.key) ? "active" : ""}" type="button" onclick="toggleCurrentRecordFavorite()" title="Favorite record">★</button>
+    <button class="workspace-icon-action ${isWorkspacePinned(item.key) ? "active" : ""}" type="button" onclick="toggleCurrentRecordPinned()" title="Pin record">⌖</button>
+  `;
+}
+
+function localCommandItems(query) {
+  const q = query.toLowerCase();
+  const objects = Object.keys(OBJECT_META)
+    .filter((objectName) => canReadObject(objectName))
+    .map((objectName) => ({
+      type: "object",
+      key: `object:${objectName}`,
+      objectName,
+      title: workspaceObjectPlural(objectName),
+      subtitle: "Object",
+      url: `#object=${objectName}`,
+    }));
+  const commands = [
+    { type: "command", key: "new-record", title: `New ${workspaceObjectLabel(currentObject)}`, subtitle: "Command", action: () => openCreate() },
+    { type: "command", key: "refresh-list", title: "Refresh current list", subtitle: "Command", action: () => loadData({ forceRefresh: true }) },
+    { type: "page", key: "reports", title: "Reports", subtitle: "Workspace", url: "/reports.html" },
+    { type: "page", key: "dashboards", title: "Dashboards", subtitle: "Workspace", url: "/dashboards.html" },
+    { type: "page", key: "admin", title: "Admin User Management", subtitle: "Settings", url: "/admin.html" },
+  ];
+  const stored = [
+    ...workspaceState.pinned,
+    ...workspaceState.favorites,
+    ...Object.values(workspaceState.recent).flat(),
+  ];
+  return [...objects, ...commands, ...stored]
+    .filter((item, index, all) => all.findIndex((other) => other.type === item.type && other.key === item.key) === index)
+    .filter((item) => !q || `${item.title || ""} ${item.subtitle || ""} ${item.objectName || ""}`.toLowerCase().includes(q))
+    .slice(0, 20);
+}
+
+let commandPaletteTimer = null;
+function debounceCommandPaletteSearch() {
+  clearTimeout(commandPaletteTimer);
+  commandPaletteTimer = setTimeout(() => renderCommandPaletteResults(), 180);
+}
+
+async function renderCommandPaletteResults() {
+  const input = $("commandPaletteInput");
+  const results = $("commandPaletteResults");
+  if (!input || !results) return;
+  const q = input.value.trim();
+  const local = localCommandItems(q);
+  let recordItems = [];
+  if (q.length >= 2) {
+    try {
+      const data = await api(`/api/search/global?q=${encodeURIComponent(q)}`);
+      recordItems = (data.searchRecords || [])
+        .map((record) => {
+          const objectName = record.attributes?.type || objectFromId(record.Id);
+          if (!OBJECT_META[objectName] || !canReadObject(objectName)) return null;
+          return workspaceRecordItem(objectName, record.Id, record);
+        })
+        .filter(Boolean)
+        .slice(0, 8);
+    } catch {
+      recordItems = [];
+    }
+  }
+  const items = [...local, ...recordItems]
+    .filter((item, index, all) => all.findIndex((other) => other.type === item.type && other.key === item.key) === index)
+    .slice(0, 24);
+  results.innerHTML = items.length
+    ? items.map((item, idx) => `
+      <button class="command-result ${idx === 0 ? "active" : ""}" type="button" data-index="${idx}">
+        <span class="workspace-item-icon">${item.objectName ? objectIcon(item.objectName) : ">"}</span>
+        <span><strong>${escapeHtml(item.title)}</strong><small>${escapeHtml(item.subtitle || item.type)}</small></span>
+        ${item.type !== "command" ? `<span class="command-favorite ${isWorkspaceFavorite(item.type, item.key) ? "active" : ""}" title="Favorite" data-favorite-index="${idx}">★</span>` : "<span></span>"}
+      </button>
+    `).join("")
+    : '<div class="workspace-empty command-empty">No matches</div>';
+  results.querySelectorAll(".command-result").forEach((button, idx) => {
+    button.onclick = (event) => {
+      const fav = event.target.closest("[data-favorite-index]");
+      if (fav) {
+        event.stopPropagation();
+        toggleWorkspaceFavorite(items[Number(fav.dataset.favoriteIndex)]);
+        renderCommandPaletteResults();
+        return;
+      }
+      const item = items[idx];
+      if (typeof item.action === "function") {
+        closeCommandPalette();
+        item.action();
+      } else {
+        openWorkspaceItem(item);
+      }
+    };
+  });
+  results._commandItems = items;
+}
+
+function openCommandPalette() {
+  ensureWorkspaceShell();
+  workspaceState.commandOpen = true;
+  $("commandPaletteOverlay").classList.add("open");
+  $("commandPaletteInput").value = "";
+  renderCommandPaletteResults();
+  setTimeout(() => $("commandPaletteInput")?.focus(), 0);
+}
+
+function closeCommandPalette() {
+  workspaceState.commandOpen = false;
+  $("commandPaletteOverlay")?.classList.remove("open");
+}
+
+function handleCommandPaletteKeydown(event) {
+  if (event.key === "Escape") {
+    closeCommandPalette();
+    return;
+  }
+  if (event.key !== "Enter") return;
+  const items = $("commandPaletteResults")?._commandItems || [];
+  const item = items[0];
+  if (!item) return;
+  event.preventDefault();
+  if (typeof item.action === "function") {
+    closeCommandPalette();
+    item.action();
+  } else {
+    openWorkspaceItem(item);
+  }
+}
+
+function openShortcutHelp() {
+  ensureWorkspaceShell();
+  $("commandPaletteOverlay").classList.add("open");
+  $("commandPaletteInput").value = "shortcuts";
+  $("commandPaletteResults").innerHTML = `
+    <div class="shortcut-help">
+      <h3>Keyboard Shortcuts</h3>
+      <div class="shortcut-row"><kbd>Ctrl</kbd><kbd>K</kbd><span>Open command palette</span></div>
+      <div class="shortcut-row"><kbd>Alt</kbd><kbd>1</kbd><span>Accounts</span></div>
+      <div class="shortcut-row"><kbd>Alt</kbd><kbd>2</kbd><span>Contacts</span></div>
+      <div class="shortcut-row"><kbd>Alt</kbd><kbd>3</kbd><span>Leads</span></div>
+      <div class="shortcut-row"><kbd>Alt</kbd><kbd>4</kbd><span>Opportunities</span></div>
+      <div class="shortcut-row"><kbd>Alt</kbd><kbd>5</kbd><span>Cases</span></div>
+      <div class="shortcut-row"><kbd>Escape</kbd><span>Close dialogs</span></div>
+    </div>
+  `;
+}
+
+function closeOpenDialogsFromShortcut() {
+  closeCommandPalette();
+  $("globalResults")?.classList.remove("open");
+  document.querySelectorAll(".overlay.open").forEach((overlay) => overlay.classList.remove("open"));
+  document.querySelectorAll(".profile-popover.open").forEach((popover) => popover.classList.remove("open"));
+}
+
+function handleWorkspaceKeydown(event) {
+  const key = typeof event.key === "string" ? event.key.toLowerCase() : "";
+  if ((event.ctrlKey || event.metaKey) && key === "k") {
+    event.preventDefault();
+    openCommandPalette();
+    return;
+  }
+  if (event.ctrlKey && event.key === "/") {
+    event.preventDefault();
+    openShortcutHelp();
+    return;
+  }
+  if (event.key === "Escape") {
+    if (workspaceState.panelOpen) {
+      workspaceState.panelOpen = false;
+      localStorage.setItem("saasray_workspace_panel_collapsed", "1");
+      renderWorkspacePanel();
+    }
+    closeOpenDialogsFromShortcut();
+    return;
+  }
+  if (event.altKey && !event.ctrlKey && !event.metaKey) {
+    const map = { "1": "Account", "2": "Contact", "3": "Lead", "4": "Opportunity", "5": "Case" };
+    const objectName = map[event.key];
+    if (objectName && canReadObject(objectName)) {
+      event.preventDefault();
+      switchObject(objectName);
+    }
+  }
+}
+
 document.addEventListener("click", (event) => {
   if (!event.target.closest(".profile-menu")) closeProfileMenu();
   if (!event.target.closest(".kanban-item")) closeKanbanMenus();
 });
+document.addEventListener("keydown", handleWorkspaceKeydown);
 document.addEventListener("click", persistCrmStateBeforeExternalNavigation, true);
 
 document.addEventListener(
@@ -9716,13 +10442,14 @@ document.addEventListener("DOMContentLoaded", async () => {
   holdSidebarUntilPermissions();
   let route = crmRouteFromLocation();
 
-  // Then boot the app normally
-  loadOrgSettings()
-    .then(() => checkConnection())
-    .then(async (connection) => {
+  Promise.all([
+    loadOrgSettings(),
+    checkConnection({ skipProfile: true }),
+    api("/api/portal/me"),
+  ])
+    .then(async ([, connection, me]) => {
       if (connection?.success) {
         try {
-          const me = await api("/api/portal/me");
           if (me) {
             setStoredPerms(me.permissions || {});
             window.portalUser = me;
@@ -9731,6 +10458,9 @@ document.addEventListener("DOMContentLoaded", async () => {
             currentObject = initialReadableObject();
             if (route?.view !== "record") writeCrmHistory(currentObject, true);
             revealAuthorizedSidebar();
+            loadWorkspaceState();
+            ensureWorkspaceShell();
+            loadProfile(me).catch((err) => console.warn("Profile warmup failed:", err.message || err));
           }
         } catch (err) {
           clearAuthToken();
@@ -9750,6 +10480,10 @@ document.addEventListener("DOMContentLoaded", async () => {
           await loadData();
         }
       }
+    })
+    .catch((err) => {
+      clearAuthToken();
+      showLoginPage(err.message || "Your session expired. Please log in again.");
     });
 });
 

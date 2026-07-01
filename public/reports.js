@@ -710,12 +710,25 @@ function syncReportSearchAndLoad(event) {
 }
 
 function openReportTypeModal() {
-  const templates = {
-    account_contacts: { label: 'Account + Contact', primaryObject: 'Account', childObject: 'Contact', childAlias: 'Contact', relationshipField: 'AccountId' },
-    account_opportunities: { label: 'Account + Opportunity', primaryObject: 'Account', childObject: 'Opportunity', childAlias: 'Opportunity', relationshipField: 'AccountId' },
-    account_cases: { label: 'Account + Case', primaryObject: 'Account', childObject: 'Case', childAlias: 'Case', relationshipField: 'AccountId' },
-    campaign_leads: { label: 'Campaign + Lead', primaryObject: 'Campaign', childObject: 'Lead', childAlias: 'Lead', relationshipField: 'CampaignId' }
-  };
+  const relationshipTemplates = reportRelationshipOptionsFromRegistry();
+  const effectiveTemplates = relationshipTemplates.length
+    ? relationshipTemplates
+    : [
+        { key: 'Account:Contact:AccountId', parentObject: 'Account', childObject: 'Contact', parentField: 'AccountId' },
+        { key: 'Account:Opportunity:AccountId', parentObject: 'Account', childObject: 'Opportunity', parentField: 'AccountId' },
+        { key: 'Account:Case:AccountId', parentObject: 'Account', childObject: 'Case', parentField: 'AccountId' },
+        { key: 'Campaign:Lead:CampaignId', parentObject: 'Campaign', childObject: 'Lead', parentField: 'CampaignId' }
+      ];
+  const templates = Object.fromEntries(effectiveTemplates.map((item) => [
+    item.key.toLowerCase().replace(/[^a-z0-9]+/g, '_'),
+    {
+      label: `${objectLabel(item.parentObject)} + ${objectLabel(item.childObject)}`,
+      primaryObject: item.parentObject,
+      childObject: item.childObject,
+      childAlias: objectLabel(item.childObject),
+      relationshipField: item.parentField
+    }
+  ]));
   openAdvancedModal({
     title: 'New Custom Report Type',
     saveLabel: 'Create Type',
@@ -2649,18 +2662,24 @@ function defaultCrossFilter() {
 
 function crossFilterRelationshipOptions() {
   const primary = $('reportObject')?.value || 'Account';
-  const options = [];
-  if (primary === 'Account') {
-    options.push(
-      { key: 'Account:Contact:AccountId', parentObject: 'Account', childObject: 'Contact', parentField: 'AccountId' },
-      { key: 'Account:Opportunity:AccountId', parentObject: 'Account', childObject: 'Opportunity', parentField: 'AccountId' },
-      { key: 'Account:Case:AccountId', parentObject: 'Account', childObject: 'Case', parentField: 'AccountId' }
-    );
-  }
-  if (primary === 'Campaign') {
-    options.push({ key: 'Campaign:Lead:CampaignId', parentObject: 'Campaign', childObject: 'Lead', parentField: 'CampaignId' });
-  }
+  const options = reportRelationshipOptionsFromRegistry().filter((item) => item.parentObject === primary);
   return options.length ? options : [{ key: 'Account:Contact:AccountId', parentObject: 'Account', childObject: 'Contact', parentField: 'AccountId' }];
+}
+
+function objectLabel(apiName) {
+  return window.SaaSRAY_OBJECT_REGISTRY?.[apiName]?.label || apiName;
+}
+
+function reportRelationshipOptionsFromRegistry() {
+  const registry = window.SaaSRAY_OBJECT_REGISTRY || {};
+  return Object.values(registry).flatMap((objectConfig) =>
+    (objectConfig.reportRelationships || []).map((relationship) => ({
+      key: `${objectConfig.apiName}:${relationship.childObject}:${relationship.parentField}`,
+      parentObject: objectConfig.apiName,
+      childObject: relationship.childObject,
+      parentField: relationship.parentField
+    }))
+  );
 }
 
 function crossFilterFields(childObject) {

@@ -1,5 +1,5 @@
 const { buildTabularSOQL, reportSourceFields } = require('./report-query-builder');
-const reportCache = require('./report-cache');
+const reportCache = require('../cache/report-cache');
 
 async function runTabularReport(report, user, deps, options = {}) {
   const definition = report.definition || report;
@@ -822,7 +822,7 @@ async function applyCrossFilters(rows, primaryObject, definition, user, deps, re
 
   let output = rows;
   for (const crossFilter of crossFilters) {
-    const relationship = normalizeCrossFilterRelationship(primaryObject, crossFilter);
+    const relationship = normalizeCrossFilterRelationship(primaryObject, crossFilter, deps);
     if (!relationship) continue;
 
     const childPerms = await deps.getEffectivePermissions(user.id, relationship.childObject);
@@ -952,17 +952,8 @@ function buildCrossSubfilterClause(filters, escapeSOQL) {
   return parts.length ? `(${parts.join(' AND ')})` : '';
 }
 
-function normalizeCrossFilterRelationship(primaryObject, crossFilter) {
-  const configured = {
-    Account: {
-      Contact: 'AccountId',
-      Opportunity: 'AccountId',
-      Case: 'AccountId'
-    },
-    Campaign: {
-      Lead: 'CampaignId'
-    }
-  };
+function normalizeCrossFilterRelationship(primaryObject, crossFilter, deps = {}) {
+  const configured = deps.getReportRelationshipMap?.() || {};
   const childObject = crossFilter.childObject;
   const parentField = crossFilter.parentField || configured[primaryObject]?.[childObject];
   if (!childObject || !parentField) return null;

@@ -1,0 +1,8406 @@
+require('dotenv').config();
+const express = require('express');
+const axios = require('axios');
+const path = require('path');
+const fs = require('fs');
+const crypto = require('crypto');
+
+const bcrypt = require('bcrypt');
+const jwt = require('jsonwebtoken');
+const {
+  supabase,
+  getEffectivePermissions,
+  getEffectivePermissionSetIds,
+  getUserWithPermissions,
+  invalidateUserContextCache,
+  invalidateAllUserContextCache,
+  getUserContextCacheStats,
+  writeAuditLog
+} = require('../db');
+const perfAudit = require('./perf-audit');
+const { createReportsRouter } = require('./reports/report.routes');
+const { createDashboardsRouter } = require('./dashboards/dashboard.routes');
+const { sendWelcomeUserInvitation } = require('./email/email.service');
+const { PUBLIC_DIR, JSON_BODY_LIMIT, BUILD_HASH } = require('./config/app.config');
+const {
+  getObjectConfig,
+  getObjectDefinitions,
+  getPrimaryObjectNames,
+  getInternalObjectNames,
+  getReportRelationshipMap,
+  getFrontendRegistry
+} = require('./config/object-registry');
+const {
+  createVersionedHtmlSender,
+  createVersionedHtmlMiddleware,
+  noStoreApiCacheMiddleware,
+  httpOptimizationMiddleware,
+  staticAssetHeaders
+} = require('./middleware/http-optimization.middleware');
+const {
+  normalizeAppUrl,
+  createSecureToken,
+  hashToken
+} = require('./utils/security.utils');
+const { msSince } = require('./utils/time.utils');
+const { normalizeProfileImage } = require('./utils/validation.utils');
+const { createPkcePair } = require('./salesforce/oauth.utils');
+const {
+  sleep,
+  flattenRecord,
+  recordsToCsv,
+  parseCsv,
+  normalizeBulkSoql
+} = require('./salesforce/bulk.utils');
+const { createCompositeClient } = require('./salesforce/composite.client');
+const { createAuthMiddleware } = require('./middleware/auth.middleware');
+const { createFieldSecurityService } = require('./services/field-security.service');
+const {
+  RESERVED_API_OBJECT_NAMES,
+  requireAdminPanel,
+  requireAdmin,
+  checkRole,
+  isFullAccessUser,
+  permissionDeniedMessage,
+  bulkOperationAction,
+  createPermissionMiddleware
+} = require('./middleware/permission.middleware');
+
+const JWT_SECRET = process.env.JWT_SECRET;
+const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '8h';
+
+const { Resend } = require('resend');
+const resend = new Resend(process.env.RESEND_API_KEY);
+
+const INVITATION_TOKEN_TYPE = 'user_invitation';
+const PASSWORD_RESET_TOKEN_TYPE = 'password_reset';
+const SETUP_TOKEN_TTL_MS = 60 * 60 * 1000;
+const ANNOUNCEMENT_CACHE_TTL_MS = 5 * 60 * 1000;
+const GREETING_CONFIG_CACHE_TTL_MS = 30 * 60 * 1000;
+const ANNOUNCEMENT_TYPES = new Set(['general', 'maintenance', 'release', 'warning', 'success', 'security', 'holiday']);
+const DEFAULT_GREETING_CONFIG = Object.freeze({});
+const GREETING_PERIODS = ['Morning', 'Afternoon', 'Evening', 'Night'];
+const GREETING_CONFIG_KEYS = new Set(GREETING_PERIODS.map((period) => period.toLowerCase()));
+let activeAnnouncementCache = { expiresAt: 0, value: null };
+let greetingConfigCache = { expiresAt: 0, value: null };
+
+const app = express();
+app.set('trust proxy', true);
+const sendVersionedHtml = createVersionedHtmlSender({
+  publicDir: PUBLIC_DIR,
+  buildHash: BUILD_HASH
+});
+app.disable('x-powered-by');
+app.use((req, res, next) => {
+  const requestId = req.get('X-Request-Id') || crypto.randomUUID();
+  req.requestId = requestId;
+  res.setHeader('X-Request-Id', requestId);
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+  res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
+  if (req.secure || req.get('x-forwarded-proto') === 'https') {
+    res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+  }
+  next();
+});
+app.use(httpOptimizationMiddleware);
+app.use(express.json({ limit: JSON_BODY_LIMIT }));
+app.use('/api', noStoreApiCacheMiddleware);
+app.use(createVersionedHtmlMiddleware(sendVersionedHtml));
+app.use(express.static(PUBLIC_DIR, {
+  etag: true,
+  lastModified: true,
+  maxAge: '1y',
+  immutable: true,
+  index: false,
+  setHeaders: staticAssetHeaders
+}));
+app.get('/object-registry.js', (req, res) => {
+  res.setHeader('Content-Type', 'application/javascript; charset=utf-8');
+  res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+  res.send(`window.SaaSRAY_OBJECT_REGISTRY=${JSON.stringify(getFrontendRegistry())};`);
+});
+app.get('/healthz', (req, res) => {
+  res.json({ ok: true, service: 'saasray-crm', uptime: process.uptime() });
+});
+perfAudit.instrumentSupabase(supabase);
+app.use('/api', perfAudit.middleware);
+
+async function getPortalUserInvitationContext(userId) {
+  const { data: user, error } = await supabase
+    .from('users')
+    .select('id, email, name, role, org_role_id, must_change_pw, invitation_expires_at, invitation_cancelled_at, email_verified_at, password_created_at, setup_completed_at')
+    .eq('id', userId)
+    .single();
+
+  if (error || !user) {
+    throw error || new Error('User not found');
+  }
+
+  let roleName = user.role || 'Not assigned';
+
+  if (user.org_role_id) {
+    const { data: orgRole } = await supabase
+      .from('org_roles')
+      .select('name')
+      .eq('id', user.org_role_id)
+      .maybeSingle();
+    if (orgRole?.name) roleName = orgRole.name;
+  }
+
+  const { data: profileAssignment } = await supabase
+    .from('user_profile_assignments')
+    .select('profiles(name)')
+    .eq('user_id', userId)
+    .maybeSingle();
+
+  const profileName = profileAssignment?.profiles?.name;
+
+  return {
+    user,
+    roleName: roleName || profileName || 'Not assigned'
+  };
+}
+
+function needsInvitation(user = {}) {
+  if (user.invitation_cancelled_at) return true;
+  if (!user.email_verified_at) return true;
+  if (!user.password_created_at) return true;
+  if (!user.setup_completed_at) return true;
+  if (user.must_change_pw) return true;
+  if (user.invitation_expires_at && new Date(user.invitation_expires_at) < new Date()) return true;
+  return false;
+}
+
+async function revokeActiveSetupTokens(userId) {
+  const nowIso = new Date().toISOString();
+  const { error } = await supabase
+    .from('password_reset_tokens')
+    .update({ revoked_at: nowIso })
+    .eq('user_id', userId)
+    .eq('token_type', INVITATION_TOKEN_TYPE)
+    .eq('used', false)
+    .is('revoked_at', null);
+
+  if (error) throw error;
+}
+
+async function createSetupToken(userId, adminUserId) {
+  const rawToken = createSecureToken();
+  const expiresAt = new Date(Date.now() + SETUP_TOKEN_TTL_MS);
+
+  await revokeActiveSetupTokens(userId);
+
+  const { error } = await supabase
+    .from('password_reset_tokens')
+    .insert({
+      user_id: userId,
+      token_hash: hashToken(rawToken),
+      expires_at: expiresAt.toISOString(),
+      used: false,
+      token_type: INVITATION_TOKEN_TYPE,
+      created_by: adminUserId || null
+    });
+
+  if (error) throw error;
+
+  return { rawToken, expiresAt };
+}
+
+async function sendPortalUserInvitation({ userId, adminUser, req, auditAction }) {
+  const { user, roleName } = await getPortalUserInvitationContext(userId);
+  const { rawToken, expiresAt } = await createSetupToken(userId, adminUser?.id);
+  const appUrl = normalizeAppUrl(req);
+  const setupUrl = `${appUrl}/reset-password.html?token=${encodeURIComponent(rawToken)}`;
+
+  const sendResult = await sendWelcomeUserInvitation({
+    name: user.name,
+    email: user.email,
+    roleName,
+    appUrl,
+    setupUrl,
+    expiresText: '1 hour'
+  });
+
+  const nowIso = new Date().toISOString();
+  await supabase
+    .from('users')
+    .update({
+      invitation_sent_at: nowIso,
+      invitation_expires_at: expiresAt.toISOString(),
+      invitation_cancelled_at: null,
+      updated_at: nowIso
+    })
+    .eq('id', user.id);
+  invalidateUserContextCache(user.id);
+
+  await writeAuditLog({
+    userId: adminUser?.id || user.id,
+    userEmail: adminUser?.email || user.email,
+    userRole: adminUser?.role || 'system',
+    action: auditAction,
+    payload: {
+      invitedUserId: user.id,
+      invitedEmail: user.email,
+      expiresAt: expiresAt.toISOString(),
+      messageId: sendResult?.id || null
+    },
+    ipAddress: req.ip
+  });
+
+  return { expiresAt, messageId: sendResult?.id || null };
+}
+
+const {
+  checkAuth,
+  permissionsFromRequestContext,
+  getRequestContextStats
+} = createAuthMiddleware({
+  jwt,
+  jwtSecret: JWT_SECRET,
+  getUserWithPermissions,
+  getUserContextCacheStats,
+  getOrganizationId: () => orgStore.activeOrgKey || activeOrg()?.key || DEFAULT_ORG_KEY
+});
+const { checkPermission } = createPermissionMiddleware({
+  perfAudit,
+  getEffectivePermissions,
+  permissionsFromRequestContext
+});
+const {
+  getEffectiveFieldPerms,
+  applyFieldSecurity,
+  applyFieldWriteSecurity,
+  attachFieldPerms,
+  clearFieldPermCache,
+  clearAllFieldPermCache
+} = createFieldSecurityService({
+  supabase,
+  getEffectivePermissionSetIds
+});
+
+// Role gate — use AFTER checkAuth. Roles in order: system_administrator > admin > manager > employee > readonly
+// NEW: profile-based admin check
+// isAdminPanel = requires System Administrator profile
+// isAdminOrAbove = requires System Admin OR admin role (backward compat)
+// ── FIELD LEVEL SECURITY ──────────────────────────────────────
+// Cache field permissions per user per object (cleared on logout)
+// ── SHARING-AWARE RECORD VISIBILITY ──────────────────────────
+
+const PORTAL_OWNER_FIELD = 'Portal_Owner__c';
+const PORTAL_AUDIT_FIELDS = [
+  'Portal_Owner__c',
+  'Portal_Created_By__c',
+  'Portal_Last_Modified_By__c'
+];
+const roleVisibilityCache = new Map();
+const owdCache = new Map();
+const portalUserContextCache = new Map();
+const publicGroupMembershipCache = new Map();
+const sharingRulesCache = new Map();
+const recordShareCache = new Map();
+let securityPerfSeq = 0;
+
+function securityPerfLog(requestId, label, data = {}) {
+}
+
+function clearSharingAccessCaches() {
+  portalUserContextCache.clear();
+  publicGroupMembershipCache.clear();
+  sharingRulesCache.clear();
+  recordShareCache.clear();
+}
+
+function getRecordOwnerId(record = {}) {
+  return record?.[PORTAL_OWNER_FIELD] || null;
+}
+
+function roleVisibilityKey(viewerUserId, ownerUserId) {
+  return `${viewerUserId}:${ownerUserId}`;
+}
+
+async function getOrgWideDefaultAccess(sfObject) {
+  if (owdCache.has(sfObject)) return owdCache.get(sfObject);
+
+  const { data, error } = await supabase
+    .from('org_wide_defaults')
+    .select('access_level')
+    .eq('sf_object', sfObject)
+    .maybeSingle();
+
+  if (error) {
+    console.error('[record-visibility] OWD lookup failed:', error.message);
+    owdCache.set(sfObject, 'private');
+    return 'private';
+  }
+
+  const accessLevel = data?.access_level || 'private';
+  owdCache.set(sfObject, accessLevel);
+  return accessLevel;
+}
+
+async function canViewerAccessOwnerRole(viewerUserId, ownerUserId) {
+  if (!viewerUserId || !ownerUserId) return false;
+  if (viewerUserId === ownerUserId) return true;
+
+  const cacheKey = roleVisibilityKey(viewerUserId, ownerUserId);
+  if (roleVisibilityCache.has(cacheKey)) return roleVisibilityCache.get(cacheKey);
+
+  const { data: users, error: usersError } = await supabase
+    .from('users')
+    .select('id, org_role_id')
+    .in('id', [viewerUserId, ownerUserId])
+    .eq('is_active', true);
+
+  if (usersError) {
+    console.error('[record-visibility] user role lookup failed:', usersError.message);
+    roleVisibilityCache.set(cacheKey, false);
+    return false;
+  }
+
+  const viewer = (users || []).find(row => row.id === viewerUserId);
+  const owner = (users || []).find(row => row.id === ownerUserId);
+  const roleIds = [...new Set([viewer?.org_role_id, owner?.org_role_id].filter(Boolean))];
+  if (!viewer?.org_role_id || !owner?.org_role_id || !roleIds.length) {
+    roleVisibilityCache.set(cacheKey, false);
+    return false;
+  }
+
+  const { data: roles, error: rolesError } = await supabase
+    .from('org_roles')
+    .select('id, path')
+    .in('id', roleIds)
+    .eq('is_active', true);
+
+  if (rolesError) {
+    console.error('[record-visibility] org role path lookup failed:', rolesError.message);
+    roleVisibilityCache.set(cacheKey, false);
+    return false;
+  }
+
+  const viewerPath = (roles || []).find(role => role.id === viewer.org_role_id)?.path;
+  const ownerPath = (roles || []).find(role => role.id === owner.org_role_id)?.path;
+  let allowed = false;
+
+  if (viewerPath && ownerPath && viewer.org_role_id !== owner.org_role_id) {
+    allowed = ownerPath.startsWith(`${viewerPath}/`);
+  }
+
+  roleVisibilityCache.set(cacheKey, allowed);
+  return allowed;
+}
+
+function strongestRecordAccess(current, next) {
+  const rank = { none: 0, read: 1, edit: 2 };
+  if (!next?.allowed) return current;
+  const currentRank = rank[current.accessLevel] || 0;
+  const nextRank = rank[next.accessLevel] || 0;
+  return nextRank > currentRank ? next : current;
+}
+
+async function getPortalUserRoleContext(userId) {
+  if (!userId) return null;
+  if (portalUserContextCache.has(userId)) return portalUserContextCache.get(userId);
+
+  const promise = (async () => {
+    try {
+      const { data: user, error } = await supabase
+        .from('users')
+        .select('id, role, org_role_id')
+        .eq('id', userId)
+        .eq('is_active', true)
+        .maybeSingle();
+
+      if (error) {
+        console.error('[record-visibility] portal user context lookup failed:', error.message);
+        return null;
+      }
+      return user || null;
+    } catch (err) {
+      console.error('[record-visibility] portal user context lookup failed:', err.message);
+      return null;
+    }
+  })();
+
+  portalUserContextCache.set(userId, promise);
+  return promise;
+}
+
+async function getPublicGroupIdsForUser(userId, orgRoleId) {
+  const cacheKey = `${userId}:${orgRoleId || ''}`;
+  if (publicGroupMembershipCache.has(cacheKey)) {
+    return publicGroupMembershipCache.get(cacheKey);
+  }
+
+  const promise = (async () => {
+    const directGroups = new Set();
+
+    try {
+      const { data, error } = await supabase
+        .from('public_group_members')
+        .select('group_id, member_type, user_id, org_role_id')
+        .or(`user_id.eq.${userId}${orgRoleId ? `,org_role_id.eq.${orgRoleId}` : ''}`);
+
+      if (error) {
+        console.error('[record-visibility] public group membership lookup failed:', error.message);
+        return directGroups;
+      }
+
+      const candidateRows = data || [];
+      const groupIds = [...new Set(candidateRows.map(row => row.group_id).filter(Boolean))];
+      if (!groupIds.length) return directGroups;
+
+      const { data: groups, error: groupsError } = await supabase
+        .from('public_groups')
+        .select('id, is_active')
+        .in('id', groupIds);
+
+      if (groupsError) {
+        console.error('[record-visibility] public group lookup failed:', groupsError.message);
+        return directGroups;
+      }
+
+      const activeGroupIds = new Set((groups || []).filter(group => group.is_active).map(group => group.id));
+      candidateRows.forEach((row) => {
+        if (!activeGroupIds.has(row.group_id)) return;
+        if (row.member_type === 'user' && row.user_id === userId) directGroups.add(row.group_id);
+        if (row.member_type === 'role' && orgRoleId && row.org_role_id === orgRoleId) directGroups.add(row.group_id);
+      });
+
+      return directGroups;
+    } catch (err) {
+      console.error('[record-visibility] public group membership lookup failed:', err.message);
+      return directGroups;
+    }
+  })();
+
+  publicGroupMembershipCache.set(cacheKey, promise);
+  return promise;
+}
+
+async function getSharingRulesForObject(sfObject) {
+  if (sharingRulesCache.has(sfObject)) return sharingRulesCache.get(sfObject);
+
+  const promise = (async () => {
+    try {
+      const { data: rules, error } = await supabase
+        .from('sharing_rules')
+        .select('*')
+        .eq('sf_object', sfObject)
+        .eq('is_active', true);
+
+      if (error) {
+        console.error('[record-visibility] sharing rule lookup failed:', error.message);
+        return [];
+      }
+      return rules || [];
+    } catch (err) {
+      console.error('[record-visibility] sharing rule lookup failed:', err.message);
+      return [];
+    }
+  })();
+
+  sharingRulesCache.set(sfObject, promise);
+  return promise;
+}
+
+async function getRecordSharesForViewer(recordId, sfObject, userId, viewerGroupIds) {
+  if (!recordId) return [];
+  const groupKey = [...viewerGroupIds].sort().join(',');
+  const cacheKey = `${sfObject}:${recordId}:${userId}:${groupKey}`;
+  if (recordShareCache.has(cacheKey)) return recordShareCache.get(cacheKey);
+
+  const promise = (async () => {
+    try {
+      const orFilter = `shared_with.eq.${userId}${viewerGroupIds.size ? `,shared_with_group.in.(${[...viewerGroupIds].join(',')})` : ''}`;
+      const { data: shares, error } = await supabase
+        .from('record_shares')
+        .select('access_level, shared_with, shared_with_group, expires_at')
+        .eq('sf_object', sfObject)
+        .eq('record_id', recordId)
+        .or(orFilter);
+
+      if (error) {
+        console.error('[record-visibility] record share lookup failed:', error.message);
+        return [];
+      }
+
+      const now = Date.now();
+      return (shares || []).filter(share => !share.expires_at || new Date(share.expires_at).getTime() > now);
+    } catch (err) {
+      console.error('[record-visibility] record share lookup failed:', err.message);
+      return [];
+    }
+  })();
+
+  recordShareCache.set(cacheKey, promise);
+  return promise;
+}
+
+async function getRecordSharesForViewerBatch(recordIds = [], sfObject, userId, viewerGroupIds) {
+  const ids = [...new Set((recordIds || []).filter(Boolean))];
+  const sharesByRecordId = new Map(ids.map(id => [id, []]));
+  if (!ids.length) return sharesByRecordId;
+
+  const groupIds = [...viewerGroupIds];
+  const now = Date.now();
+  for (let i = 0; i < ids.length; i += 100) {
+    const chunk = ids.slice(i, i + 100);
+    const orFilter = `shared_with.eq.${userId}${groupIds.length ? `,shared_with_group.in.(${groupIds.join(',')})` : ''}`;
+    const { data: shares, error } = await supabase
+      .from('record_shares')
+      .select('record_id, access_level, shared_with, shared_with_group, expires_at')
+      .eq('sf_object', sfObject)
+      .in('record_id', chunk)
+      .or(orFilter);
+
+    if (error) {
+      console.error('[record-visibility] batch record share lookup failed:', error.message);
+      continue;
+    }
+
+    (shares || [])
+      .filter(share => !share.expires_at || new Date(share.expires_at).getTime() > now)
+      .forEach((share) => {
+        if (!sharesByRecordId.has(share.record_id)) sharesByRecordId.set(share.record_id, []);
+        sharesByRecordId.get(share.record_id).push(share);
+      });
+  }
+  return sharesByRecordId;
+}
+
+async function buildVisibilityContext(userId, userRole, sfObject) {
+  const viewer = await getPortalUserRoleContext(userId);
+  const viewerGroupIds = await getPublicGroupIdsForUser(userId, viewer?.org_role_id);
+  const rules = await getSharingRulesForObject(sfObject);
+  return { viewer, viewerGroupIds, rules };
+}
+
+async function getUserIdsForOrgRoleIds(orgRoleIds = []) {
+  const ids = [...new Set((orgRoleIds || []).filter(Boolean))];
+  if (!ids.length) return [];
+
+  const { data, error } = await supabase
+    .from('users')
+    .select('id')
+    .in('org_role_id', ids)
+    .eq('is_active', true);
+
+  if (error) {
+    console.error('[record-visibility] users for role lookup failed:', error.message);
+    return [];
+  }
+  return (data || []).map(row => row.id).filter(Boolean);
+}
+
+async function getHierarchyVisibleOwnerIds(userId, orgRoleId) {
+  const ownerIds = new Set([userId].filter(Boolean));
+  if (!orgRoleId) return ownerIds;
+
+  const { data: viewerRole, error: viewerRoleError } = await supabase
+    .from('org_roles')
+    .select('path')
+    .eq('id', orgRoleId)
+    .eq('is_active', true)
+    .maybeSingle();
+
+  if (viewerRoleError || !viewerRole?.path) return ownerIds;
+
+  const { data: roleRows, error: roleError } = await supabase
+    .from('org_roles')
+    .select('id')
+    .like('path', `${viewerRole.path}/%`)
+    .eq('is_active', true);
+
+  if (roleError) {
+    console.error('[record-visibility] descendant role lookup failed:', roleError.message);
+    return ownerIds;
+  }
+
+  const descendantRoleIds = (roleRows || []).map(row => row.id).filter(Boolean);
+  (await getUserIdsForOrgRoleIds(descendantRoleIds)).forEach(id => ownerIds.add(id));
+  return ownerIds;
+}
+
+async function getViewerRecordShareIds(sfObject, userId, viewerGroupIds) {
+  const groupIds = [...viewerGroupIds];
+  const recordIds = new Set();
+  const orFilter = `shared_with.eq.${userId}${groupIds.length ? `,shared_with_group.in.(${groupIds.join(',')})` : ''}`;
+
+  const { data, error } = await supabase
+    .from('record_shares')
+    .select('record_id, expires_at')
+    .eq('sf_object', sfObject)
+    .or(orFilter);
+
+  if (error) {
+    console.error('[record-visibility] viewer record share id lookup failed:', error.message);
+    return recordIds;
+  }
+
+  const now = Date.now();
+  (data || [])
+    .filter(share => share.record_id && (!share.expires_at || new Date(share.expires_at).getTime() > now))
+    .forEach(share => recordIds.add(share.record_id));
+  return recordIds;
+}
+
+async function buildReadableRecordScopeFilter(sfObject, user, requestId = 'n/a', availableFields = null) {
+  const startedAt = performance.now();
+  if (!user || isFullAccessUser(user)) {
+    perfAudit.recordEvent('sharing', `${sfObject}.scopeFilter.admin`, performance.now() - startedAt);
+    return { clause: '', reason: 'admin' };
+  }
+  const resolvedAvailableFields = availableFields || await getObjectFieldSet(sfObject);
+  if (!resolvedAvailableFields.has(PORTAL_OWNER_FIELD)) {
+    perfAudit.recordEvent('sharing', `${sfObject}.scopeFilter.no_owner_field`, performance.now() - startedAt);
+    return { clause: '', reason: 'no_owner_field' };
+  }
+
+  const owdAccess = await getOrgWideDefaultAccess(sfObject);
+  if (['public_read', 'public_read_write'].includes(owdAccess)) {
+    perfAudit.recordEvent('sharing', `${sfObject}.scopeFilter.${owdAccess}`, performance.now() - startedAt);
+    return { clause: '', reason: owdAccess };
+  }
+
+  const context = await buildVisibilityContext(user.id, user.role, sfObject);
+  const ownerIds = await getHierarchyVisibleOwnerIds(user.id, context.viewer?.org_role_id);
+  const matchedOwnerRoleIds = new Set();
+  let unrestrictedBySharingRule = false;
+
+  (context.rules || []).forEach((rule) => {
+    const viewerMatches =
+      (rule.shared_with_group_id && context.viewerGroupIds.has(rule.shared_with_group_id)) ||
+      (rule.shared_with_org_role_id && context.viewer?.org_role_id === rule.shared_with_org_role_id) ||
+      (!rule.shared_with_org_role_id && !rule.shared_with_group_id && rule.shared_with_role && user.role === rule.shared_with_role);
+
+    if (!viewerMatches) return;
+    if (!rule.owner_org_role_id && !rule.owner_role) {
+      unrestrictedBySharingRule = true;
+      return;
+    }
+    if (rule.owner_org_role_id) matchedOwnerRoleIds.add(rule.owner_org_role_id);
+  });
+
+  if (unrestrictedBySharingRule) {
+    securityPerfLog(requestId, 'scopeFilter', { object: sfObject, reason: 'sharing_any_owner', ms: msSince(startedAt) });
+    perfAudit.recordEvent('sharing', `${sfObject}.scopeFilter.sharing_any_owner`, performance.now() - startedAt);
+    return { clause: '', reason: 'sharing_any_owner' };
+  }
+
+  (await getUserIdsForOrgRoleIds([...matchedOwnerRoleIds])).forEach(id => ownerIds.add(id));
+  const sharedRecordIds = await getViewerRecordShareIds(sfObject, user.id, context.viewerGroupIds);
+
+  if (ownerIds.size > 900 || sharedRecordIds.size > 900) {
+    securityPerfLog(requestId, 'scopeFilter', {
+      object: sfObject,
+      reason: 'too_many_ids',
+      owners: ownerIds.size,
+      shares: sharedRecordIds.size,
+      ms: msSince(startedAt)
+    });
+    perfAudit.recordEvent('sharing', `${sfObject}.scopeFilter.too_many_ids`, performance.now() - startedAt, {
+      owners: ownerIds.size,
+      shares: sharedRecordIds.size
+    });
+    return { clause: '', reason: 'too_many_ids' };
+  }
+
+  const parts = [];
+  if (ownerIds.size) {
+    parts.push(`${PORTAL_OWNER_FIELD} IN (${[...ownerIds].map(id => `'${escapeSOQL(id)}'`).join(', ')})`);
+  }
+  if (sharedRecordIds.size) {
+    parts.push(`Id IN (${[...sharedRecordIds].map(id => `'${escapeSOQL(id)}'`).join(', ')})`);
+  }
+
+  const clause = parts.length ? `(${parts.join(' OR ')})` : `${PORTAL_OWNER_FIELD} = '${escapeSOQL(user.id)}'`;
+  securityPerfLog(requestId, 'scopeFilter', {
+    object: sfObject,
+    reason: 'owner_scope',
+    owners: ownerIds.size,
+    shares: sharedRecordIds.size,
+    ms: msSince(startedAt)
+  });
+  perfAudit.recordEvent('sharing', `${sfObject}.scopeFilter.owner_scope`, performance.now() - startedAt, {
+    owners: ownerIds.size,
+    shares: sharedRecordIds.size
+  });
+  return { clause, reason: 'owner_scope' };
+}
+
+async function getSharingAccess(record, userId, userRole, sfObject, context = null) {
+  const ownerId = getRecordOwnerId(record);
+  const ctx = context || await buildVisibilityContext(userId, userRole, sfObject);
+  const { viewer, viewerGroupIds, rules } = ctx;
+  const owner =
+    ctx.ownerContextById?.get(ownerId) ||
+    (ownerId ? await getPortalUserRoleContext(ownerId) : null);
+
+  let best = { allowed: false, accessLevel: 'none', via: 'sharing_rule' };
+  (rules || []).forEach((rule) => {
+    const ownerMatches =
+      (!rule.owner_org_role_id && !rule.owner_role) ||
+      (rule.owner_org_role_id && owner?.org_role_id === rule.owner_org_role_id) ||
+      (!rule.owner_org_role_id && rule.owner_role && owner?.role === rule.owner_role);
+
+    if (!ownerMatches) return;
+
+    const viewerMatches =
+      (rule.shared_with_group_id && viewerGroupIds.has(rule.shared_with_group_id)) ||
+      (rule.shared_with_org_role_id && viewer?.org_role_id === rule.shared_with_org_role_id) ||
+      (!rule.shared_with_org_role_id && !rule.shared_with_group_id && rule.shared_with_role && userRole === rule.shared_with_role);
+
+    if (!viewerMatches) return;
+
+    best = strongestRecordAccess(best, {
+      allowed: true,
+      accessLevel: rule.access_level === 'edit' ? 'edit' : 'read',
+      via: rule.shared_with_group_id ? 'sharing_rule_public_group' : 'sharing_rule'
+    });
+  });
+
+  const shares =
+    ctx.recordSharesById?.get(record?.Id) ||
+    await getRecordSharesForViewer(record?.Id, sfObject, userId, viewerGroupIds);
+
+  (shares || []).forEach((share) => {
+    const matchedUser = share.shared_with === userId;
+    const matchedGroup = share.shared_with_group && viewerGroupIds.has(share.shared_with_group);
+    if (!matchedUser && !matchedGroup) return;
+    best = strongestRecordAccess(best, {
+      allowed: true,
+      accessLevel: share.access_level === 'edit' ? 'edit' : 'read',
+      via: matchedGroup ? 'manual_public_group' : 'manual'
+    });
+  });
+
+  return best;
+}
+
+async function evaluateRecordAccess(record, userId, userRole, sfObject, isSystemAdmin = false, context = null) {
+  if (isSystemAdmin) return { allowed: true, accessLevel: 'edit', via: 'admin' };
+
+  const ownerId = getRecordOwnerId(record);
+  const owdAccess = await getOrgWideDefaultAccess(sfObject);
+  let access = { allowed: false, accessLevel: 'none', via: 'denied' };
+
+  if (owdAccess === 'public_read_write') {
+    return { allowed: true, accessLevel: 'edit', via: 'owd' };
+  }
+
+  if (ownerId && ownerId === userId) {
+    return { allowed: true, accessLevel: 'edit', via: 'owner' };
+  }
+
+  if (ownerId && await canViewerAccessOwnerRole(userId, ownerId)) {
+    return { allowed: true, accessLevel: 'edit', via: 'hierarchy' };
+  }
+
+  if (owdAccess === 'public_read') {
+    access = { allowed: true, accessLevel: 'read', via: 'owd' };
+  }
+
+  access = strongestRecordAccess(access, await getSharingAccess(record, userId, userRole, sfObject, context));
+
+  if (!access.allowed && !ownerId) {
+    return { allowed: false, accessLevel: 'none', via: 'missing_owner' };
+  }
+
+  return access;
+}
+
+async function canSeeRecord(record, userId, userRole, sfObject, isSystemAdmin = false) {
+  const access = await evaluateRecordAccess(record, userId, userRole, sfObject, isSystemAdmin);
+  return access.allowed;
+}
+
+async function applyRecordVisibility(records, userId, userRole, sfObject, isSystemAdmin = false, requestId = 'n/a') {
+  const startedAt = performance.now();
+  if (isSystemAdmin) {
+    perfAudit.recordEvent('sharing', `${sfObject}.applyRecordVisibility.admin`, performance.now() - startedAt);
+    return records;
+  }
+  const rows = records || [];
+  const context = await buildVisibilityContext(userId, userRole, sfObject);
+  const ownerIds = [...new Set(rows.map(getRecordOwnerId).filter(Boolean))];
+  context.ownerContextById = new Map();
+  await Promise.all(ownerIds.map(async (ownerId) => {
+    context.ownerContextById.set(ownerId, await getPortalUserRoleContext(ownerId));
+  }));
+  context.recordSharesById = await getRecordSharesForViewerBatch(
+    rows.map(record => record?.Id).filter(Boolean),
+    sfObject,
+    userId,
+    context.viewerGroupIds
+  );
+
+  const decisions = await Promise.all(
+    rows.map(async (record) => ({
+      record,
+      allowed: (await evaluateRecordAccess(record, userId, userRole, sfObject, isSystemAdmin, context)).allowed
+    }))
+  );
+  const visible = decisions.filter(item => item.allowed).map(item => item.record);
+  securityPerfLog(requestId, 'applyRecordVisibility', {
+    object: sfObject,
+    evaluated: rows.length,
+    visible: visible.length,
+    owners: ownerIds.length,
+    groups: context.viewerGroupIds.size,
+    rules: context.rules.length,
+    ms: msSince(startedAt)
+  });
+  perfAudit.recordEvent('sharing', `${sfObject}.applyRecordVisibility`, performance.now() - startedAt, {
+    evaluated: rows.length,
+    visible: visible.length,
+    owners: ownerIds.length,
+    groups: context.viewerGroupIds.size,
+    rules: context.rules.length
+  });
+  return visible;
+}
+
+async function canEditRecord(record, userId, userRole, sfObject, isSystemAdmin = false) {
+  const access = await evaluateRecordAccess(record, userId, userRole, sfObject, isSystemAdmin);
+  return access.allowed && access.accessLevel === 'edit';
+}
+
+async function filterSearchRecordsByVisibility(searchRecords = [], req) {
+  if (req.user?.isSystemAdmin) return searchRecords;
+
+  const grouped = searchRecords.reduce((acc, record) => {
+    const objectName = record?.attributes?.type;
+    if (!OBJECTS[objectName]) return acc;
+    if (!acc[objectName]) acc[objectName] = [];
+    acc[objectName].push(record);
+    return acc;
+  }, {});
+
+  const allowedByKey = new Set();
+  await Promise.all(Object.entries(grouped).map(async ([objectName, records]) => {
+    const perms = permissionsFromRequestContext(req, objectName) ||
+      await getEffectivePermissions(req.user.id, objectName);
+    if (!perms?.can_read) return;
+
+    const ownedRecords = await hydrateRecordOwners(records, objectName);
+    const visibleRecords = await applyRecordVisibility(
+      ownedRecords,
+      req.user.id,
+      req.user.role,
+      objectName,
+      req.user.isSystemAdmin
+    );
+    visibleRecords.forEach(record => allowedByKey.add(`${objectName}:${record.Id}`));
+  }));
+
+  return searchRecords.filter(record => allowedByKey.has(`${record?.attributes?.type}:${record?.Id}`));
+}
+
+async function filterRelatedListsByVisibility(lists = [], req, requestId = 'related') {
+  if (req.user?.isSystemAdmin) return lists;
+
+  return Promise.all((lists || []).map(async (list) => {
+    if (!OBJECTS[list.objectName]) return list;
+
+    const perms = permissionsFromRequestContext(req, list.objectName) ||
+      await getEffectivePermissions(req.user.id, list.objectName);
+    if (!perms?.can_read) {
+      return { ...list, records: [], totalSize: 0 };
+    }
+
+    const ownedRecords = await hydrateRecordOwners(list.records || [], list.objectName);
+    const records = await applyRecordVisibility(
+      ownedRecords,
+      req.user.id,
+      req.user.role,
+      list.objectName,
+      req.user.isSystemAdmin,
+      requestId
+    );
+
+    return { ...list, records, totalSize: records.length };
+  }));
+}
+// GET org wide defaults
+app.get('/api/portal/owd', checkAuth, checkRole('admin'), async (req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from('org_wide_defaults')
+      .select('sf_object, access_level, description')
+      .order('sf_object');
+    if (error) throw error;
+    const existingByObject = new Map((data || []).map(row => [row.sf_object, row]));
+    const defaults = Object.keys(OBJECTS)
+      .filter(objectName => !INTERNAL_OBJECTS.includes(objectName))
+      .map(objectName => existingByObject.get(objectName) || {
+        sf_object: objectName,
+        access_level: 'private',
+        description: null
+      });
+    res.json({ defaults });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// PATCH update OWD for one object
+app.patch('/api/portal/owd', checkAuth, checkRole('system_administrator'), async (req, res) => {
+  const { sfObject, accessLevel } = req.body || {};
+  const valid = ['private', 'public_read', 'public_read_write', 'controlled_by_parent'];
+  if (!sfObject || !valid.includes(accessLevel)) {
+    return res.status(400).json({ error: 'Invalid sfObject or accessLevel' });
+  }
+  try {
+    const { error } = await supabase
+      .from('org_wide_defaults')
+      .upsert({
+        sf_object: sfObject,
+        access_level: accessLevel,
+        updated_at: new Date().toISOString(),
+        updated_by: req.user.id
+      }, { onConflict: 'sf_object' });
+    if (error) throw error;
+    owdCache.delete(sfObject);
+    await writeAuditLog({
+      userId: req.user.id, userEmail: req.user.email,
+      userRole: req.user.role, action: 'edit',
+      payload: { type: 'owd_change', sfObject, accessLevel },
+      ipAddress: req.ip
+    });
+    res.json({ success: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+
+// POST share a record with another user
+app.post('/api/:object/:id/share', checkAuth, async (req, res) => {
+  const { object, id } = req.params;
+  const { sharedWithUserId, accessLevel = 'read', expiresAt } = req.body || {};
+
+  if (!OBJECTS[object]) return res.status(400).json({ error: 'Unknown object' });
+  if (!sharedWithUserId) return res.status(400).json({ error: 'sharedWithUserId required' });
+  if (!['read', 'edit'].includes(accessLevel)) {
+    return res.status(400).json({ error: 'accessLevel must be read or edit' });
+  }
+
+  try {
+    // Verify sharer owns this record unless they have System Administrator profile
+    if (!req.user.isSystemAdmin) {
+      const record = await sfGet(`/sobjects/${object}/${id}?fields=Portal_Owner__c`);
+      if (record.Portal_Owner__c !== req.user.id) {
+        return res.status(403).json({ error: 'Only the record owner can share this record' });
+      }
+    }
+
+    const { error } = await supabase
+      .from('record_shares')
+      .upsert({
+        sf_object: object,
+        record_id: id,
+        shared_by: req.user.id,
+        shared_with: sharedWithUserId,
+        access_level: accessLevel,
+        expires_at: expiresAt || null
+      }, { onConflict: 'sf_object,record_id,shared_with' });
+
+    if (error) throw error;
+    clearSharingAccessCaches();
+
+    await writeAuditLog({
+      userId: req.user.id, userEmail: req.user.email,
+      userRole: req.user.role, action: 'edit',
+      payload: { type: 'manual_share', object, recordId: id, sharedWithUserId, accessLevel },
+      ipAddress: req.ip
+    });
+
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// DELETE remove a manual share
+app.delete('/api/:object/:id/share/:userId', checkAuth, async (req, res) => {
+  const { object, id, userId } = req.params;
+  try {
+    await supabase
+      .from('record_shares')
+      .delete()
+      .eq('sf_object', object)
+      .eq('record_id', id)
+      .eq('shared_with', userId);
+    clearSharingAccessCaches();
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// GET sharing rules
+app.get('/api/portal/sharing-rules', checkAuth, checkRole('admin'), async (req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from('sharing_rules')
+      .select('*')
+      .order('sf_object');
+    if (error) throw error;
+    res.json({ rules: data || [] });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// POST create sharing rule
+app.post('/api/portal/sharing-rules', checkAuth, checkRole('system_administrator'), async (req, res) => {
+  const {
+    name,
+    sfObject,
+    ownerRole,
+    sharedWithRole,
+    ownerOrgRoleId,
+    sharedWithOrgRoleId,
+    sharedWithGroupId,
+    sharedWithType = sharedWithGroupId ? 'public_group' : 'role',
+    accessLevel,
+    description
+  } = req.body || {};
+  const hasShareTarget =
+    (sharedWithType === 'public_group' && sharedWithGroupId) ||
+    (sharedWithType !== 'public_group' && (sharedWithOrgRoleId || sharedWithRole));
+
+  if (!name || !sfObject || !hasShareTarget || !accessLevel) {
+    return res.status(400).json({ error: 'name, sfObject, share target, accessLevel required' });
+  }
+  try {
+    const { data, error } = await supabase
+      .from('sharing_rules')
+      .insert({
+        name, sf_object: sfObject,
+        owner_role: ownerRole || null,
+        shared_with_role: sharedWithRole || null,
+        owner_org_role_id: ownerOrgRoleId || null,
+        shared_with_org_role_id: sharedWithType === 'public_group' ? null : (sharedWithOrgRoleId || null),
+        shared_with_group_id: sharedWithType === 'public_group' ? sharedWithGroupId : null,
+        shared_with_type: sharedWithType === 'public_group' ? 'public_group' : 'role',
+        access_level: accessLevel,
+        description: description || null,
+        created_by: req.user.id
+      })
+      .select('id').single();
+    if (error) throw error;
+    clearSharingAccessCaches();
+    await writeAuditLog({
+      userId: req.user.id, userEmail: req.user.email,
+      userRole: req.user.role, action: 'create',
+      payload: { type: 'sharing_rule', name, sfObject },
+      ipAddress: req.ip
+    });
+    res.status(201).json({ success: true, id: data.id });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// PATCH toggle sharing rule active/inactive
+app.patch('/api/portal/sharing-rules/:id', checkAuth, checkRole('system_administrator'), async (req, res) => {
+  const {
+    name,
+    sfObject,
+    ownerRole,
+    sharedWithRole,
+    ownerOrgRoleId,
+    sharedWithOrgRoleId,
+    sharedWithGroupId,
+    sharedWithType,
+    accessLevel,
+    description,
+    isActive
+  } = req.body || {};
+
+  const updates = {};
+  if (name !== undefined) updates.name = String(name || '').trim();
+  if (sfObject !== undefined) updates.sf_object = sfObject;
+  if (ownerRole !== undefined) updates.owner_role = ownerRole || null;
+  if (ownerOrgRoleId !== undefined) updates.owner_org_role_id = ownerOrgRoleId || null;
+  if (accessLevel !== undefined) updates.access_level = accessLevel;
+  if (description !== undefined) updates.description = description || null;
+  if (isActive !== undefined) updates.is_active = Boolean(isActive);
+
+  if (sharedWithType !== undefined || sharedWithOrgRoleId !== undefined || sharedWithGroupId !== undefined || sharedWithRole !== undefined) {
+    const targetType = sharedWithType === 'public_group' ? 'public_group' : 'role';
+    updates.shared_with_type = targetType;
+    updates.shared_with_role = targetType === 'role' ? (sharedWithRole || null) : null;
+    updates.shared_with_org_role_id = targetType === 'role' ? (sharedWithOrgRoleId || null) : null;
+    updates.shared_with_group_id = targetType === 'public_group' ? (sharedWithGroupId || null) : null;
+  }
+
+  if (updates.name !== undefined && !updates.name) {
+    return res.status(400).json({ error: 'Rule name is required' });
+  }
+  if (updates.access_level !== undefined && !['read', 'edit'].includes(updates.access_level)) {
+    return res.status(400).json({ error: 'Access level must be read or edit' });
+  }
+  if (updates.shared_with_type === 'public_group' && !updates.shared_with_group_id) {
+    return res.status(400).json({ error: 'Public group target is required' });
+  }
+  if (updates.shared_with_type === 'role' && !updates.shared_with_org_role_id && !updates.shared_with_role) {
+    return res.status(400).json({ error: 'Role target is required' });
+  }
+  if (!Object.keys(updates).length) {
+    return res.status(400).json({ error: 'No sharing rule changes provided' });
+  }
+
+  try {
+    const { error } = await supabase
+      .from('sharing_rules')
+      .update(updates)
+      .eq('id', req.params.id);
+    if (error) throw error;
+    clearSharingAccessCaches();
+    await writeAuditLog({
+      userId: req.user.id,
+      userEmail: req.user.email,
+      userRole: req.user.role,
+      action: 'update',
+      payload: { type: 'sharing_rule', id: req.params.id, fields: Object.keys(updates) },
+      ipAddress: req.ip
+    });
+    res.json({ success: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// DELETE sharing rule
+app.delete('/api/portal/sharing-rules/:id', checkAuth, checkRole('system_administrator'), async (req, res) => {
+  try {
+    await supabase.from('sharing_rules').delete().eq('id', req.params.id);
+    clearSharingAccessCaches();
+    res.json({ success: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+
+
+// ── PERMISSION SET GROUPS ─────────────────────────────────────
+
+// GET all groups
+app.get('/api/portal/permission-set-groups', checkAuth, checkRole('admin'), async (req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from('permission_set_groups')
+      .select(`
+        id, name, description, is_active, created_at,
+        permission_set_group_members (
+          perm_set_id,
+          permission_sets ( id, name )
+        ),
+        permission_set_group_muting (
+          id, sf_object, field_name, muted_perm
+        )
+      `)
+      .order('name');
+    if (error) throw error;
+    res.json({ groups: data || [] });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// GET groups assigned to a user
+app.get('/api/portal/users/:id/permission-set-groups', checkAuth, checkRole('admin'), async (req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from('user_permission_set_group_assignments')
+      .select('group_id, permission_set_groups(id, name, description)')
+      .eq('user_id', req.params.id);
+    if (error) throw error;
+    res.json({ groups: (data || []).map(r => r.permission_set_groups).filter(Boolean) });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.get('/api/portal/users/:id/effective-permissions/:object', checkAuth, checkRole('admin'), async (req, res) => {
+  try {
+    const permissions = await getEffectivePermissions(req.params.id, req.params.object);
+    res.json({ userId: req.params.id, object: req.params.object, permissions });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST create group
+app.post('/api/portal/permission-set-groups', checkAuth, checkRole('admin'), async (req, res) => {
+  const { name, description, permSetIds = [], mutings = [] } = req.body || {};
+  if (!name) return res.status(400).json({ error: 'Name is required' });
+  try {
+    const { data: group, error } = await supabase
+      .from('permission_set_groups')
+      .insert({ name: name.trim(), description: description?.trim() || null, created_by: req.user.id })
+      .select('id').single();
+    if (error) throw error;
+
+    // Add member permission sets
+    if (permSetIds.length) {
+      await supabase.from('permission_set_group_members').insert(
+        permSetIds.map(psId => ({ group_id: group.id, perm_set_id: psId }))
+      );
+    }
+
+    // Add mutings
+    if (mutings.length) {
+      await supabase.from('permission_set_group_muting').insert(
+        mutings.map(m => ({
+          group_id: group.id,
+          sf_object: m.sfObject,
+          field_name: m.fieldName || null,
+          muted_perm: m.mutedPerm
+        }))
+      );
+    }
+
+    await writeAuditLog({
+      userId: req.user.id, userEmail: req.user.email,
+      userRole: req.user.role, action: 'create',
+      payload: { type: 'permission_set_group', name },
+      ipAddress: req.ip
+    });
+
+    clearAllFieldPermCache();
+    invalidateAllUserContextCache();
+    res.status(201).json({ success: true, id: group.id });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// PATCH update group
+app.patch('/api/portal/permission-set-groups/:id', checkAuth, checkRole('admin'), async (req, res) => {
+  const { name, description, isActive, permSetIds, mutings } = req.body || {};
+  try {
+    const updates = {};
+    if (name !== undefined) updates.name = name;
+    if (description !== undefined) updates.description = description;
+    if (isActive !== undefined) updates.is_active = isActive;
+    if (Object.keys(updates).length) {
+      updates.updated_at = new Date().toISOString();
+      await supabase.from('permission_set_groups').update(updates).eq('id', req.params.id);
+    }
+
+    // Sync member perm sets
+    if (Array.isArray(permSetIds)) {
+      await supabase.from('permission_set_group_members').delete().eq('group_id', req.params.id);
+      if (permSetIds.length) {
+        await supabase.from('permission_set_group_members').insert(
+          permSetIds.map(psId => ({ group_id: req.params.id, perm_set_id: psId }))
+        );
+      }
+    }
+
+    // Sync mutings
+    if (Array.isArray(mutings)) {
+      await supabase.from('permission_set_group_muting').delete().eq('group_id', req.params.id);
+      if (mutings.length) {
+        await supabase.from('permission_set_group_muting').insert(
+          mutings.map(m => ({
+            group_id: req.params.id,
+            sf_object: m.sfObject,
+            field_name: m.fieldName || null,
+            muted_perm: m.mutedPerm
+          }))
+        );
+      }
+    }
+
+    clearAllFieldPermCache();
+    invalidateAllUserContextCache();
+    res.json({ success: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// DELETE group
+app.delete('/api/portal/permission-set-groups/:id', checkAuth, checkRole('admin'), async (req, res) => {
+  try {
+    await supabase.from('user_permission_set_group_assignments').delete().eq('group_id', req.params.id);
+    await supabase.from('permission_set_group_members').delete().eq('group_id', req.params.id);
+    await supabase.from('permission_set_group_muting').delete().eq('group_id', req.params.id);
+    await supabase.from('permission_set_groups').delete().eq('id', req.params.id);
+    clearAllFieldPermCache();
+    invalidateAllUserContextCache();
+    res.json({ success: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// POST assign group to user
+app.post('/api/portal/users/:id/permission-set-groups', checkAuth, checkRole('admin'), async (req, res) => {
+  const { groupId } = req.body || {};
+  if (!groupId) return res.status(400).json({ error: 'groupId required' });
+  try {
+    await supabase.from('user_permission_set_group_assignments').upsert({
+      user_id: req.params.id,
+      group_id: groupId,
+      assigned_by: req.user.id
+    }, { onConflict: 'user_id,group_id' });
+    clearFieldPermCache(req.params.id);
+    invalidateUserContextCache(req.params.id);
+    res.json({ success: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// DELETE remove group from user
+app.delete('/api/portal/users/:id/permission-set-groups/:groupId', checkAuth, checkRole('admin'), async (req, res) => {
+  try {
+    await supabase
+      .from('user_permission_set_group_assignments')
+      .delete()
+      .eq('user_id', req.params.id)
+      .eq('group_id', req.params.groupId);
+    clearFieldPermCache(req.params.id);
+    invalidateUserContextCache(req.params.id);
+    res.json({ success: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+
+// ================================================================
+// ORG ROLE HIERARCHY ROUTES — Add to server.js
+// Place after your permission-set-groups routes
+// ================================================================
+
+// GET full role tree
+app.get('/api/portal/org-roles', checkAuth, checkRole('admin'), async (req, res) => {
+  try {
+    const { data, error } = await supabase.rpc('get_org_role_tree');
+    if (error) throw error;
+    res.json({ roles: data || [] });
+  } catch(e) {
+    console.error('GET org-roles error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+// POST create role
+app.post('/api/portal/org-roles', checkAuth, checkRole('system_administrator'), async (req, res) => {
+  const {
+    name,
+    description,
+    parentId,
+    reportName,
+    opportunityAccess = 'edit'
+  } = req.body || {};
+
+  if (!name?.trim()) {
+    return res.status(400).json({ error: 'Label is required' });
+  }
+
+  // Auto-generate API name (Salesforce style)
+  const apiName = name.trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '');
+
+  try {
+    const newId = crypto.randomUUID();
+
+    let level = 1;
+    let path = newId;
+
+    if (parentId) {
+      const { data: parent } = await supabase
+        .from('org_roles')
+        .select('level, path')
+        .eq('id', parentId)
+        .single();
+
+      if (parent) {
+        level = parent.level + 1;
+        path = `${parent.path}/${newId}`;
+      }
+    }
+
+    const { data: role, error } = await supabase
+      .from('org_roles')
+      .insert({
+        id: newId,
+        name: name.trim(),
+        api_name: apiName,
+        description: description?.trim() || null,
+        report_name: reportName?.trim() || name.trim(),
+        opportunity_access: opportunityAccess,
+        parent_id: parentId || null,
+        level,
+        path,
+        created_by: req.user.id
+      })
+      .select('id, name, api_name, level, path')
+      .single();
+
+    roleVisibilityCache.clear();
+    clearSharingAccessCaches();
+
+    if (error) {
+      if (error.code === '23505') {
+        return res.status(409).json({
+          error: 'A role with this name already exists'
+        });
+      }
+      throw error;
+    }
+
+    await writeAuditLog({
+      userId: req.user.id,
+      userEmail: req.user.email,
+      userRole: req.user.role,
+      action: 'create',
+      payload: {
+        type: 'org_role',
+        name,
+        apiName,
+        parentId
+      },
+      ipAddress: req.ip
+    });
+
+    res.status(201).json({
+      success: true,
+      role
+    });
+
+  } catch (e) {
+    console.error('POST org-roles error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// PATCH update role name/description only
+// Note: we don't allow moving a role to a different parent
+// (would require recomputing paths for all descendants — complex)
+// Instead: delete and recreate if you need to move a role
+// PATCH update role
+app.patch('/api/portal/org-roles/:id', checkAuth, checkRole('system_administrator'), async (req, res) => {
+  const {
+    name,
+    description,
+    reportName,
+    opportunityAccess,
+    isActive
+  } = req.body || {};
+
+  if (!name?.trim()) {
+    return res.status(400).json({ error: 'Label is required' });
+  }
+
+  try {
+    const updates = {
+      name: name.trim(),
+      description: description?.trim() || null,
+      report_name: reportName?.trim() || name.trim(),
+      updated_at: new Date().toISOString()
+    };
+
+    // NEW: Opportunity access
+    if (opportunityAccess !== undefined) {
+      updates.opportunity_access = opportunityAccess;
+    }
+
+    // Existing active/inactive support
+    if (isActive !== undefined) {
+      updates.is_active = isActive;
+    }
+
+    const { error } = await supabase
+      .from('org_roles')
+      .update(updates)
+      .eq('id', req.params.id);
+
+    if (error) throw error;
+
+    roleVisibilityCache.clear();
+    clearSharingAccessCaches();
+
+    await writeAuditLog({
+      userId: req.user.id,
+      userEmail: req.user.email,
+      userRole: req.user.role,
+      action: 'edit',
+      payload: {
+        type: 'org_role',
+        id: req.params.id,
+        name,
+        reportName,
+        opportunityAccess,
+        isActive
+      },
+      ipAddress: req.ip
+    });
+
+    res.json({ success: true });
+
+  } catch (e) {
+    console.error('PATCH org-roles error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// DELETE role — only if no users assigned and no children
+app.delete('/api/portal/org-roles/:id', checkAuth, checkRole('system_administrator'), async (req, res) => {
+  try {
+    // Check users assigned
+    const { count: userCount } = await supabase
+      .from('users')
+      .select('*', { count: 'exact', head: true })
+      .eq('org_role_id', req.params.id);
+
+    if (userCount > 0) {
+      return res.status(409).json({
+        error: `Cannot delete — ${userCount} user(s) assigned to this role. Reassign them first.`
+      });
+    }
+
+    // Check for child roles
+    const { count: childCount } = await supabase
+      .from('org_roles')
+      .select('*', { count: 'exact', head: true })
+      .eq('parent_id', req.params.id);
+
+    if (childCount > 0) {
+      return res.status(409).json({
+        error: `Cannot delete — this role has ${childCount} child role(s). Delete or move them first.`
+      });
+    }
+
+    const { error } = await supabase
+      .from('org_roles')
+      .delete()
+      .eq('id', req.params.id);
+
+    if (error) throw error;
+
+    roleVisibilityCache.clear();
+    clearSharingAccessCaches();
+
+    res.json({ success: true });
+  } catch(e) {
+    console.error('DELETE org-roles error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// PATCH assign org role to a user
+app.patch('/api/portal/users/:id/org-role', checkAuth, checkRole('admin'), async (req, res) => {
+  const { orgRoleId } = req.body || {};
+  try {
+    const { error } = await supabase
+      .from('users')
+      .update({ org_role_id: orgRoleId || null })
+      .eq('id', req.params.id);
+
+    if (error) throw error;
+
+    roleVisibilityCache.clear();
+    invalidateUserContextCache(req.params.id);
+
+    await writeAuditLog({
+      userId:    req.user.id,
+      userEmail: req.user.email,
+      userRole:  req.user.role,
+      action:    'update_user',
+      payload:   { type: 'org_role_assignment', targetUserId: req.params.id, orgRoleId },
+      ipAddress: req.ip
+    });
+
+    res.json({ success: true });
+  } catch(e) {
+    console.error('PATCH user org-role error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ══ PUBLIC GROUPS ═════════════════════════════════════════════
+
+// GET all groups
+app.get('/api/portal/public-groups', checkAuth, checkRole('admin'), async (req, res) => {
+  try {
+    const { data: groups, error } = await supabase
+      .from('public_groups')
+      .select('id, name, description, is_active, created_at')
+      .order('name');
+    if (error) throw error;
+
+    // Get member counts separately (avoids FK ambiguity)
+    const enriched = await Promise.all((groups || []).map(async g => {
+      const { count: userCount } = await supabase
+        .from('public_group_members')
+        .select('*', { count: 'exact', head: true })
+        .eq('group_id', g.id)
+        .eq('member_type', 'user');
+
+      const { count: roleCount } = await supabase
+        .from('public_group_members')
+        .select('*', { count: 'exact', head: true })
+        .eq('group_id', g.id)
+        .eq('member_type', 'role');
+
+      return { ...g, user_count: userCount || 0, role_count: roleCount || 0 };
+    }));
+
+    res.json({ groups: enriched });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// GET group members
+app.get('/api/portal/public-groups/:id/members', checkAuth, checkRole('admin'), async (req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from('public_group_members')
+      .select('id, member_type, user_id, org_role_id')
+      .eq('group_id', req.params.id);
+    if (error) throw error;
+
+    // Enrich with names
+    const enriched = await Promise.all((data || []).map(async m => {
+      if (m.member_type === 'user' && m.user_id) {
+        const { data: u } = await supabase
+          .from('users').select('id, name, email').eq('id', m.user_id).single();
+        return { ...m, label: u?.name || m.user_id, sublabel: u?.email || '' };
+      }
+      if (m.member_type === 'role' && m.org_role_id) {
+        const { data: r } = await supabase
+          .from('org_roles').select('id, name').eq('id', m.org_role_id).single();
+        return { ...m, label: r?.name || m.org_role_id, sublabel: 'Role (all users in this role)' };
+      }
+      return m;
+    }));
+
+    res.json({ members: enriched });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// POST create group
+app.post('/api/portal/public-groups', checkAuth, checkRole('admin'), async (req, res) => {
+  const { name, description } = req.body || {};
+  if (!name?.trim()) return res.status(400).json({ error: 'Group name is required' });
+  try {
+    const { data, error } = await supabase
+      .from('public_groups')
+      .insert({ name: name.trim(), description: description?.trim() || null, created_by: req.user.id })
+      .select('id').single();
+    if (error) {
+      if (error.code === '23505') return res.status(409).json({ error: 'A group with this name already exists' });
+      throw error;
+    }
+    clearSharingAccessCaches();
+    res.status(201).json({ success: true, id: data.id });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// PATCH update group
+app.patch('/api/portal/public-groups/:id', checkAuth, checkRole('admin'), async (req, res) => {
+  const { name, description, isActive } = req.body || {};
+  try {
+    const updates = { updated_at: new Date().toISOString() };
+    if (name        !== undefined) updates.name        = name;
+    if (description !== undefined) updates.description = description;
+    if (isActive    !== undefined) updates.is_active   = isActive;
+    await supabase.from('public_groups').update(updates).eq('id', req.params.id);
+    clearSharingAccessCaches();
+    res.json({ success: true });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// POST add member to group
+app.post('/api/portal/public-groups/:id/members', checkAuth, checkRole('admin'), async (req, res) => {
+  const { memberType, userId, orgRoleId } = req.body || {};
+  if (!memberType || (memberType === 'user' && !userId) || (memberType === 'role' && !orgRoleId)) {
+    return res.status(400).json({ error: 'memberType and userId or orgRoleId required' });
+  }
+  try {
+    const insert = {
+      group_id:     req.params.id,
+      member_type:  memberType,
+      user_id:      memberType === 'user'  ? userId     : null,
+      org_role_id:  memberType === 'role'  ? orgRoleId  : null,
+      added_by:     req.user.id
+    };
+    const { error } = await supabase.from('public_group_members').insert(insert);
+    if (error) {
+      if (error.code === '23505') return res.status(409).json({ error: 'Already a member of this group' });
+      throw error;
+    }
+    clearSharingAccessCaches();
+    res.json({ success: true });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// DELETE remove member from group
+app.delete('/api/portal/public-groups/:id/members/:memberId', checkAuth, checkRole('admin'), async (req, res) => {
+  try {
+    await supabase.from('public_group_members')
+      .delete().eq('id', req.params.memberId).eq('group_id', req.params.id);
+    clearSharingAccessCaches();
+    res.json({ success: true });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// DELETE group
+app.delete('/api/portal/public-groups/:id', checkAuth, checkRole('admin'), async (req, res) => {
+  try {
+    await supabase.from('public_group_members').delete().eq('group_id', req.params.id);
+    await supabase.from('public_groups').delete().eq('id', req.params.id);
+    clearSharingAccessCaches();
+    res.json({ success: true });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+
+// ══ TEAMS ════════════════════════════════════════════════════
+
+// ══ QUEUES ═══════════════════════════════════════════════════
+
+
+
+
+function rejectReservedApiObject(req, res, next, objectName) {
+  if (RESERVED_API_OBJECT_NAMES.has(String(objectName || '').toLowerCase())) {
+    return res.status(404).json({ error: `No API route found for /api/${objectName}` });
+  }
+  next();
+}
+
+app.param('object', rejectReservedApiObject);
+
+
+const PORT = process.env.PORT || 3000;
+
+// ─── Salesforce Config ────────────────────────────────────────
+const SF = {
+  clientId: process.env.SF_CLIENT_ID,
+  clientSecret: process.env.SF_CLIENT_SECRET,
+  refreshToken: process.env.SF_REFRESH_TOKEN,
+  instanceUrl: normalizeUrl(process.env.SF_INSTANCE_URL),
+  loginUrl: normalizeUrl(process.env.SF_LOGIN_URL || 'https://login.salesforce.com'),
+  redirectUri: process.env.SF_REDIRECT_URI || `http://localhost:${PORT}/oauth/callback`,
+  version: 'v59.0'
+};
+
+const DEFAULT_ORG_KEY = 'default';
+const ORGS_PATH = process.env.SF_ORGS_PATH || path.join(__dirname, 'sf-orgs.local.json');
+let orgStore = loadOrgStore();
+applyActiveOrg();
+
+function normalizeUrl(url) {
+  return url ? url.replace(/\/+$/, '') : url;
+}
+
+function isLocalUrl(url = '') {
+  return /^https?:\/\/(?:localhost|127\.0\.0\.1|\[::1\])(?::\d+)?(?:\/|$)/i.test(String(url || ''));
+}
+
+function requestBaseUrl(req) {
+  const configured = normalizeUrl(process.env.PUBLIC_BASE_URL || process.env.APP_BASE_URL || process.env.RENDER_EXTERNAL_URL || '');
+  if (configured) return configured;
+  if (req?.get) return `${req.protocol}://${req.get('host')}`;
+  return `http://localhost:${PORT}`;
+}
+
+function requestRedirectUri(req, org = activeOrg()) {
+  if (process.env.SF_REDIRECT_URI) return process.env.SF_REDIRECT_URI;
+  if (org?.redirectUri && !isLocalUrl(org.redirectUri)) return org.redirectUri;
+  return `${requestBaseUrl(req)}/oauth/callback`;
+}
+
+function safeReturnPath(value, req) {
+  const fallback = '/';
+  if (!value) return fallback;
+  const raw = String(value).trim();
+  if (!raw) return fallback;
+  try {
+    if (raw.startsWith('/') && !raw.startsWith('//')) return raw;
+    const parsed = new URL(raw);
+    const current = new URL(requestBaseUrl(req));
+    if (parsed.origin === current.origin) {
+      return `${parsed.pathname}${parsed.search}${parsed.hash}`;
+    }
+  } catch {
+    return fallback;
+  }
+  return fallback;
+}
+
+function sanitizeOrgKey(value) {
+  return String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 48);
+}
+
+function envOrgConfig() {
+  return {
+    key: DEFAULT_ORG_KEY,
+    label: process.env.SF_ORG_LABEL || 'Default Org',
+    environment: process.env.SF_ENVIRONMENT || (String(process.env.SF_LOGIN_URL || '').includes('test.salesforce.com') ? 'sandbox' : 'production'),
+    clientId: process.env.SF_CLIENT_ID || '',
+    clientSecret: process.env.SF_CLIENT_SECRET || '',
+    refreshToken: process.env.SF_REFRESH_TOKEN || '',
+    instanceUrl: normalizeUrl(process.env.SF_INSTANCE_URL || ''),
+    loginUrl: normalizeUrl(process.env.SF_LOGIN_URL || 'https://login.salesforce.com'),
+    redirectUri: process.env.SF_REDIRECT_URI || `http://localhost:${PORT}/oauth/callback`
+  };
+}
+
+function loadOrgStore() {
+  let parsed = null;
+  if (fs.existsSync(ORGS_PATH)) {
+    try {
+      parsed = JSON.parse(fs.readFileSync(ORGS_PATH, 'utf8'));
+    } catch (err) {
+      console.error('Could not read sf-orgs.local.json:', err.message);
+    }
+  }
+
+  const envOrg = envOrgConfig();
+  const store = parsed && typeof parsed === 'object'
+    ? { activeOrgKey: sanitizeOrgKey(parsed.activeOrgKey) || DEFAULT_ORG_KEY, orgs: parsed.orgs || {} }
+    : { activeOrgKey: DEFAULT_ORG_KEY, orgs: {} };
+
+  store.orgs[DEFAULT_ORG_KEY] = {
+    ...envOrg,
+    ...(store.orgs[DEFAULT_ORG_KEY] || {}),
+    key: DEFAULT_ORG_KEY,
+    clientId: (store.orgs[DEFAULT_ORG_KEY]?.clientId || envOrg.clientId),
+    clientSecret: (store.orgs[DEFAULT_ORG_KEY]?.clientSecret || envOrg.clientSecret),
+    refreshToken: (store.orgs[DEFAULT_ORG_KEY]?.refreshToken || envOrg.refreshToken),
+    instanceUrl: normalizeUrl(store.orgs[DEFAULT_ORG_KEY]?.instanceUrl || envOrg.instanceUrl),
+    loginUrl: normalizeUrl(store.orgs[DEFAULT_ORG_KEY]?.loginUrl || envOrg.loginUrl),
+    redirectUri: store.orgs[DEFAULT_ORG_KEY]?.redirectUri || envOrg.redirectUri
+  };
+
+  if (!store.orgs[store.activeOrgKey]) store.activeOrgKey = DEFAULT_ORG_KEY;
+  return store;
+}
+
+function saveOrgStore() {
+  fs.mkdirSync(path.dirname(ORGS_PATH), { recursive: true });
+  fs.writeFileSync(ORGS_PATH, `${JSON.stringify(orgStore, null, 2)}\n`);
+}
+
+function activeOrg() {
+  return orgStore.orgs[orgStore.activeOrgKey] || orgStore.orgs[DEFAULT_ORG_KEY];
+}
+
+function applyActiveOrg() {
+  const org = activeOrg();
+  SF.clientId = org.clientId || '';
+  SF.clientSecret = org.clientSecret || '';
+  SF.refreshToken = org.refreshToken || '';
+  SF.instanceUrl = normalizeUrl(org.instanceUrl || '');
+  SF.loginUrl = normalizeUrl(org.loginUrl || 'https://login.salesforce.com');
+  SF.redirectUri = org.redirectUri || process.env.SF_REDIRECT_URI || `http://localhost:${PORT}/oauth/callback`;
+  SF.version = SF.version || 'v59.0';
+}
+
+function switchActiveOrg(key) {
+  const orgKey = sanitizeOrgKey(key);
+  if (!orgStore.orgs[orgKey]) throw new Error(`Unknown Salesforce org: ${key}`);
+  orgStore.activeOrgKey = orgKey;
+  applyActiveOrg();
+  _cachedToken = null;
+  _tokenExpires = 0;
+  invalidateAllMetadata();
+  saveOrgStore();
+  return activeOrg();
+}
+
+function publicOrg(org) {
+  return {
+    key: org.key,
+    label: org.label || org.key,
+    environment: org.environment || 'production',
+    loginUrl: org.loginUrl,
+    instanceUrl: org.instanceUrl,
+    redirectUri: org.redirectUri,
+    hasClientId: Boolean(org.clientId),
+    hasClientSecret: Boolean(org.clientSecret),
+    hasRefreshToken: Boolean(org.refreshToken),
+    isActive: org.key === orgStore.activeOrgKey
+  };
+}
+
+function persistActiveOrgTokens() {
+  const org = activeOrg();
+  org.refreshToken = SF.refreshToken || '';
+  org.instanceUrl = SF.instanceUrl || org.instanceUrl || '';
+  org.loginUrl = SF.loginUrl || org.loginUrl || 'https://login.salesforce.com';
+  org.redirectUri = SF.redirectUri || org.redirectUri;
+  saveOrgStore();
+
+  if (org.key === DEFAULT_ORG_KEY) {
+    upsertEnv({
+      SF_REFRESH_TOKEN: org.refreshToken,
+      SF_INSTANCE_URL: org.instanceUrl,
+      SF_REDIRECT_URI: org.redirectUri
+    });
+  }
+}
+
+function validateConfig() {
+  const missing = Object.entries({
+    SF_CLIENT_ID: SF.clientId,
+    SF_CLIENT_SECRET: SF.clientSecret,
+    SF_INSTANCE_URL: SF.instanceUrl,
+    SF_LOGIN_URL: SF.loginUrl
+  })
+    .filter(([, value]) => !value)
+    .map(([key]) => key);
+
+  if (missing.length) {
+    throw new Error(`Missing required .env value(s): ${missing.join(', ')}`);
+  }
+
+  if (!SF.refreshToken) {
+    throw new Error('No refresh token found. Open /auth/salesforce to connect Salesforce.');
+  }
+}
+
+function upsertEnv(values) {
+  const envPath = path.join(__dirname, '.env');
+  const existing = fs.existsSync(envPath) ? fs.readFileSync(envPath, 'utf8') : '';
+  let next = existing;
+
+  for (const [key, value] of Object.entries(values)) {
+    const line = `${key}=${value}`;
+    const pattern = new RegExp(`^${key}=.*$`, 'm');
+    next = pattern.test(next)
+      ? next.replace(pattern, line)
+      : `${next.replace(/\s*$/, '')}\n${line}\n`;
+  }
+
+  fs.writeFileSync(envPath, next);
+}
+
+async function sfAuthedRequest(method, url, data, config = {}) {
+  const token = await getAccessToken();
+  const res = await axios({
+    method,
+    url,
+    data,
+    ...config,
+    headers: {
+      Authorization: `Bearer ${token}`,
+      ...(config.headers || {})
+    }
+  });
+  return res.data;
+}
+
+async function sfAuthedRawRequest(method, url, data, config = {}) {
+  const token = await getAccessToken();
+  return axios({
+    method,
+    url,
+    data,
+    ...config,
+    headers: {
+      Authorization: `Bearer ${token}`,
+      ...(config.headers || {})
+    }
+  });
+}
+
+// ─── Token Cache ──────────────────────────────────────────────
+let _cachedToken = null;
+let _tokenExpires = 0;
+const oauthStates = new Map();
+const describeFieldCache = new Map();
+const describeChildRelsCache = new Map();
+const describeMetadataCache = new Map();
+const describeMetadataInflight = new Map();
+const describeMetadataStats = {
+  hits: 0,
+  misses: 0,
+  rebuilds: 0,
+  deduped: 0,
+  invalidations: 0
+};
+const DESCRIBE_METADATA_TTL_MS = 60 * 60 * 1000;
+
+function metadataLog(...args) {
+  if (process.env.NODE_ENV !== 'production') {
+    console.info('[metadata-cache]', ...args);
+  }
+}
+
+function describeCacheKey(objectName) {
+  return `${orgStore.activeOrgKey || activeOrg()?.key || DEFAULT_ORG_KEY}:${String(objectName || '').trim()}`;
+}
+
+function cloneMetadata(value) {
+  return value == null ? value : JSON.parse(JSON.stringify(value));
+}
+
+function clearDerivedMetadataCaches(objectName = '') {
+  if (!objectName) {
+    describeFieldCache.clear();
+    describeChildRelsCache.clear();
+    objectFieldDetailsCache.clear();
+    return;
+  }
+  const key = describeCacheKey(objectName);
+  describeFieldCache.delete(key);
+  describeChildRelsCache.delete(key);
+  objectFieldDetailsCache.delete(key);
+}
+
+async function getObjectDescribe(objectName) {
+  const key = describeCacheKey(objectName);
+  const cached = describeMetadataCache.get(key);
+  if (cached && cached.expiresAt > Date.now()) {
+    describeMetadataStats.hits += 1;
+    metadataLog('hit', key);
+    return cloneMetadata(cached.data);
+  }
+  if (cached) describeMetadataCache.delete(key);
+
+  if (describeMetadataInflight.has(key)) {
+    describeMetadataStats.deduped += 1;
+    metadataLog('dedupe', key);
+    return cloneMetadata(await describeMetadataInflight.get(key));
+  }
+
+  describeMetadataStats.misses += 1;
+  describeMetadataStats.rebuilds += 1;
+  metadataLog('miss/rebuild', key);
+  const promise = sfGet(`/sobjects/${objectName}/describe`)
+    .then((data) => {
+      describeMetadataCache.set(key, {
+        data,
+        expiresAt: Date.now() + DESCRIBE_METADATA_TTL_MS,
+        loadedAt: Date.now()
+      });
+      return data;
+    })
+    .finally(() => describeMetadataInflight.delete(key));
+
+  describeMetadataInflight.set(key, promise);
+  return cloneMetadata(await promise);
+}
+
+async function getRecordAndDescribe(objectName, recordId) {
+  const key = describeCacheKey(objectName);
+  const cachedDescribe = describeMetadataCache.get(key);
+  if (cachedDescribe && cachedDescribe.expiresAt > Date.now()) {
+    describeMetadataStats.hits += 1;
+    metadataLog('hit', key);
+    const record = await sfGet(`/sobjects/${objectName}/${recordId}`);
+    return [record, cloneMetadata(cachedDescribe.data)];
+  }
+  if (cachedDescribe) describeMetadataCache.delete(key);
+
+  const [record, describe] = await sfCompositeGet([
+    {
+      referenceId: 'record',
+      endpoint: `/sobjects/${objectName}/${recordId}`,
+      fallback: () => sfGet(`/sobjects/${objectName}/${recordId}`)
+    },
+    {
+      referenceId: 'describe',
+      endpoint: `/sobjects/${objectName}/describe`,
+      fallback: () => sfGet(`/sobjects/${objectName}/describe`)
+    }
+  ]);
+
+  describeMetadataStats.misses += 1;
+  describeMetadataStats.rebuilds += 1;
+  describeMetadataCache.set(key, {
+    data: describe,
+    expiresAt: Date.now() + DESCRIBE_METADATA_TTL_MS,
+    loadedAt: Date.now()
+  });
+  return [record, cloneMetadata(describe)];
+}
+
+function invalidateMetadata(objectName) {
+  if (!objectName) return;
+  const key = describeCacheKey(objectName);
+  if (describeMetadataCache.delete(key)) describeMetadataStats.invalidations += 1;
+  describeMetadataInflight.delete(key);
+  clearDerivedMetadataCaches(objectName);
+}
+
+function invalidateAllMetadata() {
+  if (describeMetadataCache.size) describeMetadataStats.invalidations += describeMetadataCache.size;
+  describeMetadataCache.clear();
+  describeMetadataInflight.clear();
+  clearDerivedMetadataCaches();
+}
+
+function getMetadataCacheStats() {
+  const total = describeMetadataStats.hits + describeMetadataStats.misses;
+  return {
+    ...describeMetadataStats,
+    size: describeMetadataCache.size,
+    inflight: describeMetadataInflight.size,
+    ttlMs: DESCRIBE_METADATA_TTL_MS,
+    hitRatio: total ? Number((describeMetadataStats.hits / total).toFixed(4)) : 0,
+    keys: [...describeMetadataCache.keys()]
+  };
+}
+
+const layoutJsonCache = new Map();
+const layoutJsonInflight = new Map();
+const layoutJsonStats = {
+  hits: 0,
+  misses: 0,
+  rebuilds: 0,
+  deduped: 0,
+  invalidations: 0
+};
+const LAYOUT_JSON_TTL_MS = 60 * 60 * 1000;
+const RECENT_RECORD_DETAIL_TTL_MS = 10 * 60 * 1000;
+const RECENT_RECORD_DETAIL_MAX = 100;
+const recentRecordDetailCache = new Map();
+const recentRecordDetailInflight = new Map();
+const recentRecordDetailStats = {
+  hits: 0,
+  misses: 0,
+  rebuilds: 0,
+  deduped: 0,
+  invalidations: 0
+};
+
+function layoutJsonCacheKey(type, objectName, userId = '') {
+  const orgKey = orgStore.activeOrgKey || activeOrg()?.key || DEFAULT_ORG_KEY;
+  return `${orgKey}:${type}:${userId || '*'}:${String(objectName || '').trim()}`;
+}
+
+async function getCachedLayoutJson(type, objectName, userId, loader) {
+  const key = layoutJsonCacheKey(type, objectName, userId);
+  const cached = layoutJsonCache.get(key);
+  if (cached && cached.expiresAt > Date.now()) {
+    layoutJsonStats.hits += 1;
+    return cloneMetadata(cached.data);
+  }
+  if (cached) layoutJsonCache.delete(key);
+
+  if (layoutJsonInflight.has(key)) {
+    layoutJsonStats.deduped += 1;
+    return cloneMetadata(await layoutJsonInflight.get(key));
+  }
+
+  layoutJsonStats.misses += 1;
+  layoutJsonStats.rebuilds += 1;
+  const promise = Promise.resolve()
+    .then(loader)
+    .then((data) => {
+      layoutJsonCache.set(key, {
+        data,
+        expiresAt: Date.now() + LAYOUT_JSON_TTL_MS,
+        loadedAt: Date.now()
+      });
+      return data;
+    })
+    .finally(() => layoutJsonInflight.delete(key));
+
+  layoutJsonInflight.set(key, promise);
+  return cloneMetadata(await promise);
+}
+
+function invalidateLayoutJson(type = '', objectName = '', userId = '') {
+  const expected = type ? layoutJsonCacheKey(type, objectName, userId) : '';
+  for (const key of [...layoutJsonCache.keys()]) {
+    const match = type
+      ? key === expected
+      : (!objectName || key.endsWith(`:${String(objectName).trim()}`));
+    if (match && layoutJsonCache.delete(key)) layoutJsonStats.invalidations += 1;
+  }
+  for (const key of [...layoutJsonInflight.keys()]) {
+    const match = type
+      ? key === expected
+      : (!objectName || key.endsWith(`:${String(objectName).trim()}`));
+    if (match) layoutJsonInflight.delete(key);
+  }
+}
+
+function invalidateAllLayoutJson() {
+  if (layoutJsonCache.size) layoutJsonStats.invalidations += layoutJsonCache.size;
+  layoutJsonCache.clear();
+  layoutJsonInflight.clear();
+}
+
+function getLayoutJsonCacheStats() {
+  const total = layoutJsonStats.hits + layoutJsonStats.misses;
+  return {
+    ...layoutJsonStats,
+    size: layoutJsonCache.size,
+    inflight: layoutJsonInflight.size,
+    ttlMs: LAYOUT_JSON_TTL_MS,
+    hitRatio: total ? Number((layoutJsonStats.hits / total).toFixed(4)) : 0,
+    keys: [...layoutJsonCache.keys()]
+  };
+}
+
+function recordDetailCacheKey(objectName, recordId, userId) {
+  const orgKey = orgStore.activeOrgKey || activeOrg()?.key || DEFAULT_ORG_KEY;
+  return `${orgKey}:${userId}:${objectName}:${recordId}`;
+}
+
+function getRecentRecordDetail(objectName, recordId, userId) {
+  const key = recordDetailCacheKey(objectName, recordId, userId);
+  const cached = recentRecordDetailCache.get(key);
+  if (!cached || cached.expiresAt <= Date.now()) {
+    if (cached) recentRecordDetailCache.delete(key);
+    recentRecordDetailStats.misses += 1;
+    return null;
+  }
+  recentRecordDetailCache.delete(key);
+  recentRecordDetailCache.set(key, cached);
+  recentRecordDetailStats.hits += 1;
+  return cloneMetadata(cached.data);
+}
+
+function setRecentRecordDetail(objectName, recordId, userId, data) {
+  const key = recordDetailCacheKey(objectName, recordId, userId);
+  if (recentRecordDetailCache.has(key)) recentRecordDetailCache.delete(key);
+  recentRecordDetailCache.set(key, {
+    data,
+    expiresAt: Date.now() + RECENT_RECORD_DETAIL_TTL_MS,
+    loadedAt: Date.now()
+  });
+  while (recentRecordDetailCache.size > RECENT_RECORD_DETAIL_MAX) {
+    recentRecordDetailCache.delete(recentRecordDetailCache.keys().next().value);
+  }
+}
+
+function invalidateRecentRecordDetail(objectName, recordId = '') {
+  const suffix = recordId ? `:${objectName}:${recordId}` : `:${objectName}:`;
+  for (const key of [...recentRecordDetailCache.keys()]) {
+    if (recordId ? key.endsWith(suffix) : key.includes(suffix)) {
+      recentRecordDetailCache.delete(key);
+      recentRecordDetailStats.invalidations += 1;
+    }
+  }
+  for (const key of [...recentRecordDetailInflight.keys()]) {
+    if (recordId ? key.endsWith(suffix) : key.includes(suffix)) recentRecordDetailInflight.delete(key);
+  }
+}
+
+function getRecentRecordDetailStats() {
+  const total = recentRecordDetailStats.hits + recentRecordDetailStats.misses;
+  return {
+    ...recentRecordDetailStats,
+    size: recentRecordDetailCache.size,
+    inflight: recentRecordDetailInflight.size,
+    max: RECENT_RECORD_DETAIL_MAX,
+    ttlMs: RECENT_RECORD_DETAIL_TTL_MS,
+    hitRatio: total ? Number((recentRecordDetailStats.hits / total).toFixed(4)) : 0
+  };
+}
+
+async function getAccessToken() {
+  if (_cachedToken && Date.now() < _tokenExpires) return _cachedToken;
+  validateConfig();
+
+  const params = new URLSearchParams({
+    grant_type: 'refresh_token',
+    client_id: SF.clientId,
+    client_secret: SF.clientSecret,
+    refresh_token: SF.refreshToken
+  });
+
+  try {
+    const res = await axios.post(
+      `${SF.loginUrl}/services/oauth2/token`,
+      params.toString(),
+      {
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        timeout: 30000
+      }
+    );
+    _cachedToken = res.data.access_token;
+    SF.instanceUrl = normalizeUrl(res.data.instance_url || SF.instanceUrl);
+    _tokenExpires = Date.now() + 55 * 60 * 1000; // 55 min cache
+    return _cachedToken;
+  } catch (err) {
+    const detail = err.response?.data;
+    console.error('❌ Token error:', detail || err.message);
+    const code = detail?.error ? `${detail.error}: ` : '';
+    throw new Error(`${code}${detail?.error_description || err.message || 'OAuth token refresh failed'}`);
+  }
+}
+
+// ─── Axios Helpers ────────────────────────────────────────────
+function clearSalesforceAccessToken() {
+  _cachedToken = null;
+  _tokenExpires = 0;
+}
+
+function isSalesforceAuthError(err) {
+  const status = err?.response?.status;
+  const detail = err?.response?.data;
+  const text = `${err?.message || ''} ${typeof detail === 'string' ? detail : JSON.stringify(detail || {})}`;
+  return status === 401 || /INVALID_SESSION_ID|Session expired|expired access token|invalid session/i.test(text);
+}
+
+async function retrySalesforceAuthOnce(requestFn) {
+  try {
+    return await requestFn(await getAccessToken());
+  } catch (err) {
+    if (!isSalesforceAuthError(err)) throw err;
+    clearSalesforceAccessToken();
+    return requestFn(await getAccessToken());
+  }
+}
+
+const baseUrl = () => `${SF.instanceUrl}/services/data/${SF.version}`;
+const uiApiListViewBaseUrl = () => {
+  const configuredVersion = Number(String(SF.version || '').replace(/^v/i, ''));
+  const version = configuredVersion >= 61 ? SF.version : 'v61.0';
+  return `${SF.instanceUrl}/services/data/${version}`;
+};
+const compositeClient = createCompositeClient({
+  axios,
+  getAccessToken,
+  instanceUrl: () => SF.instanceUrl,
+  apiVersion: () => SF.version,
+  perfAudit,
+  isEnabled: () => process.env.SF_COMPOSITE_ENABLED !== 'false'
+});
+
+async function sfCompositeGet(items = [], options = {}) {
+  return compositeClient.compositeGet(items, options);
+}
+
+async function sfGet(endpoint, params = {}, config = {}) {
+  return perfAudit.timeAsync(perfAudit.classifySalesforce(endpoint), `GET ${endpoint}`, async () => {
+    const maxAttempts = config.retry === false ? 1 : 3;
+    let lastErr;
+    let authRetried = false;
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+      try {
+        const token = await getAccessToken();
+        const res = await axios.get(`${baseUrl()}${endpoint}`, {
+          timeout: config.timeout || 30000,
+          headers: { Authorization: `Bearer ${token}` },
+          params,
+          ...config,
+          headers: {
+            Authorization: `Bearer ${token}`,
+            ...(config.headers || {})
+          }
+        });
+        return res.data;
+      } catch (err) {
+        lastErr = err;
+        if (isSalesforceAuthError(err) && !authRetried) {
+          authRetried = true;
+          clearSalesforceAccessToken();
+          attempt -= 1;
+          continue;
+        }
+        if (!isTransientSalesforceNetworkError(err) || attempt === maxAttempts) break;
+        await sleep(250 * attempt);
+      }
+    }
+    throw lastErr;
+  }, { endpoint });
+}
+
+function isTransientSalesforceNetworkError(err) {
+  return ['ECONNRESET', 'ETIMEDOUT', 'ECONNABORTED', 'EAI_AGAIN'].includes(err?.code) ||
+    /socket hang up|network socket disconnected|read ECONNRESET/i.test(err?.message || '');
+}
+
+async function sfPost(endpoint, body) {
+  return perfAudit.timeAsync(perfAudit.classifySalesforce(endpoint), `POST ${endpoint}`, async () => {
+    const res = await retrySalesforceAuthOnce((token) => axios.post(`${baseUrl()}${endpoint}`, body, {
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }
+    }));
+    return res.data;
+  }, { endpoint });
+}
+
+async function sfUiPost(endpoint, body) {
+  return perfAudit.timeAsync('salesforce', `UI POST ${endpoint}`, async () => {
+    const res = await retrySalesforceAuthOnce((token) => axios.post(`${uiApiListViewBaseUrl()}${endpoint}`, body, {
+      timeout: 30000,
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }
+    }));
+    return res.data;
+  }, { endpoint });
+}
+
+async function sfUiGet(endpoint, params = {}) {
+  return perfAudit.timeAsync('metadata', `UI GET ${endpoint}`, async () => {
+    const res = await retrySalesforceAuthOnce((token) => axios.get(`${uiApiListViewBaseUrl()}${endpoint}`, {
+      timeout: 30000,
+      headers: { Authorization: `Bearer ${token}` },
+      params
+    }));
+    return res.data;
+  }, { endpoint });
+}
+
+async function sfUiPatch(endpoint, body) {
+  return perfAudit.timeAsync('salesforce', `UI PATCH ${endpoint}`, async () => {
+    const res = await retrySalesforceAuthOnce((token) => axios.patch(`${uiApiListViewBaseUrl()}${endpoint}`, body, {
+      timeout: 30000,
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }
+    }));
+    return res.data;
+  }, { endpoint });
+}
+
+async function sfUiDelete(endpoint) {
+  await perfAudit.timeAsync('salesforce', `UI DELETE ${endpoint}`, async () => {
+    await retrySalesforceAuthOnce((token) => axios.delete(`${uiApiListViewBaseUrl()}${endpoint}`, {
+      timeout: 30000,
+      headers: { Authorization: `Bearer ${token}` }
+    }));
+  }, { endpoint });
+}
+
+async function sfPatch(endpoint, body, config = {}) {
+  return perfAudit.timeAsync('salesforce', `PATCH ${endpoint}`, async () => {
+    const res = await retrySalesforceAuthOnce((token) => axios.patch(`${baseUrl()}${endpoint}`, body, {
+      ...config,
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+        ...(config.headers || {})
+      }
+    }));
+    return res.data;
+  }, { endpoint });
+}
+
+async function sfDelete(endpoint) {
+  await perfAudit.timeAsync('salesforce', `DELETE ${endpoint}`, async () => {
+    await retrySalesforceAuthOnce((token) => axios.delete(`${baseUrl()}${endpoint}`, {
+      headers: { Authorization: `Bearer ${token}` }
+    }));
+  }, { endpoint });
+}
+
+function bulkUrl(endpoint) {
+  return `${baseUrl()}${endpoint}`;
+}
+
+async function buildBulkSOQL(objectName, search, extraWhere) {
+  const cfg = OBJECTS[objectName];
+  const availableFields = await getObjectFieldSet(objectName);
+  let soql = `SELECT ${await fieldsCsvForObject(objectName)} FROM ${objectName}`;
+  soql += buildWhereClause(objectName, search, extraWhere, availableFields);
+  return normalizeBulkSoql(soql);
+}
+
+async function createBulkQueryJob(soql) {
+  return sfAuthedRequest('post', bulkUrl('/jobs/query'), {
+    operation: 'query',
+    query: normalizeBulkSoql(soql),
+    contentType: 'CSV',
+    columnDelimiter: 'COMMA',
+    lineEnding: 'LF'
+  }, {
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+    timeout: 30000
+  });
+}
+
+async function getBulkQueryJob(jobId) {
+  return sfAuthedRequest('get', bulkUrl(`/jobs/query/${encodeURIComponent(jobId)}`), null, {
+    headers: { Accept: 'application/json' },
+    timeout: 30000
+  });
+}
+
+async function pollBulkQueryJob(jobId, maxWaitMs = BULK_MAX_POLL_MS) {
+  const started = Date.now();
+  let job = await getBulkQueryJob(jobId);
+  while (['UploadComplete', 'InProgress'].includes(job.state) && Date.now() - started < maxWaitMs) {
+    await sleep(BULK_POLL_INTERVAL_MS);
+    job = await getBulkQueryJob(jobId);
+  }
+  return job;
+}
+
+async function getBulkQueryResults(jobId, { locator, maxRecords = BULK_QUERY_PAGE_SIZE } = {}) {
+  const params = { maxRecords };
+  if (locator) params.locator = locator;
+  const res = await sfAuthedRawRequest(
+    'get',
+    bulkUrl(`/jobs/query/${encodeURIComponent(jobId)}/results`),
+    null,
+    {
+      params,
+      responseType: 'text',
+      headers: { Accept: 'text/csv', 'Accept-Encoding': 'gzip' },
+      timeout: 120000
+    }
+  );
+  const nextLocator = res.headers['sforce-locator'];
+  return {
+    csv: res.data || '',
+    records: parseCsv(res.data || ''),
+    locator: nextLocator && nextLocator !== 'null' ? nextLocator : null,
+    numberOfRecords: Number(res.headers['sforce-numberofrecords'] || 0)
+  };
+}
+
+async function createBulkIngestJob(object, operation, options = {}) {
+  const body = {
+    object,
+    operation,
+    contentType: 'CSV',
+    lineEnding: 'LF',
+    columnDelimiter: 'COMMA'
+  };
+  if (operation === 'upsert') {
+    if (!options.externalIdFieldName) throw new Error('Upsert requires externalIdFieldName');
+    body.externalIdFieldName = options.externalIdFieldName;
+  }
+  return sfAuthedRequest('post', bulkUrl('/jobs/ingest'), body, {
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+    timeout: 30000
+  });
+}
+
+async function uploadBulkIngestData(jobId, csv) {
+  await sfAuthedRequest(
+    'put',
+    bulkUrl(`/jobs/ingest/${encodeURIComponent(jobId)}/batches`),
+    csv,
+    {
+      headers: { 'Content-Type': 'text/csv', Accept: 'application/json' },
+      maxBodyLength: Infinity,
+      timeout: 120000
+    }
+  );
+}
+
+async function closeBulkIngestJob(jobId) {
+  return sfAuthedRequest('patch', bulkUrl(`/jobs/ingest/${encodeURIComponent(jobId)}`), {
+    state: 'UploadComplete'
+  }, {
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+    timeout: 30000
+  });
+}
+
+async function getBulkIngestJob(jobId) {
+  return sfAuthedRequest('get', bulkUrl(`/jobs/ingest/${encodeURIComponent(jobId)}`), null, {
+    headers: { Accept: 'application/json' },
+    timeout: 30000
+  });
+}
+
+async function pollBulkIngestJob(jobId, maxWaitMs = BULK_MAX_POLL_MS) {
+  const started = Date.now();
+  let job = await getBulkIngestJob(jobId);
+  while (['Open', 'UploadComplete', 'InProgress'].includes(job.state) && Date.now() - started < maxWaitMs) {
+    await sleep(BULK_POLL_INTERVAL_MS);
+    job = await getBulkIngestJob(jobId);
+  }
+  return job;
+}
+
+async function getBulkIngestResultCsv(jobId, resultType) {
+  const res = await sfAuthedRawRequest(
+    'get',
+    bulkUrl(`/jobs/ingest/${encodeURIComponent(jobId)}/${resultType}`),
+    null,
+    {
+      responseType: 'text',
+      headers: { Accept: 'text/csv' },
+      timeout: 120000
+    }
+  );
+  return res.data || '';
+}
+
+async function runBulkIngest(object, operation, records, options = {}) {
+  const cleanRecords = (records || []).map(flattenRecord);
+  if (!cleanRecords.length) throw new Error('Bulk ingest requires at least one record');
+  if (['update', 'delete'].includes(operation) && cleanRecords.some((record) => !record.Id)) {
+    throw new Error(`${operation} jobs require Id on every record`);
+  }
+
+  const csv = operation === 'delete'
+    ? recordsToCsv(cleanRecords.map((record) => ({ Id: record.Id })))
+    : recordsToCsv(cleanRecords);
+  const job = await createBulkIngestJob(object, operation, options);
+  await uploadBulkIngestData(job.id, csv);
+  await closeBulkIngestJob(job.id);
+
+  const finalJob = options.wait === false ? await getBulkIngestJob(job.id) : await pollBulkIngestJob(job.id, options.maxWaitMs);
+  const response = { success: finalJob.state === 'JobComplete', job: finalJob };
+
+  if (['JobComplete', 'Failed', 'Aborted'].includes(finalJob.state) && options.includeResults !== false) {
+    const [successfulCsv, failedCsv, unprocessedCsv] = await Promise.all([
+      getBulkIngestResultCsv(job.id, 'successfulResults').catch(() => ''),
+      getBulkIngestResultCsv(job.id, 'failedResults').catch(() => ''),
+      getBulkIngestResultCsv(job.id, 'unprocessedrecords').catch(() => '')
+    ]);
+    response.results = {
+      successful: parseCsv(successfulCsv),
+      failed: parseCsv(failedCsv),
+      unprocessed: parseCsv(unprocessedCsv)
+    };
+  }
+
+  return response;
+}
+
+// ─── Object Definitions ───────────────────────────────────────
+const OBJECTS = getObjectDefinitions();
+const PRIMARY_CRM_OBJECTS = getPrimaryObjectNames();
+const INTERNAL_OBJECTS = getInternalObjectNames();
+
+async function ensurePrimaryCrmObjectsRegistered() {
+  const rows = PRIMARY_CRM_OBJECTS.map((apiName, index) => ({
+    api_name: apiName,
+    label: getObjectConfig(apiName)?.label || apiName,
+    is_active: true,
+    sort_order: (index + 1) * 10
+  }));
+
+  const { data: existingRows, error: existingError } = await supabase
+    .from('sf_objects')
+    .select('api_name')
+    .in('api_name', PRIMARY_CRM_OBJECTS);
+
+  if (existingError) {
+    console.error('[sf_objects] Could not load registered CRM objects:', existingError.message);
+    return;
+  }
+
+  const existing = new Set((existingRows || []).map(row => row.api_name));
+  const inserts = rows.filter(row => !existing.has(row.api_name));
+  const updates = rows.filter(row => existing.has(row.api_name));
+
+  const operations = [
+    ...updates.map(row => supabase
+      .from('sf_objects')
+      .update({
+        label: row.label,
+        is_active: row.is_active,
+        sort_order: row.sort_order
+      })
+      .eq('api_name', row.api_name)),
+    ...(inserts.length ? [supabase.from('sf_objects').insert(inserts)] : [])
+  ];
+
+  const results = await Promise.all(operations);
+  const failed = results.find(result => result.error);
+  if (failed?.error) {
+    console.error('[sf_objects] Could not register CRM objects:', failed.error.message);
+    return;
+  }
+
+  invalidateAllUserContextCache();
+}
+
+const BULK_AUTO_THRESHOLD = Math.max(parseInt(process.env.BULK_AUTO_THRESHOLD, 10) || 200, 1);
+const BULK_MAX_POLL_MS = Math.max(parseInt(process.env.BULK_MAX_POLL_MS, 10) || 120000, 5000);
+const BULK_POLL_INTERVAL_MS = Math.max(parseInt(process.env.BULK_POLL_INTERVAL_MS, 10) || 2000, 500);
+const BULK_QUERY_PAGE_SIZE = Math.min(
+  Math.max(parseInt(process.env.BULK_QUERY_PAGE_SIZE, 10) || 50000, 1000),
+  250000
+);
+
+function escapeSOQL(value) {
+  return String(value || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+}
+
+async function getObjectFieldSet(objectName) {
+  const cacheKey = `${orgStore.activeOrgKey}:${objectName}`;
+  if (describeFieldCache.has(cacheKey)) return describeFieldCache.get(cacheKey);
+  const meta = await getObjectDescribe(objectName);
+  const fieldSet = new Set((meta.fields || [])
+    .filter(field => !field.deprecatedAndHidden)
+    .map(field => field.name));
+  describeFieldCache.set(cacheKey, fieldSet);
+  return fieldSet;
+}
+
+function splitConfiguredFields(fields) {
+  return String(fields || '')
+    .split(',')
+    .map(field => field.trim())
+    .filter(Boolean);
+}
+
+function isSelectableField(field, availableFields) {
+  if (!availableFields || availableFields.has(field)) return true;
+  if (!field.includes('.')) return false;
+  const root = field.split('.')[0];
+  return availableFields.has(`${root}Id`);
+}
+
+async function fieldsCsvForObject(objectName, overrideFields = '', availableFields = null) {
+  const cfg = OBJECTS[objectName];
+  const defaultFieldsStr = cfg ? cfg.fields : 'Id, Name';
+  const resolvedAvailableFields = availableFields || await getObjectFieldSet(objectName);
+  const fields = splitConfiguredFields(overrideFields || defaultFieldsStr)
+    .filter(field => field === 'Id' || isSelectableField(field, resolvedAvailableFields));
+  PORTAL_AUDIT_FIELDS.forEach((field) => {
+    if (resolvedAvailableFields.has(field)) fields.push(field);
+  });
+  return fields.length ? [...new Set(['Id', ...fields])].join(', ') : 'Id';
+}
+
+async function hydrateRecordOwners(records = [], objectName) {
+  if (!records.length) return records;
+  const availableFields = await getObjectFieldSet(objectName);
+  if (!availableFields.has(PORTAL_OWNER_FIELD)) return records;
+
+  const missingOwnerIds = [...new Set(
+    records
+      .filter(record => record?.Id && record[PORTAL_OWNER_FIELD] === undefined)
+      .map(record => record.Id)
+  )];
+  if (!missingOwnerIds.length) return records;
+
+  const ownerById = new Map();
+  for (let i = 0; i < missingOwnerIds.length; i += 100) {
+    const chunk = missingOwnerIds.slice(i, i + 100);
+    const ids = chunk.map(id => `'${escapeSOQL(id)}'`).join(', ');
+    const data = await sfGet('/query', {
+      q: `SELECT Id, ${PORTAL_OWNER_FIELD} FROM ${objectName} WHERE Id IN (${ids})`
+    });
+    (data.records || []).forEach(record => {
+      ownerById.set(record.Id, record[PORTAL_OWNER_FIELD] || null);
+    });
+  }
+
+  return records.map(record => (
+    record?.Id && ownerById.has(record.Id)
+      ? { ...record, [PORTAL_OWNER_FIELD]: ownerById.get(record.Id) }
+      : record
+  ));
+}
+
+function buildWhereClause(objectName, search, extraWhere, availableFields = null) {
+  const cfg = OBJECTS[objectName];
+  const conditions = [];
+
+  if (search && search.trim()) {
+    // Escape single quotes to prevent SOQL injection
+    const safe = escapeSOQL(search);
+    const parts = cfg.searchFields
+      .filter(field => !availableFields || availableFields.has(field))
+      .map(f => `${f} LIKE '%${safe}%'`);
+    if (parts.length) conditions.push(`(${parts.join(' OR ')})`);
+  }
+
+  if (extraWhere) conditions.push(extraWhere);
+  return conditions.length ? ` WHERE ${conditions.join(' AND ')}` : '';
+}
+
+function listScopeEnforcesVisibility(scope, user) {
+  if (isFullAccessUser(user)) return true;
+  return ['public_read', 'public_read_write', 'sharing_any_owner', 'owner_scope']
+    .includes(scope?.reason);
+}
+
+async function canUseSalesforceTotalForList(objectName, user, scope = null) {
+  if (isFullAccessUser(user)) return true;
+  if (['public_read', 'public_read_write', 'sharing_any_owner'].includes(scope?.reason)) return true;
+  const owdAccess = await getOrgWideDefaultAccess(objectName);
+  return ['public_read', 'public_read_write'].includes(owdAccess);
+}
+
+function appendExtraWhereToSOQL(soql, extraWhere) {
+  if (!extraWhere) return soql;
+  const compact = String(soql || '').replace(/\s+/g, ' ').trim();
+  const orderMatch = compact.match(/\sORDER\s+BY\s/i);
+  const limitMatch = compact.match(/\sLIMIT\s/i);
+  const cutIndex = [orderMatch?.index, limitMatch?.index]
+    .filter(index => Number.isInteger(index))
+    .sort((a, b) => a - b)[0];
+  const head = cutIndex === undefined ? compact : compact.slice(0, cutIndex);
+  const tail = cutIndex === undefined ? '' : compact.slice(cutIndex);
+  const joiner = /\sWHERE\s/i.test(head) ? ' AND ' : ' WHERE ';
+  return `${head}${joiner}${extraWhere}${tail}`;
+}
+
+async function buildSOQL(objectName, search, extraWhere, limit = null, offset = 0, availableFields = null) {
+  const cfg = OBJECTS[objectName];
+  const resolvedAvailableFields = availableFields || await getObjectFieldSet(objectName);
+  let soql = `SELECT ${await fieldsCsvForObject(objectName, '', resolvedAvailableFields)} FROM ${objectName}`;
+  soql += buildWhereClause(objectName, search, extraWhere, resolvedAvailableFields);
+  soql += ` ORDER BY ${cfg.orderBy}`;
+  if (limit !== null && limit !== undefined) {
+    const safeLimit = Math.min(Math.max(parseInt(limit, 10) || 25, 1), 2000);
+    const safeOffset = Math.max(parseInt(offset, 10) || 0, 0);
+    soql += ` LIMIT ${safeLimit}`;
+    if (safeOffset) soql += ` OFFSET ${safeOffset}`;
+  }
+
+  return soql;
+}
+
+async function relatedQuery(objectName, fields, where, limit = 5, sortBy = null, sortDir = 'ASC') {
+  const selectFields = await fieldsCsvForObject(objectName, fields);
+  const orderClause = sortBy ? `${sortBy} ${sortDir}` : (OBJECTS[objectName]?.orderBy || 'Id');
+  const soql = `SELECT ${selectFields} FROM ${objectName} WHERE ${where} ORDER BY ${orderClause} LIMIT ${limit}`;
+  const data = await sfGet('/query', { q: soql });
+  return {
+    records: data.records || [],
+    totalSize: data.totalSize || 0
+  };
+}
+
+async function emptyRelatedList(key, objectName, title, message = '') {
+  return { key, objectName, title, records: [], totalSize: 0, message };
+}
+
+async function buildRelatedList(key, objectName, title, fields, where, limit = 5, sortBy = null, sortDir = 'ASC') {
+  const data = await relatedQuery(objectName, fields, where, limit, sortBy, sortDir);
+  return { key, objectName, title, ...data };
+}
+
+async function getOpportunityContactRoleRelated(contactId) {
+  const data = await sfGet('/query', {
+    q: `
+      SELECT Id, OpportunityId, Opportunity.Name, Opportunity.StageName, Opportunity.Amount, Opportunity.CloseDate, Opportunity.AccountId, Opportunity.Account.Name
+      FROM OpportunityContactRole
+      WHERE ContactId = '${escapeSOQL(contactId)}'
+      ORDER BY Opportunity.CloseDate DESC
+      LIMIT 5
+    `.replace(/\s+/g, ' ').trim()
+  });
+  return {
+    key: 'opportunities',
+    objectName: 'Opportunity',
+    title: 'Opportunities',
+    totalSize: data.totalSize || 0,
+    records: (data.records || []).map((role) => ({
+      Id: role.OpportunityId,
+      ...(role.Opportunity || {})
+    })).filter((record) => record.Id)
+  };
+}
+
+async function getOpportunityCaseRelated(opportunityId) {
+  const caseFields = await getObjectFieldSet('Case');
+  const lookupField = ['OpportunityId', 'Opportunity__c', 'RelatedOpportunity__c', 'Related_Opportunity__c']
+    .find((field) => caseFields.has(field));
+  if (!lookupField) {
+    return emptyRelatedList('cases', 'Case', 'Cases', 'No Case lookup to Opportunity was found in this Salesforce org.');
+  }
+  return buildRelatedList(
+    'cases',
+    'Case',
+    'Cases',
+    'Id, CaseNumber, Subject, Status, Priority, Type, AccountId, Account.Name, CreatedDate',
+    `${lookupField} = '${escapeSOQL(opportunityId)}'`
+  );
+}
+
+async function safeRelatedList(factory, fallback) {
+  try {
+    return await factory();
+  } catch (err) {
+    console.warn(`Related list warning (${fallback.title}):`, err.response?.data?.[0]?.message || err.response?.data?.message || err.message);
+    return {
+      ...fallback,
+      records: [],
+      totalSize: 0,
+      message: fallback.message || 'This related list could not be loaded for the connected Salesforce org.'
+    };
+  }
+}
+
+function buildRegistryRelatedList(config, safeId) {
+  return buildRelatedList(
+    config.key,
+    config.objectName,
+    config.title,
+    Array.isArray(config.fields) ? config.fields.join(', ') : config.fields,
+    `${config.whereField} = '${safeId}'`,
+    config.limit || 5,
+    config.sortBy,
+    config.sortDir || 'ASC'
+  );
+}
+
+async function getRegisteredRelatedListsForRecord(objectName, safeId) {
+  const relatedLists = getObjectConfig(objectName)?.relatedLists || [];
+  return Promise.all(relatedLists.map((config) => safeRelatedList(
+    () => buildRegistryRelatedList(config, safeId),
+    { key: config.key, objectName: config.objectName, title: config.title }
+  )));
+}
+
+async function getRelatedListsForRecord(objectName, id) {
+  const safeId = escapeSOQL(id);
+  if (objectName === 'Account') {
+    return getRegisteredRelatedListsForRecord(objectName, safeId);
+  }
+  if (objectName === 'Contact') {
+    return Promise.all([
+      safeRelatedList(
+        () => getOpportunityContactRoleRelated(id),
+        { key: 'opportunities', objectName: 'Opportunity', title: 'Opportunities' }
+      ),
+      ...(await getRegisteredRelatedListsForRecord(objectName, safeId))
+    ]);
+  }
+  if (objectName === 'Opportunity') {
+    return Promise.all([
+      ...(await getRegisteredRelatedListsForRecord(objectName, safeId)),
+      safeRelatedList(
+        () => getOpportunityCaseRelated(id),
+        { key: 'cases', objectName: 'Case', title: 'Cases' }
+      )
+    ]);
+  }
+  if (objectName === 'Quote') {
+    return getRegisteredRelatedListsForRecord(objectName, safeId);
+  }
+  if (objectName === 'Campaign') {
+    return getRegisteredRelatedListsForRecord(objectName, safeId);
+  }
+  return getRegisteredRelatedListsForRecord(objectName, safeId);
+}
+
+async function getObjectChildRelationships(objectName) {
+  const cacheKey = `${orgStore.activeOrgKey}:${objectName}`;
+  if (describeChildRelsCache.has(cacheKey)) return describeChildRelsCache.get(cacheKey);
+  
+  const meta = await getObjectDescribe(objectName);
+  const rels = (meta.childRelationships || [])
+    .filter(rel => rel.relationshipName)
+    .map(rel => ({
+      relationshipName: rel.relationshipName,
+      childSObject: rel.childSObject,
+      field: rel.field
+    }));
+    
+  describeChildRelsCache.set(cacheKey, rels);
+  return rels;
+}
+
+async function getCustomRelatedListForRecord(objectName, id, listConfigs) {
+  const safeId = escapeSOQL(id);
+  const promises = listConfigs.map(config => {
+    return safeRelatedList(
+      async () => {
+        let selectFields = config.fields || [];
+        if (!selectFields.includes('Id')) {
+          selectFields = ['Id', ...selectFields];
+        }
+        
+        const whereClause = `${config.field} = '${safeId}'`;
+        
+        return buildRelatedList(
+          config.key,
+          config.objectName,
+          config.title,
+          selectFields.join(', '),
+          whereClause,
+          config.limit || 5,
+          config.sortBy,
+          config.sortDir || 'ASC'
+        );
+      },
+      { key: config.key, objectName: config.objectName, title: config.title }
+    );
+  });
+  return Promise.all(promises);
+}
+
+function ensureRequiredRelatedListConfigs(objectName, configs = []) {
+  const merged = Array.isArray(configs) ? [...configs] : [];
+  const hasList = (childObject, key) => merged.some(config =>
+    config?.objectName === childObject || config?.key === key
+  );
+
+  if (objectName === 'Opportunity' && !hasList('Quote', 'quotes')) {
+    merged.unshift({
+      key: 'quotes',
+      objectName: 'Quote',
+      title: 'Quotes',
+      field: 'OpportunityId',
+      fields: ['Id', 'Name', 'QuoteNumber', 'Status', 'GrandTotal'],
+      limit: 5,
+      sortBy: 'CreatedDate',
+      sortDir: 'DESC'
+    });
+  }
+  if (objectName === 'Opportunity' && !hasList('OpportunityLineItem', 'opportunityProducts')) {
+    const insertAt = merged.findIndex(config => config?.key === 'cases' || config?.objectName === 'Case');
+    const productConfig = {
+      key: 'opportunityProducts',
+      objectName: 'OpportunityLineItem',
+      title: 'Products',
+      field: 'OpportunityId',
+      fields: ['Id', 'Product2.Name', 'Quantity', 'UnitPrice', 'TotalPrice', 'ServiceDate'],
+      limit: 10,
+      sortBy: 'SortOrder',
+      sortDir: 'ASC'
+    };
+    if (insertAt >= 0) merged.splice(insertAt, 0, productConfig);
+    else merged.push(productConfig);
+  }
+
+  return merged;
+}
+
+function queryMoreEndpoint(nextRecordsUrl = '') {
+  const raw = String(nextRecordsUrl || '').trim();
+  if (!raw) throw new Error('Missing Salesforce query cursor');
+  const pathName = /^https?:\/\//i.test(raw) ? new URL(raw).pathname : raw;
+  const endpoint = pathName.replace(new RegExp(`^/services/data/${SF.version.replace('.', '\\.')}`), '');
+  if (!/^\/query\//.test(endpoint)) throw new Error('Invalid Salesforce query cursor');
+  return endpoint;
+}
+
+const QUERY_BATCH_HEADERS = { 'Sforce-Query-Options': 'batchSize=2000' };
+
+async function buildCountSOQL(objectName, search, extraWhere) {
+  const availableFields = await getObjectFieldSet(objectName);
+  return `SELECT COUNT() FROM ${objectName}${buildWhereClause(objectName, search, extraWhere, availableFields)}`;
+}
+
+function stripHtml(value = '') {
+  return String(value)
+    .replace(/<!\[CDATA\[/g, '')
+    .replace(/\]\]>/g, '')
+    .replace(/<style[\s\S]*?<\/style>/gi, '')
+    .replace(/<script[\s\S]*?<\/script>/gi, '')
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/p>/gi, '\n\n')
+    .replace(/<[^>]+>/g, '')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .trim();
+}
+
+function chatterSegmentFromClient(segment = {}) {
+  if (segment.type === 'Mention' && segment.id) {
+    return { type: 'Mention', id: segment.id };
+  }
+  if (segment.type === 'Link' && segment.url) {
+    return [
+      { type: 'MarkupBegin', markupType: 'Hyperlink', url: segment.url },
+      { type: 'Text', text: segment.text || segment.url },
+      { type: 'MarkupEnd', markupType: 'Hyperlink' }
+    ];
+  }
+  return { type: 'Text', text: String(segment.text || '') };
+}
+
+function chatterBodyFromSegments(segments = []) {
+  const messageSegments = (segments || [])
+    .map(chatterSegmentFromClient)
+    .flat()
+    .filter((segment) => segment.type === 'Mention' || segment.type === 'MarkupBegin' || segment.type === 'MarkupEnd' || segment.text);
+  return {
+    messageSegments: messageSegments.length ? messageSegments : [{ type: 'Text', text: ' ' }]
+  };
+}
+
+function normalizeChatterSegments(segments = []) {
+  const normalized = [];
+  for (let i = 0; i < (segments || []).length; i += 1) {
+    const segment = segments[i] || {};
+    if (segment.type === 'MarkupBegin' && segment.markupType === 'Hyperlink') {
+      const textSegment = (segments || [])[i + 1] || {};
+      normalized.push({
+        type: 'Link',
+        text: textSegment.text || segment.url || '',
+        url: segment.url || ''
+      });
+      while ((segments || [])[i + 1]?.type !== 'MarkupEnd' && i + 1 < (segments || []).length) i += 1;
+      if ((segments || [])[i + 1]?.type === 'MarkupEnd') i += 1;
+      continue;
+    }
+    if (segment.type === 'MarkupBegin' || segment.type === 'MarkupEnd') continue;
+    if (segment.htmlTag && !segment.text && !segment.name && !segment.url) continue;
+    normalized.push({
+      type: segment.type || 'Text',
+      text: segment.text || segment.name || '',
+      name: segment.name || segment.user?.displayName || segment.record?.name || '',
+      url: segment.url || segment.record?.url || '',
+      id: segment.id || segment.user?.id || segment.record?.id || ''
+    });
+  }
+  return normalized;
+}
+
+function normalizeChatterComments(capabilities = {}) {
+  const comments = capabilities.comments?.page?.items || capabilities.comments?.items || [];
+  return comments.map((comment) => ({
+    id: comment.id,
+    actor: {
+      id: comment.user?.id || comment.actor?.id || '',
+      name: comment.user?.displayName || comment.actor?.displayName || comment.actor?.name || 'User'
+    },
+    createdDate: comment.createdDate,
+    segments: normalizeChatterSegments(comment.body?.messageSegments)
+  }));
+}
+
+function salesforceIdFromValue(value = '') {
+  const match = String(value || '').match(/[a-zA-Z0-9]{15}(?:[a-zA-Z0-9]{3})?/);
+  return match ? match[0] : '';
+}
+
+function chatterPollChoiceId(choice = {}) {
+  const candidates = [
+    choice.id,
+    choice.choiceId,
+    choice.value,
+    choice.choice?.id,
+    choice.pollChoice?.id,
+    choice.url,
+    choice.selfUrl,
+    choice.resourceUrl
+  ];
+  for (const candidate of candidates) {
+    const id = salesforceIdFromValue(candidate);
+    if (id) return id;
+  }
+  return '';
+}
+
+function normalizeChatterPoll(capabilities = {}) {
+  const poll = capabilities.poll;
+  if (!poll) return null;
+  const choices = poll.choices || poll.pollChoices || poll.options || [];
+  return {
+    id: poll.id || '',
+    myChoiceId: poll.myChoiceId || poll.myChoice?.id || '',
+    choices: choices.map((choice) => ({
+      id: chatterPollChoiceId(choice),
+      text: choice.text || choice.label || choice.name || choice.choice?.text || choice.pollChoice?.text || '',
+      voteCount: choice.voteCount || choice.votes || 0
+    }))
+  };
+}
+
+async function resolveChatterPollChoiceId(feedElementId, submittedChoiceId) {
+  const submitted = String(submittedChoiceId || '').trim();
+  if (salesforceIdFromValue(submitted) === submitted) return submitted;
+
+  const poll = await sfGet(`/chatter/feed-elements/${encodeURIComponent(feedElementId)}/capabilities/poll`);
+  const normalized = normalizeChatterPoll({ poll });
+  const choice = (normalized?.choices || []).find((item) => (
+    item.id === submitted || item.text === submitted
+  ));
+  return choice?.id || submitted;
+}
+
+function normalizeChatterItem(item = {}) {
+  const capabilities = item.capabilities || {};
+  return {
+    id: item.id,
+    type: item.type || item.feedElementType || '',
+    actor: {
+      id: item.actor?.id || '',
+      name: item.actor?.displayName || item.actor?.name || 'Salesforce User'
+    },
+    createdDate: item.createdDate,
+    relativeCreatedDate: item.relativeCreatedDate || '',
+    segments: normalizeChatterSegments(item.body?.messageSegments),
+    text: stripHtml(item.body?.text || (item.body?.messageSegments || []).map((segment) => segment.text || segment.name || '').join(' ')),
+    likeCount: capabilities.chatterLikes?.page?.total || capabilities.chatterLikes?.total || 0,
+    commentCount: capabilities.comments?.page?.total || capabilities.comments?.total || 0,
+    comments: normalizeChatterComments(capabilities),
+    poll: normalizeChatterPoll(capabilities)
+  };
+}
+
+function cleanTemplateBody(value = '') {
+  return String(value)
+    .replace(/<!\[CDATA\[/g, '')
+    .replace(/\]\]>/g, '');
+}
+
+function emailTemplateBody(template = {}) {
+  return cleanTemplateBody(template.HtmlValue || template.Markup || template.Body || '');
+}
+
+function emailTemplateSubject(template = {}) {
+  return template.Subject || template.Name || '';
+}
+
+function buildTemplateContext(recipient = {}, campaign = {}, sender = {}, organization = {}) {
+  const replacements = {
+    'Contact.Name': recipient.type === 'Contact' ? recipient.name : '',
+    'Contact.FirstName': recipient.type === 'Contact' ? recipient.firstName || '' : '',
+    'Contact.LastName': recipient.type === 'Contact' ? recipient.lastName || '' : '',
+    'Contact.Email': recipient.type === 'Contact' ? recipient.email || '' : '',
+    'Contact.Title': recipient.type === 'Contact' ? recipient.title || '' : '',
+    'Lead.Name': recipient.type === 'Lead' ? recipient.name : '',
+    'Lead.FirstName': recipient.type === 'Lead' ? recipient.firstName || '' : '',
+    'Lead.LastName': recipient.type === 'Lead' ? recipient.lastName || '' : '',
+    'Lead.Email': recipient.type === 'Lead' ? recipient.email || '' : '',
+    'Lead.Title': recipient.type === 'Lead' ? recipient.title || '' : '',
+    'Lead.Company': recipient.type === 'Lead' ? recipient.company || '' : '',
+    'Recipient.Name': recipient.name || '',
+    'Recipient.FirstName': recipient.firstName || '',
+    'Recipient.LastName': recipient.lastName || '',
+    'Recipient.Email': recipient.email || '',
+    'Recipient.Title': recipient.title || '',
+    'Campaign.Name': campaign.Name || '',
+    'Campaign.Type': campaign.Type || '',
+    'Campaign.Status': campaign.Status || '',
+    'Campaign.StartDate': campaign.StartDate || '',
+    'Campaign.EndDate': campaign.EndDate || '',
+    'Account.Name': campaign.Name || '',
+    'Account.Phone': campaign.Phone || '',
+    'Account.Website': campaign.Website || '',
+    'Opportunity.Name': campaign.Name || '',
+    'Opportunity.StageName': campaign.StageName || '',
+    'Case.Subject': campaign.Subject || '',
+    'Case.CaseNumber': campaign.CaseNumber || '',
+    'Sender.Name': sender.Name || sender.name || '',
+    'Sender.FirstName': sender.FirstName || '',
+    'Sender.LastName': sender.LastName || '',
+    'Sender.Email': sender.Email || sender.email || '',
+    'Sender.Title': sender.Title || sender.title || '',
+    'User.Name': sender.Name || sender.name || '',
+    'User.FirstName': sender.FirstName || '',
+    'User.LastName': sender.LastName || '',
+    'User.Email': sender.Email || sender.email || '',
+    'Organization.Name': organization.Name || ''
+  };
+
+  return replacements;
+}
+
+function mergeTemplate(value = '', recipient = {}, campaign = {}, sender = {}, organization = {}) {
+  const replacements = buildTemplateContext(recipient, campaign, sender, organization);
+  return String(value || '')
+    .replace(/\{\{\{([\w.]+)\}\}\}/g, (match, key) =>
+      Object.prototype.hasOwnProperty.call(replacements, key) ? replacements[key] : match)
+    .replace(/\{\{([\w.]+)\}\}/g, (match, key) =>
+      Object.prototype.hasOwnProperty.call(replacements, key) ? replacements[key] : match)
+    .replace(/\{!([\w.]+)\}/g, (match, key) =>
+      Object.prototype.hasOwnProperty.call(replacements, key) ? replacements[key] : match);
+}
+
+function normalizeCampaignMember(record) {
+  const isContact = Boolean(record.ContactId);
+  const person = isContact ? record.Contact : record.Lead;
+  return {
+    id: record.Id,
+    status: record.Status,
+    type: isContact ? 'Contact' : 'Lead',
+    personId: record.ContactId || record.LeadId,
+    name: person?.Name || '',
+    firstName: person?.FirstName || '',
+    lastName: person?.LastName || '',
+    email: person?.Email || '',
+    phone: person?.Phone || '',
+    title: person?.Title || '',
+    company: isContact ? person?.Account?.Name || '' : person?.Company || '',
+    accountId: isContact ? person?.AccountId || '' : ''
+  };
+}
+
+function objectFromId(id) {
+  const prefix = String(id || '').slice(0, 3);
+  return {
+    '001': 'Account',
+    '003': 'Contact',
+    '006': 'Opportunity',
+    '500': 'Case',
+    '00Q': 'Lead',
+    '701': 'Campaign',
+    '0Q0': 'Quote',
+    '01t': 'Product2',
+    '00k': 'OpportunityLineItem',
+    '0QL': 'QuoteLineItem',
+    '00T': 'Task',
+    '00U': 'Event',
+    '02s': 'EmailMessage',
+    '005': 'User'
+  }[prefix] || '';
+}
+
+function normalizePicklistValues(field) {
+  return (field.picklistValues || [])
+    .filter(item => item.active)
+    .map(item => ({
+      value: item.value,
+      label: item.label || item.value,
+      validFor: item.validFor || ''
+    }));
+}
+
+async function buildLookupLabels(record, fields) {
+  const lookups = fields
+    .filter((field) => field.type === 'reference' && record[field.name])
+    .map((field) => ({
+      field: field.name,
+      id: record[field.name],
+      object: objectFromId(record[field.name]) || field.referenceTo?.[0]
+    }))
+    .filter((item) => item.object);
+
+  const labels = {};
+  const lookupsByObject = lookups.reduce((acc, lookup) => {
+    if (!acc.has(lookup.object)) acc.set(lookup.object, []);
+    acc.get(lookup.object).push(lookup);
+    return acc;
+  }, new Map());
+
+  const lookupGroups = [...lookupsByObject.entries()]
+    .map(([objectName, objectLookups]) => {
+      const ids = [...new Set(objectLookups.map((lookup) => lookup.id).filter(Boolean))];
+      if (!ids.length) return null;
+      const params = {
+        q: `SELECT Id, Name FROM ${objectName} WHERE Id IN (${ids.map((id) => `'${escapeSOQL(id)}'`).join(', ')})`
+      };
+      return {
+        objectName,
+        objectLookups,
+        params,
+        endpoint: '/query'
+      };
+    })
+    .filter(Boolean);
+
+  const responses = await sfCompositeGet(lookupGroups.map((group, index) => ({
+    referenceId: `lookup${index + 1}`,
+    endpoint: group.endpoint,
+    params: group.params,
+    fallback: () => sfGet(group.endpoint, group.params).catch(() => ({ records: [] }))
+  })));
+
+  lookupGroups.forEach((group, index) => {
+    const data = responses[index] || { records: [] };
+    const namesById = new Map((data.records || []).map((item) => [item.Id, item.Name || item.Id]));
+    group.objectLookups.forEach((lookup) => {
+      labels[lookup.field] = {
+        id: lookup.id,
+        object: lookup.object,
+        name: namesById.get(lookup.id) || lookup.id
+      };
+    });
+  });
+
+  return labels;
+}
+
+function normalizeActivity(record, source) {
+  if (source === 'EmailMessage') {
+    return {
+      id: record.Id,
+      objectName: 'EmailMessage',
+      type: 'Email',
+      subject: record.Subject || 'Email',
+      actor: record.FromName || record.FromAddress || '',
+      target: record.ToAddress || '',
+      when: record.MessageDate || record.CreatedDate,
+      status: record.Status || '',
+      isClosed: true,
+      body: stripHtml(record.TextBody || '')
+    };
+  }
+
+  if (source === 'Event') {
+    return {
+      id: record.Id,
+      objectName: 'Event',
+      type: 'Event',
+      subject: record.Subject || 'Event',
+      actor: record.Owner?.Name || '',
+      target: record.Who?.Name || '',
+      targetId: record.WhoId || '',
+      targetObject: objectFromId(record.WhoId),
+      when: record.StartDateTime || record.CreatedDate,
+      end: record.EndDateTime || '',
+      status: record.Location || '',
+      isClosed: record.StartDateTime ? new Date(record.StartDateTime).getTime() < Date.now() : false,
+      body: record.Description || ''
+    };
+  }
+
+  const type = record.TaskSubtype || 'Task';
+  const isEmailTask = String(type).toLowerCase().includes('email');
+  return {
+    id: record.Id,
+    objectName: 'Task',
+    type,
+    subject: record.Subject || 'Task',
+    actor: record.Owner?.Name || '',
+    target: record.Who?.Name || '',
+    targetId: record.WhoId || '',
+    targetObject: objectFromId(record.WhoId),
+    when: isEmailTask ? record.CreatedDate || record.ActivityDate : record.ActivityDate || record.CreatedDate,
+    dueDate: record.ActivityDate || '',
+    status: record.Status || '',
+    isClosed: Boolean(record.IsClosed),
+    body: record.Description || ''
+  };
+}
+
+function normalizeEmailSubject(value = '') {
+  return String(value || '')
+    .replace(/^(Email|List Email):\s*/i, '')
+    .trim()
+    .toLowerCase();
+}
+
+function extractEmailRecipient(value = '') {
+  const match = String(value || '').match(/^To:\s*([^\s\r\n]+)/im);
+  return match ? match[1].trim().toLowerCase() : '';
+}
+
+function emailAddressIdentity(value = '') {
+  const text = String(value || '').toLowerCase();
+  const match = text.match(/[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}/i);
+  return match ? match[0] : text.trim();
+}
+
+function dedupeEmailActivities(records) {
+  const emailKeys = new Set(records
+    .filter((record) => record.id?.startsWith('02s'))
+    .map((record) => `${normalizeEmailSubject(record.subject)}|${emailAddressIdentity(record.target)}`));
+
+  if (!emailKeys.size) return records;
+
+  return records.filter((record) => {
+    if (!record.id?.startsWith('00T') || !String(record.type || '').toLowerCase().includes('email')) return true;
+    const key = `${normalizeEmailSubject(record.subject)}|${emailAddressIdentity(extractEmailRecipient(record.body))}`;
+    return !emailKeys.has(key);
+  });
+}
+
+// ─── Error Handler ────────────────────────────────────────────
+function handleSFError(err, res, context) {
+  const sfErr = err.response?.data;
+  const msg = formatSalesforceError(sfErr) || err.message;
+
+  console.error(`❌ ${context}:`, sfErr || err.message);
+  if (!err.response && isTransientSalesforceNetworkError(err)) {
+    return res.status(502).json({ error: 'Salesforce connection was interrupted. Please try again.' });
+  }
+  res.status(err.response?.status || 500).json({ error: msg || 'Salesforce API error' });
+}
+
+function formatSalesforceError(value) {
+  if (!value) return '';
+  if (typeof value === 'string') return value;
+  if (Array.isArray(value)) return value.map(formatSalesforceError).filter(Boolean).join('; ');
+  if (value.message) return value.message;
+  if (value.error_description) return value.error_description;
+  if (value.errors) return formatSalesforceError(value.errors);
+  if (value.output?.fieldErrors) {
+    const details = Object.entries(value.output.fieldErrors)
+      .flatMap(([field, errors]) => (Array.isArray(errors) ? errors : [errors])
+        .map((error) => `${field}: ${formatSalesforceError(error)}`));
+    if (details.length) return details.join('; ');
+  }
+  if (value.output?.errors) return formatSalesforceError(value.output.errors);
+  if (value.outputValues?.errors) return formatSalesforceError(value.outputValues.errors);
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return '';
+  }
+}
+
+function extractActionFailures(result) {
+  const items = Array.isArray(result) ? result : result?.outputs || result?.results || [];
+  return items
+    .filter((item) => item && item.isSuccess === false)
+    .map((item) => formatSalesforceError(item.errors || item.outputValues?.errors || item))
+    .filter(Boolean);
+}
+
+function activityRelationFor(object, id) {
+  return ['Contact', 'Lead'].includes(object)
+    ? { WhoId: id }
+    : { WhatId: id };
+}
+
+function activityRelationFromBody(object, id, body = {}) {
+  const relation = {};
+  if (body.whoId) relation.WhoId = body.whoId;
+  if (body.whatId) relation.WhatId = body.whatId;
+  if (!relation.WhoId && !relation.WhatId) return activityRelationFor(object, id);
+  return relation;
+}
+
+async function createTaskActivity(fields, subtype = '') {
+  const body = { ...fields };
+  if (subtype) body.TaskSubtype = subtype;
+
+  try {
+    return await sfPost('/sobjects/Task', body);
+  } catch (err) {
+    if (!subtype) throw err;
+    const { TaskSubtype, ...fallback } = body;
+    return sfPost('/sobjects/Task', fallback);
+  }
+}
+
+function toSalesforceDateTime(dateValue, timeValue) {
+  if (!dateValue) return '';
+  if (!timeValue) return new Date(dateValue).toISOString();
+  return new Date(`${dateValue}T${timeValue}`).toISOString();
+}
+
+async function getEmailMergeContext() {
+  const me = await sfGet('/chatter/users/me');
+  const [userData, orgData] = await Promise.all([
+    sfGet('/query', {
+      q: `SELECT Id, Name, FirstName, LastName, Email, Title FROM User WHERE Id = '${escapeSOQL(me.id)}' LIMIT 1`
+    }),
+    sfGet('/query', {
+      q: 'SELECT Id, Name FROM Organization LIMIT 1'
+    })
+  ]);
+  return {
+    sender: userData.records?.[0] || { Name: me.name, Email: me.email, Title: me.title },
+    organization: orgData.records?.[0] || {}
+  };
+}
+
+// ─── Routes ───────────────────────────────────────────────────
+
+async function getEmailRecipientContext(objectName, id) {
+  if (!id || !['Contact', 'Lead', 'User'].includes(objectName)) return {};
+  const fields = objectName === 'User'
+    ? 'Id, Name, FirstName, LastName, Email, Title'
+    : objectName === 'Contact'
+      ? 'Id, Name, FirstName, LastName, Email, Title'
+      : 'Id, Name, FirstName, LastName, Email, Title, Company';
+  const record = await sfGet(`/sobjects/${objectName}/${id}?fields=${encodeURIComponent(fields)}`);
+  return {
+    type: objectName,
+    personId: record.Id,
+    name: record.Name || '',
+    firstName: record.FirstName || '',
+    lastName: record.LastName || '',
+    email: record.Email || '',
+    title: record.Title || '',
+    company: record.Company || ''
+  };
+}
+
+async function getRelatedMergeRecord(objectName, id) {
+  if (!id || !OBJECTS[objectName]) return {};
+  try {
+    return await sfGet(`/sobjects/${objectName}/${id}`);
+  } catch {
+    return {};
+  }
+}
+
+async function queryClassicEmailTemplates(limit = 500) {
+  const safeLimit = Math.min(Math.max(Number(limit) || 500, 1), 1000);
+  const data = await sfGet('/query', {
+    q: `
+    SELECT Id, Name, DeveloperName, Subject, Description, TemplateType, IsActive
+    FROM EmailTemplate
+    WHERE IsActive = true
+    ORDER BY Name
+    LIMIT ${safeLimit}
+    `.replace(/\s+/g, ' ').trim()
+  });
+  return data.records || [];
+}
+
+function parseEmailAddressList(value = '') {
+  return String(value || '')
+    .split(/[;,]/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function fileTitle(filename = 'attachment') {
+  return path.basename(String(filename || 'attachment')).replace(/\.[^.]+$/, '') || 'attachment';
+}
+
+async function uploadEmailAttachments(files = [], parentId = '') {
+  const pdfs = files
+    .filter((file) => file?.name && file?.data)
+    .filter((file) => file.type === 'application/pdf' || /\.pdf$/i.test(file.name))
+    .slice(0, 10);
+
+  const uploaded = [];
+  for (const file of pdfs) {
+    const cleanName = path.basename(file.name);
+    const result = await sfPost('/sobjects/ContentVersion', {
+      Title: fileTitle(cleanName),
+      PathOnClient: cleanName,
+      VersionData: String(file.data).replace(/^data:.*?;base64,/, ''),
+      ...(parentId ? { FirstPublishLocationId: parentId } : {})
+    });
+    uploaded.push({ id: result.id, name: cleanName });
+  }
+  return uploaded;
+}
+
+
+// POST /api/auth/login
+// Body: { email, password }
+// Returns: { token, user: { id, email, name, role }, permissions: {...} }
+function portalTokenPayload(user, isSystemAdmin = false) {
+  return {
+    id: user.id,
+    email: user.email,
+    name: user.name,
+    role: user.role,
+    isSystemAdmin: Boolean(isSystemAdmin)
+  };
+}
+
+function signPortalToken(user, isSystemAdmin = false) {
+  return jwt.sign(portalTokenPayload(user, isSystemAdmin), JWT_SECRET, { expiresIn: JWT_EXPIRES_IN });
+}
+
+async function issuePortalSession(user, req, authMethod = 'password') {
+  const userData = await getUserWithPermissions(user.id);
+  if (!userData) {
+    const error = new Error('Could not load user permissions');
+    error.statusCode = 403;
+    throw error;
+  }
+
+  const isSystemAdmin = userData.profile?.is_system_admin || false;
+  const token = signPortalToken(user, isSystemAdmin);
+
+  await supabase
+    .from('users')
+    .update({ last_login_at: new Date().toISOString() })
+    .eq('id', user.id);
+  invalidateUserContextCache(user.id);
+
+  await writeAuditLog({
+    userId: user.id,
+    userEmail: user.email,
+    userRole: user.role,
+    action: 'login',
+    payload: { authMethod },
+    ipAddress: req.ip
+  });
+
+  return {
+    token,
+    mustChangePw: user.must_change_pw,
+    user: {
+      id: userData.id,
+      email: userData.email,
+      name: userData.name,
+      role: userData.role,
+      isSystemAdmin,
+      profileImage: userData.profile_image || null,
+      profile: userData.profile
+    },
+    permissions: userData.permissions
+  };
+}
+
+app.post('/api/auth/login', async (req, res) => {
+  const { email, password } = req.body || {};
+
+  if (!email || !password) {
+    return res.status(400).json({ error: 'Email and password are required' });
+  }
+
+  try {
+    // 1. Look up the user by email
+    const { data: user, error } = await supabase
+      .from('users')
+      .select('id, email, name, role, profile_image, password_hash, is_active, must_change_pw')
+      .eq('email', email.toLowerCase().trim())
+      .single();
+
+    if (error || !user) {
+      // Generic message — don't reveal whether email exists
+      return res.status(401).json({ error: 'Invalid email or password' });
+    }
+
+    if (!user.is_active) {
+      return res.status(403).json({ error: 'Account is deactivated. Contact your administrator.' });
+    }
+
+    // 2. Compare password with bcrypt hash
+    const passwordOk = await bcrypt.compare(password, user.password_hash);
+    if (!passwordOk) {
+      // Log failed attempt
+      await writeAuditLog({
+        userId: user.id,
+        userEmail: user.email,
+        userRole: user.role,
+        action: 'failed_login',
+        ipAddress: req.ip
+      });
+      return res.status(401).json({ error: 'Invalid email or password' });
+    }
+
+    // 3. Load full permissions
+    const userData = await getUserWithPermissions(user.id);
+    if (!userData) {
+      return res.status(403).json({ error: 'Could not load user permissions' });
+    }
+
+    // 4. Sign JWT — embed role so middleware doesn't need DB on every request
+    const isSystemAdmin = userData.profile?.is_system_admin || false;
+
+    const token = signPortalToken(user, isSystemAdmin);
+
+    // 5. Update last_login_at
+    await supabase
+      .from('users')
+      .update({ last_login_at: new Date().toISOString() })
+      .eq('id', user.id);
+    invalidateUserContextCache(user.id);
+
+    // 6. Log successful login
+    await writeAuditLog({
+      userId: user.id,
+      userEmail: user.email,
+      userRole: user.role,
+      action: 'login',
+      ipAddress: req.ip
+    });
+
+    res.json({
+      token,
+      mustChangePw: user.must_change_pw,
+      user: {
+        id: userData.id,
+        email: userData.email,
+      name: userData.name,
+      role: userData.role,
+      profileImage: user.profile_image || null,
+      profile: userData.profile
+    },
+      permissions: userData.permissions   // { Account: {can_read, can_create, can_edit, can_delete}, ... }
+    });
+
+  } catch (err) {
+    console.error('Login error:', err.message);
+    res.status(500).json({ error: 'Login failed. Please try again.' });
+  }
+});
+
+// GET /api/auth/supabase-config
+// Public browser config for Supabase OAuth. Never expose SUPABASE_SERVICE_ROLE_KEY here.
+app.get('/api/auth/supabase-config', (req, res) => {
+  const anonKey = process.env.SUPABASE_ANON_KEY || process.env.SUPABASE_PUBLISHABLE_KEY;
+  if (!process.env.SUPABASE_URL || !anonKey) {
+    return res.status(500).json({ error: 'Supabase OAuth is not configured on the server.' });
+  }
+
+  res.json({
+    url: process.env.SUPABASE_URL,
+    anonKey
+  });
+});
+
+// POST /api/auth/social-login
+// Verifies the Supabase OAuth user, maps their email to an existing portal user,
+// then returns the same portal JWT/permissions shape as email-password login.
+app.post('/api/auth/social-login', async (req, res) => {
+  const { provider, accessToken } = req.body || {};
+
+  if (provider !== 'google') {
+    return res.status(400).json({ error: 'Unsupported social login provider.' });
+  }
+
+  if (!accessToken) {
+    return res.status(400).json({ error: 'Missing Supabase access token.' });
+  }
+
+  try {
+    const { data: authData, error: authError } = await supabase.auth.getUser(accessToken);
+    if (authError || !authData?.user?.email) {
+      return res.status(401).json({ error: 'Google sign-in could not be verified.' });
+    }
+
+    const supabaseUser = authData.user;
+    const identities = supabaseUser.identities || [];
+    const usedGoogle = identities.some(identity => identity.provider === 'google');
+    if (!usedGoogle && supabaseUser.app_metadata?.provider !== 'google') {
+      return res.status(401).json({ error: 'Please sign in with Google.' });
+    }
+
+    const email = supabaseUser.email.toLowerCase().trim();
+    const { data: user, error } = await supabase
+      .from('users')
+      .select('id, email, name, role, is_active, must_change_pw')
+      .eq('email', email)
+      .single();
+
+    if (error || !user) {
+      return res.status(403).json({
+        error: 'Your Google account is not linked to a portal user. Ask an administrator to create a user with this email.'
+      });
+    }
+
+    if (!user.is_active) {
+      return res.status(403).json({ error: 'Account is deactivated. Contact your administrator.' });
+    }
+
+    res.json(await issuePortalSession(user, req, 'google'));
+  } catch (err) {
+    console.error('Social login error:', err.message);
+    res.status(err.statusCode || 500).json({ error: err.message || 'Social login failed. Please try again.' });
+  }
+});
+
+app.post('/api/auth/session/refresh', checkAuth, async (req, res) => {
+  try {
+    const context = req.userContext || await resolveRequestContext(req, req.user || {});
+    if (!context?.user?.is_active) {
+      return res.status(401).json({ error: 'Session expired. Please log in again.', code: 'USER_INACTIVE' });
+    }
+
+    const user = {
+      id: context.user.id,
+      email: context.user.email,
+      name: context.user.name,
+      role: context.user.role
+    };
+    const token = signPortalToken(user, context.isSystemAdmin);
+
+    res.json({
+      token,
+      user: {
+        id: context.user.id,
+        email: context.user.email,
+        name: context.user.name,
+        role: context.user.role,
+        isSystemAdmin: context.isSystemAdmin,
+        profileImage: context.user.profile_image || null,
+        profile: context.profile
+      },
+      permissions: context.permissions || {}
+    });
+  } catch (err) {
+    console.error('Session refresh error:', err.message);
+    res.status(500).json({ error: 'Session refresh failed. Please try again.' });
+  }
+});
+
+
+
+// =============================================================================
+// POST /api/auth/forgot-password
+// User submits their email → we generate a reset token → send email
+// =============================================================================
+app.post('/api/auth/forgot-password', async (req, res) => {
+  const { email } = req.body || {};
+  if (!email) return res.status(400).json({ error: 'Email is required' });
+
+  // Always return success — never reveal whether email exists (security)
+  const genericResponse = { success: true, message: 'If that email exists, a reset link has been sent.' };
+  const requestedEmail = String(email || '').toLowerCase().trim();
+  const requestId = crypto.randomBytes(4).toString('hex');
+  const maskEmail = (value = '') => value.replace(/^(.{2}).*(@.*)$/, '$1***$2');
+  const resetLog = (...args) => console.info(`[forgot-password:${requestId}]`, ...args);
+
+  try {
+    resetLog('request received', { email: maskEmail(requestedEmail), ip: req.ip });
+    // 1. Find user
+    const { data: user, error: lookupError } = await supabase
+      .from('users')
+      .select('id, name, email, is_active')
+      .eq('email', requestedEmail)
+      .single();
+
+    // If no user or inactive — return generic success anyway (don't leak info)
+    if (lookupError && lookupError.code !== 'PGRST116') {
+      resetLog('user lookup failed', { code: lookupError.code, message: lookupError.message });
+      return res.json(genericResponse);
+    }
+    if (!user) {
+      resetLog('no portal user found; returning generic success');
+      return res.json(genericResponse);
+    }
+    if (!user.is_active) {
+      resetLog('portal user is inactive; returning generic success', { userId: user.id, email: maskEmail(user.email) });
+      return res.json(genericResponse);
+    }
+    resetLog('active portal user found', { userId: user.id, email: maskEmail(user.email) });
+
+    // 2. Generate a secure random token
+    const resetToken = crypto.randomBytes(32).toString('hex');
+    const tokenHash = crypto.createHash('sha256').update(resetToken).digest('hex');
+    const expiresAt = new Date(Date.now() + 60 * 60 * 1000); // 1 hour from now
+
+    // 3. Store token hash in DB (we store hash, not raw token — same as JWT pattern)
+    // First delete any existing reset tokens for this user
+    await supabase
+      .from('password_reset_tokens')
+      .delete()
+      .eq('user_id', user.id)
+      .eq('token_type', PASSWORD_RESET_TOKEN_TYPE);
+
+    await supabase
+      .from('password_reset_tokens')
+      .insert({
+        user_id: user.id,
+        token_hash: tokenHash,
+        expires_at: expiresAt.toISOString(),
+        used: false,
+        token_type: PASSWORD_RESET_TOKEN_TYPE
+      });
+
+    // 4. Send email via Resend
+    const appUrl = process.env.APP_URL || `http://localhost:${PORT}`;
+    const resetUrl = `${appUrl}/reset-password.html?token=${resetToken}`;
+    const fromEmail = process.env.FROM_EMAIL || 'SaaSRAY CRM <noreply@crm.saasray.com>';
+
+    if (!process.env.RESEND_API_KEY) {
+      resetLog('RESEND_API_KEY is missing; email cannot be sent');
+      return res.json(genericResponse);
+    }
+
+    if (/onboarding@resend\.dev/i.test(fromEmail)) {
+      resetLog('warning: FROM_EMAIL uses onboarding@resend.dev; external recipients may not receive reset emails');
+    }
+
+    const sendResult = await resend.emails.send({
+      from: fromEmail,
+      to: user.email,
+      subject: 'SaaSRAY CRM — Reset Your Password',
+      html: `
+        <!DOCTYPE html>
+        <html>
+        <head>
+          <meta charset="UTF-8">
+          <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        </head>
+        <body style="margin:0;padding:0;background:#0f1117;font-family:'Segoe UI',Arial,sans-serif">
+          <table width="100%" cellpadding="0" cellspacing="0" style="padding:40px 20px">
+            <tr>
+              <td align="center">
+                <table width="480" cellpadding="0" cellspacing="0"
+                  style="background:#1a1d27;border:1px solid #2a2d3e;border-radius:16px;overflow:hidden">
+ 
+                  <!-- Header -->
+                  <tr>
+                    <td style="padding:32px 40px 24px;border-bottom:1px solid #2a2d3e;text-align:center">
+                      <div style="font-size:22px;font-weight:800;color:#f0f1ff;letter-spacing:-0.5px">
+                        SaaSRAY <span style="color:#6366f1">CRM</span>
+                      </div>
+                      <div style="font-size:12px;color:#5c5f7a;margin-top:4px;letter-spacing:0.05em">
+                        THINK DIGITAL. BUILD SMART.
+                      </div>
+                    </td>
+                  </tr>
+ 
+                  <!-- Body -->
+                  <tr>
+                    <td style="padding:32px 40px">
+                      <p style="font-size:15px;color:#a0a3c0;margin:0 0 8px">Hi ${user.name},</p>
+                      <h1 style="font-size:20px;font-weight:700;color:#f0f1ff;margin:0 0 16px">
+                        Password Reset Request
+                      </h1>
+                      <p style="font-size:14px;color:#a0a3c0;line-height:1.6;margin:0 0 28px">
+                        We received a request to reset your SaaSRAY CRM password.
+                        Click the button below to set a new password. This link expires in
+                        <strong style="color:#f0f1ff">1 hour</strong>.
+                      </p>
+ 
+                      <!-- CTA Button -->
+                      <table width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:28px">
+                        <tr>
+                          <td align="center">
+                            <a href="${resetUrl}"
+                              style="display:inline-block;background:#6366f1;color:#ffffff;
+                                     font-size:15px;font-weight:700;text-decoration:none;
+                                     padding:14px 36px;border-radius:10px;letter-spacing:0.02em">
+                              Reset My Password
+                            </a>
+                          </td>
+                        </tr>
+                      </table>
+ 
+                      <!-- Fallback URL -->
+                      <p style="font-size:12px;color:#5c5f7a;line-height:1.6;margin:0 0 8px">
+                        If the button doesn't work, copy and paste this link:
+                      </p>
+                      <p style="font-size:12px;color:#6366f1;word-break:break-all;margin:0 0 28px">
+                        ${resetUrl}
+                      </p>
+ 
+                      <!-- Security Note -->
+                      <div style="background:#141620;border:1px solid #2a2d3e;border-radius:8px;padding:16px">
+                        <p style="font-size:12px;color:#5c5f7a;margin:0;line-height:1.6">
+                          🔒 If you didn't request a password reset, you can safely ignore this email.
+                          Your password will not change unless you click the link above.
+                        </p>
+                      </div>
+                    </td>
+                  </tr>
+ 
+                  <!-- Footer -->
+                  <tr>
+                    <td style="padding:20px 40px;border-top:1px solid #2a2d3e;text-align:center">
+                      <p style="font-size:11px;color:#5c5f7a;margin:0">
+                        SaaSRAY CRM &bull; This email was sent to ${user.email}
+                      </p>
+                    </td>
+                  </tr>
+ 
+                </table>
+              </td>
+            </tr>
+          </table>
+        </body>
+        </html>
+      `
+    });
+
+    if (sendResult?.error) {
+      resetLog('Resend rejected reset email', {
+        name: sendResult.error.name,
+        message: sendResult.error.message,
+        statusCode: sendResult.error.statusCode
+      });
+      return res.json(genericResponse);
+    }
+
+    resetLog('Resend accepted reset email', {
+      messageId: sendResult?.data?.id || sendResult?.id || null,
+      from: fromEmail,
+      to: maskEmail(user.email)
+    });
+
+    // 5. Audit log
+    await writeAuditLog({
+      userId: user.id,
+      userEmail: user.email,
+      userRole: 'system',
+      action: 'password_reset',
+      ipAddress: req.ip
+    });
+
+    res.json(genericResponse);
+
+  } catch (err) {
+    console.error(`[forgot-password:${requestId}] error:`, err.message);
+    // Still return generic success — don't leak errors to attacker
+    res.json(genericResponse);
+  }
+});
+
+
+// =============================================================================
+// POST /api/auth/reset-password
+// User submits new password with the token from the email link
+// =============================================================================
+app.post('/api/auth/reset-password', async (req, res) => {
+  const { token, password } = req.body || {};
+
+  if (!token || !password) {
+    return res.status(400).json({ error: 'Token and new password are required' });
+  }
+
+  if (password.length < 8) {
+    return res.status(400).json({ error: 'Password must be at least 8 characters' });
+  }
+
+  try {
+    // 1. Hash the incoming token to compare with stored hash
+    const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
+
+    // 2. Find the token in DB
+    const { data: resetRecord } = await supabase
+      .from('password_reset_tokens')
+      .select('user_id, expires_at, used, token_type, revoked_at')
+      .eq('token_hash', tokenHash)
+      .single();
+
+    if (!resetRecord || resetRecord.revoked_at) {
+      return res.status(400).json({ error: 'Invalid or expired reset link. Please request a new one.' });
+    }
+
+    if (resetRecord.used) {
+      return res.status(400).json({ error: 'This reset link has already been used. Please request a new one.' });
+    }
+
+    if (new Date(resetRecord.expires_at) < new Date()) {
+      return res.status(400).json({ error: 'This reset link has expired. Please request a new one.' });
+    }
+
+    // 3. Hash new password
+    const passwordHash = await bcrypt.hash(password, 12);
+
+    // 4. Update user password
+    await supabase
+      .from('users')
+      .update({
+        password_hash: passwordHash,
+        must_change_pw: false,
+        email_verified_at: new Date().toISOString(),
+        password_created_at: new Date().toISOString(),
+        setup_completed_at: new Date().toISOString(),
+        invitation_cancelled_at: null,
+        updated_at: new Date().toISOString()
+      })
+      .eq('id', resetRecord.user_id);
+    invalidateUserContextCache(resetRecord.user_id);
+
+    // 5. Mark token as used (so it can't be reused)
+    await supabase
+      .from('password_reset_tokens')
+      .update({ used: true, used_at: new Date().toISOString() })
+      .eq('token_hash', tokenHash);
+
+    // 6. Audit log
+    if (resetRecord.token_type === INVITATION_TOKEN_TYPE) {
+      await writeAuditLog({
+        userId: resetRecord.user_id,
+        userRole: 'system',
+        action: 'INVITATION_VERIFIED',
+        ipAddress: req.ip
+      });
+      await writeAuditLog({
+        userId: resetRecord.user_id,
+        userRole: 'system',
+        action: 'PASSWORD_CREATED',
+        ipAddress: req.ip
+      });
+    }
+
+    await writeAuditLog({
+      userId: resetRecord.user_id,
+      userRole: 'system',
+      action: resetRecord.token_type === INVITATION_TOKEN_TYPE ? 'user_setup_password' : 'password_reset',
+      ipAddress: req.ip
+    });
+
+    res.json({ success: true, message: 'Password updated successfully. You can now log in.' });
+
+  } catch (err) {
+    console.error('Reset password error:', err.message);
+    res.status(500).json({ error: 'Could not reset password. Please try again.' });
+  }
+});
+
+
+// =============================================================================
+// GET /api/auth/verify-reset-token
+// Called by the reset page on load to validate the token before showing the form
+// =============================================================================
+app.get('/api/auth/verify-reset-token', async (req, res) => {
+  const { token } = req.query;
+  if (!token) return res.status(400).json({ valid: false, error: 'Token is required' });
+
+  try {
+    const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
+    const { data, error } = await supabase
+      .from('password_reset_tokens')
+      .select('user_id, expires_at, used, token_type, revoked_at')
+      .eq('token_hash', tokenHash)
+      .single();
+
+    if (error || !data || data.used || data.revoked_at || new Date(data.expires_at) < new Date()) {
+      return res.json({ valid: false, error: 'Invalid or expired reset link' });
+    }
+
+    const { data: user } = await supabase
+      .from('users')
+      .select('name')
+      .eq('id', data.user_id)
+      .maybeSingle();
+
+    res.json({ valid: true, name: user?.name || '', tokenType: data.token_type || PASSWORD_RESET_TOKEN_TYPE });
+
+  } catch (err) {
+    console.error('Verify reset token error:', err.message);
+    res.json({ valid: false, error: 'Invalid reset link' });
+  }
+});
+
+
+// POST /api/auth/logout
+// Replaces your existing logout route — adds audit log
+// If you already have app.post('/api/auth/logout', ...) — REPLACE IT with this one.
+// Note: we keep the Salesforce token revocation logic that's already in your file.
+// Only the Supabase audit log line is new — add it to your existing logout handler:
+//   await writeAuditLog({ userId: req.user?.id, userEmail: req.user?.email, userRole: req.user?.role, action: 'logout', ipAddress: req.ip });
+
+
+// GET /api/portal/me
+// Returns current user + full permissions. Called after login and on page load.
+// Protected by JWT middleware.
+app.get('/api/portal/me', checkAuth, async (req, res) => {
+  try {
+    const userData = req.userContext?.raw || await getUserWithPermissions(req.user.id);
+
+    if (!userData) {
+      return res.status(404).json({
+        error: 'User not found or deactivated'
+      });
+    }
+
+    const isSystemAdmin = Boolean(userData.profile?.is_system_admin);
+
+    res.json({
+      id: userData.id,
+      email: userData.email,
+      name: userData.name,
+      role: userData.role,
+
+      // NEW
+      isSystemAdmin: isSystemAdmin,
+
+      profileImage: userData.profile_image || null,
+      profile: userData.profile,
+      permissions: userData.permissions,
+      lastLoginAt: userData.last_login_at
+    });
+
+  } catch (err) {
+    console.error('GET /api/portal/me error:', err.message);
+
+    res.status(500).json({
+      error: 'Could not load user profile'
+    });
+  }
+});
+
+// GET own profile — any logged in user
+app.get('/api/portal/profile', checkAuth, async (req, res) => {
+  try {
+    const { data: user } = await supabase
+      .from('users')
+      .select('id, email, name, role, profile_image, must_change_pw, created_at, last_login_at')
+      .eq('id', req.user.id)
+      .single();
+
+    const { data: assignment } = await supabase
+      .from('user_profile_assignments')
+      .select('profile_id, profiles(id, name, description, is_system_admin)')
+      .eq('user_id', req.user.id)
+      .single();
+
+    const { data: permSets } = await supabase
+      .from('user_permission_set_assignments')
+      .select('perm_set_id, permission_sets(id, name, description)')
+      .eq('user_id', req.user.id);
+
+    const permissions = await supabase
+      .rpc('get_portal_users')
+      .then(({ data }) => data?.find(u => u.id === req.user.id));
+
+    res.json({
+      id: user.id,
+      email: user.email,
+      name: user.name,
+      role: user.role,
+      profileImage: user.profile_image || null,
+      mustChangePw: user.must_change_pw,
+      createdAt: user.created_at,
+      lastLoginAt: user.last_login_at,
+      profile: assignment?.profiles || null,
+      isSystemAdmin: Boolean(assignment?.profiles?.is_system_admin),
+      permissionSets: (permSets || []).map(p => p.permission_sets).filter(Boolean)
+    });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message });
+  }
+});
+
+// PATCH own profile — name and password only
+app.patch('/api/portal/profile', checkAuth, async (req, res) => {
+  const { name, profileImage, currentPassword, newPassword } = req.body || {};
+
+  try {
+    const updates = {};
+
+    // Name change
+    if (name?.trim()) {
+      updates.name = name.trim();
+    }
+
+    if (Object.prototype.hasOwnProperty.call(req.body || {}, 'profileImage')) {
+      updates.profile_image = normalizeProfileImage(profileImage);
+    }
+
+    // Password change
+    if (newPassword) {
+      if (!currentPassword) {
+        return res.status(400).json({ error: 'Current password is required to set a new password' });
+      }
+      if (newPassword.length < 8) {
+        return res.status(400).json({ error: 'New password must be at least 8 characters' });
+      }
+
+      // Verify current password
+      const { data: user } = await supabase
+        .from('users')
+        .select('password_hash')
+        .eq('id', req.user.id)
+        .single();
+
+      const valid = await bcrypt.compare(currentPassword, user.password_hash);
+      if (!valid) {
+        return res.status(400).json({ error: 'Current password is incorrect' });
+      }
+
+      updates.password_hash = await bcrypt.hash(newPassword, 12);
+      updates.must_change_pw = false;
+    }
+
+    if (!Object.keys(updates).length) {
+      return res.status(400).json({ error: 'Nothing to update' });
+    }
+
+    updates.updated_at = new Date().toISOString();
+
+    await supabase.from('users').update(updates).eq('id', req.user.id);
+    invalidateUserContextCache(req.user.id);
+
+    await writeAuditLog({
+      userId: req.user.id,
+      userEmail: req.user.email,
+      userRole: req.user.role,
+      action: 'update_user',
+      payload: { self: true, changedFields: Object.keys(updates) },
+      ipAddress: req.ip
+    });
+
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+
+// POST /api/portal/users — create new portal user (admin+ only)
+app.post('/api/portal/users', checkAuth, checkRole('admin'), async (req, res) => {
+  const {
+    email,
+    name,
+    password,
+    role,
+    profileId,
+    orgRoleId,
+    profileImage,
+    permissionSetIds,
+    permissionSetGroupIds
+  } = req.body || {};
+
+  if (!email || !name) {
+    return res.status(400).json({ error: 'Email and name are required' });
+  }
+
+  const validRoles = ['system_administrator', 'admin', 'manager', 'employee', 'readonly'];
+  if (role && !validRoles.includes(role)) {
+    return res.status(400).json({ error: 'Invalid role' });
+  }
+
+  // Admins cannot create system_administrator users
+  if (role === 'system_administrator' && req.user.role !== 'system_administrator') {
+    return res.status(403).json({ error: 'Only System Administrators can create System Administrator accounts' });
+  }
+
+  try {
+    const passwordHash = await bcrypt.hash(createSecureToken(), 12);
+
+    const { data: newUser, error } = await supabase
+      .from('users')
+      .insert({
+        email: email.toLowerCase().trim(),
+        name: name.trim(),
+        password_hash: passwordHash,
+        role: role || 'employee',
+        org_role_id: orgRoleId || null,
+        profile_image: normalizeProfileImage(profileImage),
+        is_active: true,
+        must_change_pw: true,
+        email_verified_at: null,
+        password_created_at: null,
+        setup_completed_at: null,
+        created_by: req.user.id
+      })
+      .select('id, email, name, role, org_role_id, profile_image, must_change_pw, invitation_sent_at, invitation_expires_at, email_verified_at, password_created_at, setup_completed_at')
+      .single();
+
+    if (error) {
+      if (error.code === '23505') {
+        return res.status(409).json({ error: 'A user with this email already exists' });
+      }
+      throw error;
+    }
+
+    // Assign profile if provided
+    if (profileId) {
+      await supabase
+        .from('user_profile_assignments')
+        .insert({ user_id: newUser.id, profile_id: profileId, assigned_by: req.user.id });
+    }
+
+    if (Array.isArray(permissionSetIds) && permissionSetIds.length) {
+      await supabase.from('user_permission_set_assignments').insert(
+        permissionSetIds.map(psId => ({
+          user_id: newUser.id,
+          perm_set_id: psId,
+          assigned_by: req.user.id
+        }))
+      );
+    }
+
+    if (Array.isArray(permissionSetGroupIds) && permissionSetGroupIds.length) {
+      await supabase.from('user_permission_set_group_assignments').insert(
+        permissionSetGroupIds.map(groupId => ({
+          user_id: newUser.id,
+          group_id: groupId,
+          assigned_by: req.user.id
+        }))
+      );
+    }
+
+    invalidateAdminStaticCache('permissionSets');
+    invalidateUserContextCache(newUser.id);
+    roleVisibilityCache.clear();
+
+    await writeAuditLog({
+      userId: req.user.id,
+      userEmail: req.user.email,
+      userRole: req.user.role,
+      action: 'create_user',
+      payload: { createdUserId: newUser.id, email: newUser.email, role: newUser.role },
+      ipAddress: req.ip
+    });
+
+    let invitation = null;
+    let warning = null;
+    try {
+      invitation = await sendPortalUserInvitation({
+        userId: newUser.id,
+        adminUser: req.user,
+        req,
+        auditAction: 'USER_INVITED'
+      });
+    } catch (inviteErr) {
+      warning = 'User created, but the invitation email could not be sent. Use Resend Invitation from the user row.';
+      console.error('[user-invitation] create user email failed:', inviteErr.message);
+    }
+
+    res.status(201).json({ success: true, user: newUser, invitation, warning });
+  } catch (err) {
+    console.error('POST /api/portal/users error:', err.message);
+    res.status(err.statusCode || 500).json({ error: err.statusCode ? err.message : 'Could not create user' });
+  }
+});
+
+
+// PATCH /api/portal/users/:id — update user (admin+ only)
+// POST /api/portal/users/:id/resend-invitation - generate and send a fresh setup link
+app.post('/api/portal/users/:id/resend-invitation', checkAuth, checkRole('admin'), async (req, res) => {
+  const { id } = req.params;
+
+  try {
+    const { user } = await getPortalUserInvitationContext(id);
+
+    if (!needsInvitation(user)) {
+      return res.status(409).json({ error: 'This user has already completed account setup.' });
+    }
+
+    const invitation = await sendPortalUserInvitation({
+      userId: id,
+      adminUser: req.user,
+      req,
+      auditAction: 'INVITATION_RESENT'
+    });
+
+    res.json({ success: true, invitation });
+  } catch (err) {
+    console.error('POST /api/portal/users/:id/resend-invitation error:', err.message);
+    res.status(500).json({ error: 'Unable to send invitation. Please try again.' });
+  }
+});
+
+// POST /api/portal/users/:id/cancel-invitation - revoke active setup links
+app.post('/api/portal/users/:id/cancel-invitation', checkAuth, checkRole('admin'), async (req, res) => {
+  const { id } = req.params;
+
+  try {
+    const { user } = await getPortalUserInvitationContext(id);
+
+    if (!needsInvitation(user)) {
+      return res.status(409).json({ error: 'This user has already completed account setup.' });
+    }
+
+    await revokeActiveSetupTokens(id);
+
+    const nowIso = new Date().toISOString();
+    const { error: updateError } = await supabase
+      .from('users')
+      .update({
+        invitation_cancelled_at: nowIso,
+        invitation_expires_at: null,
+        updated_at: nowIso
+      })
+      .eq('id', id);
+    if (updateError) throw updateError;
+    invalidateUserContextCache(id);
+
+    await writeAuditLog({
+      userId: req.user.id,
+      userEmail: req.user.email,
+      userRole: req.user.role,
+      action: 'INVITATION_CANCELLED',
+      payload: { invitedUserId: id, invitedEmail: user.email },
+      ipAddress: req.ip
+    });
+
+    res.json({ success: true, cancelledAt: nowIso });
+  } catch (err) {
+    console.error('POST /api/portal/users/:id/cancel-invitation error:', err.message);
+    res.status(500).json({ error: 'Unable to cancel invitation. Please try again.' });
+  }
+});
+
+app.patch('/api/portal/users/:id', checkAuth, checkRole('admin'), async (req, res) => {
+  const { id } = req.params;
+  const { role, isActive, profileId, mustChangePw, email, name, password, permissionSetIds, profileImage } = req.body || {};
+
+  // Admins cannot modify system_administrator users (only system_administrator can)
+  if (req.user.role !== 'system_administrator') {
+    const { data: target } = await supabase
+      .from('users')
+      .select('role')
+      .eq('id', id)
+      .single();
+    if (target?.role === 'system_administrator') {
+      return res.status(403).json({ error: 'Only system administrators can modify system administrator accounts' });
+    }
+  }
+
+  try {
+    const updates = { updated_at: new Date().toISOString() };
+
+    if (name     !== undefined && name.trim())     updates.name     = name.trim();
+    if (role     !== undefined)                    updates.role     = role;
+    if (isActive !== undefined)                    updates.is_active = isActive;
+    if (mustChangePw !== undefined)                updates.must_change_pw = mustChangePw;
+    if (Object.prototype.hasOwnProperty.call(req.body || {}, 'profileImage')) {
+      updates.profile_image = normalizeProfileImage(profileImage);
+    }
+
+    // Email update — check not already taken by another user
+    if (email !== undefined && email.trim()) {
+      const newEmail = email.toLowerCase().trim();
+      const { data: existing, error: existingError } = await supabase
+        .from('users')
+        .select('id')
+        .eq('email', newEmail)
+        .neq('id', id)
+        .maybeSingle();
+      if (existingError) throw existingError;
+      if (existing) {
+        return res.status(409).json({ error: 'This email is already used by another user' });
+      }
+      updates.email = newEmail;
+    }
+
+    // Password change
+    if (password) {
+      if (password.length < 8) {
+        return res.status(400).json({ error: 'Password must be at least 8 characters' });
+      }
+      updates.password_hash  = await bcrypt.hash(password, 12);
+      updates.must_change_pw = false;
+      updates.email_verified_at = new Date().toISOString();
+      updates.password_created_at = new Date().toISOString();
+      updates.setup_completed_at = new Date().toISOString();
+    }
+
+    // Apply user field updates
+    if (Object.keys(updates).length > 1) {
+      const { error } = await supabase
+        .from('users')
+        .update(updates)
+        .eq('id', id);
+      if (error) throw error;
+    }
+
+    // Update profile assignment
+    if (profileId) {
+      await supabase
+        .from('user_profile_assignments')
+        .upsert(
+          { user_id: id, profile_id: profileId, assigned_by: req.user.id, assigned_at: new Date().toISOString() },
+          { onConflict: 'user_id' }
+        );
+    }
+
+    // Sync permission sets
+    if (Array.isArray(permissionSetIds)) {
+      await supabase.from('user_permission_set_assignments').delete().eq('user_id', id);
+      if (permissionSetIds.length) {
+        await supabase.from('user_permission_set_assignments').insert(
+          permissionSetIds.map(psId => ({
+            user_id:     id,
+            perm_set_id: psId,
+            assigned_by: req.user.id
+          }))
+        );
+      }
+    }
+
+    // Clear field perm cache
+    if (Array.isArray(permissionSetIds)) invalidateAdminStaticCache('permissionSets');
+    clearFieldPermCache(id);
+    invalidateUserContextCache(id);
+
+    await writeAuditLog({
+      userId:    req.user.id,
+      userEmail: req.user.email,
+      userRole:  req.user.role,
+      action:    'update_user',
+      payload:   { targetUserId: id, changes: Object.keys(updates) },
+      ipAddress: req.ip
+    });
+
+    const { data: updatedUser } = await supabase
+      .from('users')
+      .select('id, email, name, role, profile_image, is_active, must_change_pw, updated_at')
+      .eq('id', id)
+      .single();
+
+    res.json({ success: true, user: updatedUser || null });
+  } catch (err) {
+    console.error('PATCH /api/portal/users error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+
+// ── GET user's permission sets
+// DELETE /api/portal/users/:id - permanently delete a portal user (admin+ only)
+app.delete('/api/portal/users/:id', checkAuth, checkRole('admin'), async (req, res) => {
+  const { id } = req.params;
+
+  if (id === req.user.id) {
+    return res.status(400).json({ error: 'You cannot delete your own account while logged in' });
+  }
+
+  try {
+    const { data: target, error: targetError } = await supabase
+      .from('users')
+      .select('id, email, name, role')
+      .eq('id', id)
+      .single();
+
+    if (targetError || !target) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    if (target.role === 'system_administrator' && req.user.role !== 'system_administrator') {
+      return res.status(403).json({ error: 'Only System Administrators can delete System Administrator accounts' });
+    }
+
+    if (target.role === 'system_administrator') {
+      const { count } = await supabase
+        .from('users')
+        .select('*', { count: 'exact', head: true })
+        .eq('role', 'system_administrator')
+        .neq('id', id);
+      if (!count) {
+        return res.status(409).json({ error: 'Cannot delete the last System Administrator account' });
+      }
+    }
+
+    await supabase.from('user_permission_set_assignments').delete().eq('user_id', id);
+    await supabase.from('user_permission_set_group_assignments').delete().eq('user_id', id);
+    await supabase.from('user_profile_assignments').delete().eq('user_id', id);
+    await supabase.from('password_reset_tokens').delete().eq('user_id', id);
+    await supabase.from('public_group_members').delete().eq('user_id', id);
+
+    await supabase.from('profiles').update({ created_by: req.user.id }).eq('created_by', id);
+    await supabase.from('permission_sets').update({ created_by: req.user.id }).eq('created_by', id);
+    await supabase.from('permission_set_groups').update({ created_by: req.user.id }).eq('created_by', id);
+    await supabase.from('org_roles').update({ created_by: req.user.id }).eq('created_by', id);
+    await supabase.from('public_groups').update({ created_by: req.user.id }).eq('created_by', id);
+    await supabase.from('sharing_rules').update({ created_by: req.user.id }).eq('created_by', id);
+    await supabase.from('user_permission_set_assignments').update({ assigned_by: req.user.id }).eq('assigned_by', id);
+    await supabase.from('user_permission_set_group_assignments').update({ assigned_by: req.user.id }).eq('assigned_by', id);
+    await supabase.from('user_profile_assignments').update({ assigned_by: req.user.id }).eq('assigned_by', id);
+
+    const { error: auditUpdateError } = await supabase
+      .from('audit_log')
+      .update({ user_id: null })
+      .eq('user_id', id);
+    if (auditUpdateError) {
+      await supabase.from('audit_log').delete().eq('user_id', id);
+    }
+
+    const { error: deleteError } = await supabase
+      .from('users')
+      .delete()
+      .eq('id', id);
+    if (deleteError) throw deleteError;
+
+    await writeAuditLog({
+      userId: req.user.id,
+      userEmail: req.user.email,
+      userRole: req.user.role,
+      action: 'delete_user',
+      payload: { deletedUserId: id, email: target.email, role: target.role },
+      ipAddress: req.ip
+    });
+
+    clearFieldPermCache(id);
+    invalidateAdminStaticCache('permissionSets');
+    invalidateUserContextCache(id);
+    res.json({ success: true });
+  } catch (err) {
+    console.error('DELETE /api/portal/users error:', err.message);
+    res.status(500).json({ error: 'Could not delete user' });
+  }
+});
+
+app.get('/api/portal/users/:id/permission-sets', checkAuth, checkRole('admin'), async (req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from('user_permission_set_assignments')
+      .select('perm_set_id, permission_sets(id, name, description)')
+      .eq('user_id', req.params.id);
+    if (error) throw error;
+    res.json({ permissionSets: (data || []).map(r => r.permission_sets).filter(Boolean) });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+
+// ── POST /api/portal/profiles
+app.post('/api/portal/profiles', checkAuth, checkRole('admin'), async (req, res) => {
+  const { name, description, permissions = [] } = req.body || {};
+  if (!name) return res.status(400).json({ error: 'Profile name is required' });
+  try {
+    const { data: profile, error } = await supabase
+      .from('profiles')
+      .insert({ name: name.trim(), description: description?.trim() || null, created_by: req.user.id })
+      .select('id').single();
+    if (error) throw error;
+    if (permissions.length) {
+      await supabase.from('profile_object_permissions').insert(
+        permissions.map(p => ({ profile_id: profile.id, ...p }))
+      );
+    }
+    await writeAuditLog({ userId: req.user.id, userEmail: req.user.email, userRole: req.user.role, action: 'create_profile', payload: { name }, ipAddress: req.ip });
+    invalidateAdminStaticCache('profiles');
+    invalidateAllUserContextCache();
+    res.status(201).json({ success: true, id: profile.id });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ── PATCH /api/portal/profiles/:id
+app.patch('/api/portal/profiles/:id', checkAuth, checkRole('admin'), async (req, res) => {
+  const { name, description, permissions = [] } = req.body || {};
+  try {
+    if (name) await supabase.from('profiles').update({ name, description: description || null }).eq('id', req.params.id);
+    if (permissions.length) {
+      await supabase.from('profile_object_permissions').delete().eq('profile_id', req.params.id);
+      await supabase.from('profile_object_permissions').insert(
+        permissions.map(p => ({ profile_id: req.params.id, ...p }))
+      );
+    }
+    await writeAuditLog({ userId: req.user.id, userEmail: req.user.email, userRole: req.user.role, action: 'update_profile', payload: { id: req.params.id, name }, ipAddress: req.ip });
+    invalidateAdminStaticCache('profiles');
+    invalidateAllUserContextCache();
+    res.json({ success: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ── DELETE /api/portal/profiles/:id
+app.delete('/api/portal/profiles/:id', checkAuth, checkRole('admin'), async (req, res) => {
+  try {
+    const { count } = await supabase.from('user_profile_assignments').select('*', { count: 'exact', head: true }).eq('profile_id', req.params.id);
+    if (count > 0) return res.status(409).json({ error: 'Cannot delete a profile that is assigned to users' });
+    await supabase.from('profile_object_permissions').delete().eq('profile_id', req.params.id);
+    await supabase.from('profiles').delete().eq('id', req.params.id);
+    invalidateAdminStaticCache('profiles');
+    invalidateAllUserContextCache();
+    res.json({ success: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ── POST /api/portal/permission-sets
+app.post('/api/portal/permission-sets', checkAuth, checkRole('admin'), async (req, res) => {
+  const { name, description, permissions = [] } = req.body || {};
+  if (!name) return res.status(400).json({ error: 'Name is required' });
+  try {
+    const { data: ps, error } = await supabase
+      .from('permission_sets')
+      .insert({ name: name.trim(), description: description?.trim() || null, created_by: req.user.id })
+      .select('id').single();
+    if (error) throw error;
+    if (permissions.length) {
+      await supabase.from('permission_set_object_perms').insert(
+        permissions.map(p => ({ perm_set_id: ps.id, ...p }))
+      );
+    }
+    await writeAuditLog({ userId: req.user.id, userEmail: req.user.email, userRole: req.user.role, action: 'create_perm_set', payload: { name }, ipAddress: req.ip });
+    invalidateAdminStaticCache('permissionSets');
+    invalidateAllUserContextCache();
+    res.status(201).json({ success: true, id: ps.id });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ── PATCH /api/portal/permission-sets/:id
+app.patch('/api/portal/permission-sets/:id', checkAuth, checkRole('admin'), async (req, res) => {
+  const { name, description, permissions = [] } = req.body || {};
+  try {
+    if (name) await supabase.from('permission_sets').update({ name, description: description || null }).eq('id', req.params.id);
+    if (Array.isArray(permissions)) {
+      await supabase.from('permission_set_object_perms').delete().eq('perm_set_id', req.params.id);
+      if (permissions.length) {
+        await supabase.from('permission_set_object_perms').insert(
+          permissions.map(p => ({ perm_set_id: req.params.id, ...p }))
+        );
+      }
+    }
+    await writeAuditLog({ userId: req.user.id, userEmail: req.user.email, userRole: req.user.role, action: 'update_perm_set', payload: { id: req.params.id }, ipAddress: req.ip });
+    invalidateAdminStaticCache('permissionSets');
+    clearAllFieldPermCache();
+    invalidateAllUserContextCache();
+    res.json({ success: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ── DELETE /api/portal/permission-sets/:id
+app.delete('/api/portal/permission-sets/:id', checkAuth, checkRole('admin'), async (req, res) => {
+  try {
+    await supabase.from('user_permission_set_assignments').delete().eq('perm_set_id', req.params.id);
+    await supabase.from('permission_set_group_members').delete().eq('perm_set_id', req.params.id);
+    await supabase.from('permission_set_object_perms').delete().eq('perm_set_id', req.params.id);
+    await supabase.from('permission_sets').delete().eq('id', req.params.id);
+    invalidateAdminStaticCache('permissionSets');
+    clearAllFieldPermCache();
+    invalidateAllUserContextCache();
+    res.json({ success: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+function auditFilterValues(query = {}) {
+  const filters = {};
+  const search = String(query.search || '').trim();
+  const action = String(query.action || '').trim();
+  const range = String(query.range || '').trim();
+  const from = String(query.from || '').trim();
+  const to = String(query.to || '').trim();
+
+  if (search) filters.search = search;
+  if (action) filters.action = action;
+
+  if (range && range !== 'all' && range !== 'custom') {
+    const days = Math.min(Math.max(parseInt(range, 10) || 30, 1), 3650);
+    filters.fromIso = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
+  }
+
+  if (range === 'custom') {
+    if (from) filters.fromIso = new Date(`${from}T00:00:00.000Z`).toISOString();
+    if (to) filters.toIso = new Date(`${to}T23:59:59.999Z`).toISOString();
+  }
+
+  return filters;
+}
+
+function applyAuditFilters(query, filters = {}) {
+  let q = query;
+  if (filters.action) q = q.eq('action', filters.action);
+  if (filters.fromIso) q = q.gte('created_at', filters.fromIso);
+  if (filters.toIso) q = q.lte('created_at', filters.toIso);
+  if (filters.search) {
+    const safe = filters.search.replace(/[%_,]/g, char => `\\${char}`);
+    q = q.or(`user_email.ilike.%${safe}%,action.ilike.%${safe}%`);
+  }
+  return q;
+}
+
+// ── GET /api/portal/audit-log
+app.get('/api/portal/audit-log', checkAuth, checkRole('admin'), async (req, res) => {
+  try {
+    const limit = Math.min(parseInt(req.query.limit) || 50, 50);
+    const offset = Math.max(parseInt(req.query.offset) || 0, 0);
+    const filters = auditFilterValues(req.query);
+    const base = supabase
+      .from('audit_log')
+      .select('id, created_at, user_email, user_role, action', { count: 'exact' })
+      .order('created_at', { ascending: false })
+      .range(offset, offset + limit - 1);
+    const { data, error, count } = await applyAuditFilters(base, filters);
+    if (error) throw error;
+    res.json({ logs: data || [], total: count || 0, limit, offset });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.delete('/api/portal/audit-log', checkAuth, checkRole('system_administrator'), async (req, res) => {
+  try {
+    const rawIds = Array.isArray(req.body?.ids) ? req.body.ids : [];
+    const ids = rawIds.map(id => Number(id)).filter(Number.isFinite).slice(0, 50);
+
+    if (ids.length) {
+      const { error, count } = await supabase
+        .from('audit_log')
+        .delete({ count: 'exact' })
+        .in('id', ids);
+      if (error) throw error;
+      return res.json({ success: true, deleted: count || ids.length });
+    }
+
+    const filters = auditFilterValues(req.query);
+    if (!Object.keys(filters).length) {
+      return res.status(400).json({ error: 'Select rows or apply a filter before deleting audit logs.' });
+    }
+
+    const base = supabase
+      .from('audit_log')
+      .delete({ count: 'exact' });
+    const { error, count } = await applyAuditFilters(base, filters);
+    if (error) throw error;
+    res.json({ success: true, deleted: count || 0 });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// GET sensitive fields for an object
+app.get('/api/portal/field-security/sensitive', checkAuth, checkRole('admin'), async (req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from('sensitive_fields')
+      .select('id, field_name, label, reason')
+      .eq('sf_object', req.query.object)
+      .order('field_name');
+    if (error) throw error;
+    res.json({ fields: data || [] });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.get('/api/portal/field-security/available-fields', checkAuth, checkRole('admin'), async (req, res) => {
+  const sfObject = req.query.object;
+  if (!OBJECTS[sfObject]) return res.status(400).json({ error: 'Unknown object' });
+  try {
+    const data = await getObjectDescribe(sfObject);
+    const fields = (data.fields || [])
+      .filter(field => !field.deprecatedAndHidden)
+      .filter(field => !['address', 'location'].includes(field.type))
+      .map(field => ({
+        name: field.name,
+        label: field.label,
+        type: field.type,
+        createable: field.createable,
+        updateable: field.updateable
+      }))
+      .sort((a, b) => a.label.localeCompare(b.label));
+    res.json({ fields });
+  } catch (e) {
+    handleSFError(e, res, `Describe fields ${sfObject}`);
+  }
+});
+
+app.post('/api/portal/field-security/sensitive', checkAuth, checkRole('admin'), async (req, res) => {
+  const { sfObject, fieldName, label, reason } = req.body || {};
+  if (!OBJECTS[sfObject] || !fieldName || !label) {
+    return res.status(400).json({ error: 'sfObject, fieldName, and label are required' });
+  }
+  try {
+    const { data, error } = await supabase
+      .from('sensitive_fields')
+      .upsert(
+        {
+          sf_object: sfObject,
+          field_name: fieldName,
+          label: label.trim(),
+          reason: reason?.trim() || null
+        },
+        { onConflict: 'sf_object,field_name' }
+      )
+      .select('id, field_name, label, reason')
+      .single();
+    if (error) throw error;
+    clearAllFieldPermCache();
+    res.status(201).json({ success: true, field: data });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.patch('/api/portal/field-security/sensitive/:id', checkAuth, checkRole('admin'), async (req, res) => {
+  const { label, reason } = req.body || {};
+  if (!label?.trim()) return res.status(400).json({ error: 'Label is required' });
+  try {
+    const { data, error } = await supabase
+      .from('sensitive_fields')
+      .update({ label: label.trim(), reason: reason?.trim() || null })
+      .eq('id', req.params.id)
+      .select('id, field_name, label, reason')
+      .single();
+    if (error) throw error;
+    clearAllFieldPermCache();
+    res.json({ success: true, field: data });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.delete('/api/portal/field-security/sensitive/:id', checkAuth, checkRole('admin'), async (req, res) => {
+  try {
+    const { data: field, error: fieldError } = await supabase
+      .from('sensitive_fields')
+      .select('sf_object, field_name')
+      .eq('id', req.params.id)
+      .single();
+    if (fieldError) throw fieldError;
+
+    await supabase
+      .from('field_permissions')
+      .delete()
+      .eq('sf_object', field.sf_object)
+      .eq('field_name', field.field_name);
+
+    const { error } = await supabase
+      .from('sensitive_fields')
+      .delete()
+      .eq('id', req.params.id);
+    if (error) throw error;
+    clearAllFieldPermCache();
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// GET field permissions for a profile on an object
+app.get('/api/portal/field-security/permissions', checkAuth, checkRole('admin'), async (req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from('field_permissions')
+      .select('field_name, can_view, can_edit')
+      .eq('profile_id', req.query.profileId)
+      .eq('sf_object', req.query.object);
+    if (error) throw error;
+    res.json({ permissions: data || [] });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// POST save field permissions for a profile on an object
+app.post('/api/portal/field-security/permissions', checkAuth, checkRole('admin'), async (req, res) => {
+  const { profileId, sfObject, permissions = [] } = req.body || {};
+  if (!profileId || !sfObject) {
+    return res.status(400).json({ error: 'profileId and sfObject are required' });
+  }
+  try {
+    // Delete existing then reinsert
+    await supabase
+      .from('field_permissions')
+      .delete()
+      .eq('profile_id', profileId)
+      .eq('sf_object', sfObject);
+
+    const toInsert = permissions
+      .filter(p => p.can_view || p.can_edit)
+      .map(p => ({
+        profile_id: profileId,
+        sf_object: sfObject,
+        field_name: p.field_name,
+        can_view: p.can_view,
+        can_edit: p.can_edit && p.can_view // can_edit requires can_view
+      }));
+
+    if (toInsert.length) {
+      const { error } = await supabase.from('field_permissions').insert(toInsert);
+      if (error) throw error;
+    }
+    clearAllFieldPermCache();
+
+    await writeAuditLog({
+      userId: req.user.id, userEmail: req.user.email,
+      userRole: req.user.role, action: 'update_profile',
+      payload: { type: 'field_security', profileId, sfObject },
+      ipAddress: req.ip
+    });
+
+    res.json({ success: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+
+// GET /api/portal/profiles — list all profiles (admin+ only)
+const ADMIN_STATIC_CACHE_TTL_MS = 5 * 60 * 1000;
+const adminStaticCache = {
+  profiles: { expiresAt: 0, value: null, promise: null },
+  permissionSets: { expiresAt: 0, value: null, promise: null }
+};
+
+function invalidateAdminStaticCache(type = 'all') {
+  if (type === 'all' || type === 'profiles') {
+    adminStaticCache.profiles = { expiresAt: 0, value: null, promise: null };
+  }
+  if (type === 'all' || type === 'permissionSets') {
+    adminStaticCache.permissionSets = { expiresAt: 0, value: null, promise: null };
+  }
+}
+
+async function getAdminProfilesMetadata() {
+  const cache = adminStaticCache.profiles;
+  if (cache.value && cache.expiresAt > Date.now()) return cache.value;
+  if (cache.promise) return cache.promise;
+  cache.promise = supabase
+    .from('profiles')
+    .select(`
+      id, name, description, is_active, created_at,
+      profile_object_permissions ( sf_object, can_read, can_create, can_edit, can_delete )
+    `)
+    .order('name')
+    .then(({ data, error }) => {
+      if (error) throw error;
+      cache.value = data || [];
+      cache.expiresAt = Date.now() + ADMIN_STATIC_CACHE_TTL_MS;
+      return cache.value;
+    })
+    .finally(() => {
+      cache.promise = null;
+    });
+  return cache.promise;
+}
+
+async function getAdminPermissionSetsMetadata() {
+  const cache = adminStaticCache.permissionSets;
+  if (cache.value && cache.expiresAt > Date.now()) return cache.value;
+  if (cache.promise) return cache.promise;
+  cache.promise = supabase
+    .from('permission_sets')
+    .select('id, name, description, is_active, created_at')
+    .order('name')
+    .then(async ({ data: permissionSets, error }) => {
+      if (error) throw error;
+      const ids = (permissionSets || []).map((ps) => ps.id);
+      let permissionsBySetId = {};
+      let assignedUserCountBySetId = {};
+
+      if (ids.length) {
+        const [
+          { data: permissions, error: permissionsError },
+          { data: assignments, error: assignmentsError }
+        ] = await Promise.all([
+          supabase
+            .from('permission_set_object_perms')
+            .select('perm_set_id, sf_object, can_read, can_create, can_edit, can_delete')
+            .in('perm_set_id', ids),
+          supabase
+            .from('user_permission_set_assignments')
+            .select('perm_set_id, user_id')
+            .in('perm_set_id', ids)
+        ]);
+
+        if (permissionsError) throw permissionsError;
+        if (assignmentsError) throw assignmentsError;
+
+        permissionsBySetId = (permissions || []).reduce((acc, permission) => {
+          const { perm_set_id, ...rest } = permission;
+          if (!acc[perm_set_id]) acc[perm_set_id] = [];
+          acc[perm_set_id].push(rest);
+          return acc;
+        }, {});
+
+        assignedUserCountBySetId = (assignments || []).reduce((acc, assignment) => {
+          acc[assignment.perm_set_id] = (acc[assignment.perm_set_id] || 0) + 1;
+          return acc;
+        }, {});
+      }
+
+      cache.value = (permissionSets || []).map((ps) => ({
+        ...ps,
+        assignedUserCount: assignedUserCountBySetId[ps.id] || 0,
+        permission_set_object_perms: permissionsBySetId[ps.id] || []
+      }));
+      cache.expiresAt = Date.now() + ADMIN_STATIC_CACHE_TTL_MS;
+      return cache.value;
+    })
+    .finally(() => {
+      cache.promise = null;
+    });
+  return cache.promise;
+}
+
+function mapPortalUsers(users = [], imageRows = [], assignments = [], permissionSets = []) {
+  const profileImagesByUserId = Object.fromEntries((imageRows || []).map((row) => [row.id, row.profile_image || null]));
+  const invitationStateByUserId = Object.fromEntries((imageRows || []).map((row) => [row.id, {
+    mustChangePw: row.must_change_pw,
+    invitationSentAt: row.invitation_sent_at,
+    invitationExpiresAt: row.invitation_expires_at,
+    invitationCancelledAt: row.invitation_cancelled_at,
+    emailVerifiedAt: row.email_verified_at,
+    passwordCreatedAt: row.password_created_at,
+    setupCompletedAt: row.setup_completed_at
+  }]));
+  const permissionSetById = Object.fromEntries((permissionSets || []).map((ps) => [ps.id, ps]));
+  const permissionSetsByUserId = (assignments || []).reduce((acc, row) => {
+    const permissionSet = permissionSetById[row.perm_set_id];
+    if (!permissionSet) return acc;
+    if (!acc[row.user_id]) acc[row.user_id] = [];
+    acc[row.user_id].push({
+      id: permissionSet.id,
+      name: permissionSet.name,
+      description: permissionSet.description
+    });
+    return acc;
+  }, {});
+
+  return users.map(u => ({
+    id: u.id,
+    email: u.email,
+    name: u.name,
+    role: u.role,
+    isSystemAdmin: u.is_system_admin || false,
+    profileImage: profileImagesByUserId[u.id] || u.profile_image || null,
+    isActive: u.is_active,
+    mustChangePw: invitationStateByUserId[u.id]?.mustChangePw ?? u.must_change_pw,
+    invitationSentAt: invitationStateByUserId[u.id]?.invitationSentAt || null,
+    invitationExpiresAt: invitationStateByUserId[u.id]?.invitationExpiresAt || null,
+    invitationCancelledAt: invitationStateByUserId[u.id]?.invitationCancelledAt || null,
+    emailVerifiedAt: invitationStateByUserId[u.id]?.emailVerifiedAt || null,
+    passwordCreatedAt: invitationStateByUserId[u.id]?.passwordCreatedAt || null,
+    setupCompletedAt: invitationStateByUserId[u.id]?.setupCompletedAt || null,
+    needsInvitation: needsInvitation({
+      must_change_pw: invitationStateByUserId[u.id]?.mustChangePw ?? u.must_change_pw,
+      invitation_expires_at: invitationStateByUserId[u.id]?.invitationExpiresAt,
+      invitation_cancelled_at: invitationStateByUserId[u.id]?.invitationCancelledAt,
+      email_verified_at: invitationStateByUserId[u.id]?.emailVerifiedAt,
+      password_created_at: invitationStateByUserId[u.id]?.passwordCreatedAt,
+      setup_completed_at: invitationStateByUserId[u.id]?.setupCompletedAt
+    }),
+    createdAt: u.created_at,
+    lastLoginAt: u.last_login_at,
+    org_role_id: u.org_role_id || null,
+    orgRoleId: u.org_role_id || null,
+    org_role_name: u.org_role_name || null,
+    orgRoleName: u.org_role_name || null,
+    orgRoleLevel: u.org_role_level || null,
+    profile: u.profile_id ? {
+      id: u.profile_id,
+      name: u.profile_name,
+      isSystemAdmin: u.is_system_admin || false
+    } : null,
+    permissionSets: permissionSetsByUserId[u.id] || []
+  }));
+}
+
+async function getAdminUsersPayload() {
+  const { data: users, error } = await supabase.rpc('get_portal_users');
+  if (error) throw error;
+  const userRows = users || [];
+  const userIds = userRows.map((u) => u.id);
+  const [permissionSets, imageResult, assignmentResult] = await Promise.all([
+    getAdminPermissionSetsMetadata(),
+    userIds.length
+      ? supabase
+        .from('users')
+        .select('id, profile_image, must_change_pw, invitation_sent_at, invitation_expires_at, invitation_cancelled_at, email_verified_at, password_created_at, setup_completed_at')
+        .in('id', userIds)
+      : Promise.resolve({ data: [], error: null }),
+    userIds.length
+      ? supabase
+        .from('user_permission_set_assignments')
+        .select('user_id, perm_set_id')
+        .in('user_id', userIds)
+      : Promise.resolve({ data: [], error: null })
+  ]);
+  if (imageResult.error) throw imageResult.error;
+  if (assignmentResult.error) throw assignmentResult.error;
+  return {
+    users: mapPortalUsers(userRows, imageResult.data || [], assignmentResult.data || [], permissionSets)
+  };
+}
+
+app.get('/api/portal/profiles', checkAuth, checkRole('admin'), async (req, res) => {
+  try {
+    res.json({ profiles: await getAdminProfilesMetadata() });
+  } catch (err) {
+    console.error('GET /api/portal/profiles error:', err.message);
+    res.status(500).json({ error: 'Could not load profiles' });
+  }
+});
+
+
+// GET /api/portal/users — list all portal users (admin+ only)
+app.get('/api/portal/users', checkAuth, checkRole('admin'), async (req, res) => {
+  try {
+    res.json(await getAdminUsersPayload());
+  } catch (err) {
+    console.error('GET /api/portal/users error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/portal/admin/users-bootstrap', checkAuth, checkRole('admin'), async (req, res) => {
+  try {
+    const [usersPayload, profiles, permissionSets] = await Promise.all([
+      getAdminUsersPayload(),
+      getAdminProfilesMetadata(),
+      getAdminPermissionSetsMetadata()
+    ]);
+    res.json({
+      users: usersPayload.users,
+      profiles,
+      permissionSets
+    });
+  } catch (err) {
+    console.error('GET /api/portal/admin/users-bootstrap error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/portal/permission-sets — list all permission sets (admin+ only)
+// THIS WAS MISSING — it was accidentally replaced by a duplicate users route
+function invalidateAnnouncementCache() {
+  activeAnnouncementCache = { expiresAt: 0, value: null };
+}
+
+function invalidateGreetingConfigCache() {
+  greetingConfigCache = { expiresAt: 0, value: null };
+}
+
+function normalizeAnnouncement(row = {}) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    title: row.title || '',
+    subtitle: row.subtitle || '',
+    type: ANNOUNCEMENT_TYPES.has(row.type) ? row.type : 'general',
+    enabled: Boolean(row.enabled),
+    priority: Number(row.priority || 1),
+    startDate: row.start_date || null,
+    endDate: row.end_date || null,
+    backgroundStyle: row.background_style || '',
+    icon: row.icon || '',
+    createdBy: row.created_by || null,
+    createdAt: row.created_at || null,
+    updatedAt: row.updated_at || null
+  };
+}
+
+function announcementPayloadFromBody(body = {}, userId = null) {
+  const type = ANNOUNCEMENT_TYPES.has(body.type) ? body.type : 'general';
+  return {
+    title: String(body.title || '').trim(),
+    subtitle: String(body.subtitle || '').trim(),
+    type,
+    enabled: body.enabled !== false,
+    priority: Number.isFinite(Number(body.priority)) ? Number(body.priority) : 1,
+    start_date: body.startDate || body.start_date || null,
+    end_date: body.endDate || body.end_date || null,
+    background_style: String(body.backgroundStyle || body.background_style || '').trim() || null,
+    icon: String(body.icon || '').trim() || null,
+    ...(userId ? { created_by: userId } : {})
+  };
+}
+
+function normalizeGreetingConfig(row = {}) {
+  if (!row) return null;
+  const period = String(row.period || '').trim();
+  const key = period.toLowerCase();
+  return {
+    id: row.id,
+    period,
+    key,
+    title: row.title || '',
+    subtitle: row.subtitle || '',
+    icon: row.icon || key,
+    backgroundStyle: row.background_style || '',
+    enabled: row.enabled !== false,
+    updatedAt: row.updated_at || null
+  };
+}
+
+function greetingConfigPayloadFromBody(body = {}) {
+  return {
+    title: String(body.title || '').trim(),
+    subtitle: String(body.subtitle || '').trim(),
+    icon: String(body.icon || '').trim() || null,
+    background_style: String(body.backgroundStyle || body.background_style || '').trim() || null,
+    enabled: true
+  };
+}
+
+function greetingConfigMap(rows = []) {
+  const config = {};
+  rows.forEach((row) => {
+    const item = normalizeGreetingConfig(row);
+    if (item && GREETING_CONFIG_KEYS.has(item.key) && item.enabled) {
+      config[item.key] = {
+        title: item.title,
+        subtitle: item.subtitle,
+        icon: item.icon,
+        backgroundStyle: item.backgroundStyle
+      };
+    }
+  });
+  return config;
+}
+
+async function getGreetingConfig() {
+  if (greetingConfigCache.expiresAt > Date.now()) return greetingConfigCache.value;
+  const { data, error } = await supabase
+    .from('portal_greeting_config')
+    .select('*')
+    .in('period', GREETING_PERIODS)
+    .eq('enabled', true);
+  if (error) return DEFAULT_GREETING_CONFIG;
+  const value = greetingConfigMap(data || []);
+  greetingConfigCache = { expiresAt: Date.now() + GREETING_CONFIG_CACHE_TTL_MS, value };
+  return value;
+}
+
+async function getActiveAnnouncement() {
+  if (activeAnnouncementCache.expiresAt > Date.now()) return activeAnnouncementCache.value;
+  const nowIso = new Date().toISOString();
+  const { data, error } = await supabase
+    .from('portal_announcements')
+    .select('*')
+    .eq('enabled', true)
+    .or(`start_date.is.null,start_date.lte.${nowIso}`)
+    .or(`end_date.is.null,end_date.gte.${nowIso}`)
+    .order('priority', { ascending: false })
+    .order('created_at', { ascending: false })
+    .limit(1);
+  if (error) throw error;
+  const announcement = normalizeAnnouncement((data || [])[0] || null);
+  activeAnnouncementCache = { expiresAt: Date.now() + ANNOUNCEMENT_CACHE_TTL_MS, value: announcement };
+  return announcement;
+}
+
+app.get('/api/portal/announcement/active', checkAuth, async (req, res) => {
+  try {
+    const announcement = await getActiveAnnouncement();
+    res.json({
+      announcement,
+      greetingConfig: announcement ? {} : await getGreetingConfig()
+    });
+  } catch (err) {
+    console.error('GET /api/portal/announcement/active error:', err.message);
+    res.json({ announcement: null, greetingConfig: DEFAULT_GREETING_CONFIG });
+  }
+});
+
+app.get('/api/portal/admin/announcements', checkAuth, checkRole('system_administrator'), async (req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from('portal_announcements')
+      .select('*')
+      .order('priority', { ascending: false })
+      .order('updated_at', { ascending: false });
+    if (error) throw error;
+    res.json({ announcements: (data || []).map(normalizeAnnouncement) });
+  } catch (err) {
+    console.error('GET /api/portal/admin/announcements error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/portal/admin/greetings', checkAuth, checkRole('system_administrator'), async (req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from('portal_greeting_config')
+      .select('*')
+      .in('period', GREETING_PERIODS);
+    if (error) throw error;
+    const order = new Map(GREETING_PERIODS.map((period, index) => [period, index]));
+    const greetings = (data || [])
+      .map(normalizeGreetingConfig)
+      .filter(Boolean)
+      .sort((a, b) => (order.get(a.period) ?? 99) - (order.get(b.period) ?? 99));
+    res.json({ greetings });
+  } catch (err) {
+    console.error('GET /api/portal/admin/greetings error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.patch('/api/portal/admin/greetings/:period', checkAuth, checkRole('system_administrator'), async (req, res) => {
+  try {
+    const period = GREETING_PERIODS.find((item) => item.toLowerCase() === String(req.params.period || '').toLowerCase());
+    if (!period) return res.status(400).json({ error: 'Invalid greeting period' });
+    const payload = greetingConfigPayloadFromBody(req.body);
+    if (!payload.title) return res.status(400).json({ error: 'Title is required' });
+    if (!payload.subtitle) return res.status(400).json({ error: 'Subtitle is required' });
+    const { data, error } = await supabase
+      .from('portal_greeting_config')
+      .update(payload)
+      .eq('period', period)
+      .select('*')
+      .single();
+    if (error) throw error;
+    invalidateGreetingConfigCache();
+    res.json({ greeting: normalizeGreetingConfig(data) });
+  } catch (err) {
+    console.error('PATCH /api/portal/admin/greetings/:period error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/portal/admin/announcements', checkAuth, checkRole('system_administrator'), async (req, res) => {
+  try {
+    const payload = announcementPayloadFromBody(req.body, req.user?.id);
+    if (!payload.title) return res.status(400).json({ error: 'Title is required' });
+    const { data, error } = await supabase.from('portal_announcements').insert(payload).select('*').single();
+    if (error) throw error;
+    invalidateAnnouncementCache();
+    res.json({ announcement: normalizeAnnouncement(data) });
+  } catch (err) {
+    console.error('POST /api/portal/admin/announcements error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.patch('/api/portal/admin/announcements/:id', checkAuth, checkRole('system_administrator'), async (req, res) => {
+  try {
+    const payload = announcementPayloadFromBody(req.body);
+    delete payload.created_by;
+    if (!payload.title) return res.status(400).json({ error: 'Title is required' });
+    const { data, error } = await supabase.from('portal_announcements').update(payload).eq('id', req.params.id).select('*').single();
+    if (error) throw error;
+    invalidateAnnouncementCache();
+    res.json({ announcement: normalizeAnnouncement(data) });
+  } catch (err) {
+    console.error('PATCH /api/portal/admin/announcements/:id error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete('/api/portal/admin/announcements/:id', checkAuth, checkRole('system_administrator'), async (req, res) => {
+  try {
+    const { error } = await supabase.from('portal_announcements').delete().eq('id', req.params.id);
+    if (error) throw error;
+    invalidateAnnouncementCache();
+    res.json({ success: true });
+  } catch (err) {
+    console.error('DELETE /api/portal/admin/announcements/:id error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/portal/permission-sets', checkAuth, checkRole('admin'), async (req, res) => {
+  try {
+    res.json({ permissionSets: await getAdminPermissionSetsMetadata() });
+  } catch (err) {
+    console.error('GET /api/portal/permission-sets error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Auth test
+app.get('/api/auth/test', checkAuth, async (req, res) => {
+  try {
+    await getAccessToken();
+    res.json({ success: true, instance: SF.instanceUrl, connectUrl: '/auth/salesforce', org: publicOrg(activeOrg()) });
+  } catch (err) {
+    res.status(401).json({ success: false, error: err.message, connectUrl: '/auth/salesforce', org: publicOrg(activeOrg()) });
+  }
+});
+
+app.get('/api/auth/config', (req, res) => {
+  res.json({
+    loginUrl: SF.loginUrl,
+    instanceUrl: SF.instanceUrl,
+    redirectUri: requestRedirectUri(req),
+    hasClientId: Boolean(SF.clientId),
+    hasClientSecret: Boolean(SF.clientSecret),
+    hasRefreshToken: Boolean(SF.refreshToken)
+  });
+});
+
+app.get('/api/auth/orgs', (req, res) => {
+  res.json({
+    activeOrgKey: orgStore.activeOrgKey,
+    orgs: Object.values(orgStore.orgs).map(publicOrg)
+  });
+});
+
+app.post('/api/auth/orgs', (req, res) => {
+  const body = req.body || {};
+  const key = sanitizeOrgKey(body.key || body.label);
+  if (!key) return res.status(400).json({ error: 'Org key or label is required' });
+
+  const existing = orgStore.orgs[key] || {};
+  const loginUrl = normalizeUrl(body.loginUrl || (
+    body.environment === 'sandbox' ? 'https://test.salesforce.com' : 'https://login.salesforce.com'
+  ));
+  const org = {
+    ...existing,
+    key,
+    label: String(body.label || existing.label || key).trim(),
+    environment: body.environment === 'sandbox' ? 'sandbox' : 'production',
+    clientId: String(body.clientId || existing.clientId || '').trim(),
+    clientSecret: body.clientSecret ? String(body.clientSecret).trim() : (existing.clientSecret || ''),
+    refreshToken: existing.refreshToken || '',
+    instanceUrl: normalizeUrl(body.instanceUrl || existing.instanceUrl || ''),
+    loginUrl,
+    redirectUri: body.redirectUri || requestRedirectUri(req, existing)
+  };
+
+  if (!org.clientId) return res.status(400).json({ error: 'Client ID is required' });
+  if (!org.clientSecret) return res.status(400).json({ error: 'Client secret is required' });
+
+  orgStore.orgs[key] = org;
+  switchActiveOrg(key);
+  res.json({ success: true, activeOrgKey: orgStore.activeOrgKey, org: publicOrg(org) });
+});
+
+app.post('/api/auth/orgs/active', (req, res) => {
+  try {
+    const org = switchActiveOrg(req.body?.key);
+    res.json({ success: true, activeOrgKey: orgStore.activeOrgKey, org: publicOrg(org) });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.get('/api/email/from-addresses', async (req, res) => {
+  try {
+    const context = await getEmailMergeContext();
+    const records = [{
+      type: 'user',
+      id: context.sender.Id || '',
+      label: context.sender.Name || 'Current User',
+      email: context.sender.Email || ''
+    }];
+    try {
+      const orgWide = await sfGet('/query', {
+        q: 'SELECT Id, Address, DisplayName FROM OrgWideEmailAddress ORDER BY DisplayName LIMIT 100'
+      });
+      records.push(...(orgWide.records || []).map((item) => ({
+        type: 'orgwide',
+        id: item.Id,
+        label: item.DisplayName || item.Address,
+        email: item.Address
+      })));
+    } catch {
+      // Some orgs do not expose OrgWideEmailAddress to the connected user.
+    }
+    res.json({ records });
+  } catch (err) {
+    handleSFError(err, res, 'Email from addresses');
+  }
+});
+
+app.get('/api/email/templates', async (req, res) => {
+  try {
+    const records = await queryClassicEmailTemplates(req.query.limit || 500);
+    res.json({ records });
+  } catch (err) {
+    handleSFError(err, res, 'Email templates');
+  }
+});
+
+app.post('/api/email/template-preview', async (req, res) => {
+  const { templateId, recipientId, recipientObject, relatedRecordId, relatedObject } = req.body || {};
+  if (!templateId) return res.status(400).json({ error: 'Select an email template' });
+
+  try {
+    const [template, context, recipient, related] = await Promise.all([
+      sfGet(`/sobjects/EmailTemplate/${templateId}`),
+      getEmailMergeContext(),
+      getEmailRecipientContext(recipientObject, recipientId),
+      getRelatedMergeRecord(relatedObject, relatedRecordId)
+    ]);
+    const body = emailTemplateBody(template);
+    const subject = mergeTemplate(emailTemplateSubject(template), recipient, related, context.sender, context.organization);
+    const html = mergeTemplate(body, recipient, related, context.sender, context.organization);
+    res.json({ subject, html, text: stripHtml(html) || html });
+  } catch (err) {
+    handleSFError(err, res, 'Email template preview');
+  }
+});
+
+app.get('/api/activity-email-templates', async (req, res) => {
+  try {
+    const records = await queryClassicEmailTemplates(req.query.limit || 500);
+    res.json({ records });
+  } catch (err) {
+    handleSFError(err, res, 'Activity email templates');
+  }
+});
+
+app.post('/api/activity-email-preview', async (req, res) => {
+  const { templateId, recipientId, recipientObject, relatedRecordId, relatedObject } = req.body || {};
+  if (!templateId) return res.status(400).json({ error: 'Select an email template' });
+
+  try {
+    const [template, context, recipient, related] = await Promise.all([
+      sfGet(`/sobjects/EmailTemplate/${templateId}`),
+      getEmailMergeContext(),
+      getEmailRecipientContext(recipientObject, recipientId),
+      getRelatedMergeRecord(relatedObject, relatedRecordId)
+    ]);
+    const body = emailTemplateBody(template);
+    const subject = mergeTemplate(emailTemplateSubject(template), recipient, related, context.sender, context.organization);
+    const html = mergeTemplate(body, recipient, related, context.sender, context.organization);
+    res.json({ subject, html, text: stripHtml(html) || html });
+  } catch (err) {
+    handleSFError(err, res, 'Activity email preview');
+  }
+});
+
+// Portal logout — only clears JWT session, does NOT touch Salesforce
+app.post('/api/auth/logout', async (req, res) => {
+  // Just clear the portal session — Salesforce stays connected
+  // The JWT is stateless so "logout" = client deletes the token
+  // Optionally log the action if user is authenticated
+  try {
+    const header = req.headers.authorization || '';
+    const token = header.startsWith('Bearer ') ? header.slice(7) : null;
+    if (token) {
+      const decoded = jwt.verify(token, JWT_SECRET);
+      await writeAuditLog({
+        userId: decoded.id,
+        userEmail: decoded.email,
+        userRole: decoded.role,
+        action: 'logout',
+        ipAddress: req.ip
+      });
+      invalidateUserContextCache(decoded.id);
+    }
+  } catch { /* token already expired, that's fine */ }
+
+  res.json({ success: true, message: 'Portal session ended' });
+});
+
+// Salesforce logout — SEPARATE route, system_administrator only
+app.post('/api/auth/salesforce-logout', checkAuth, checkRole('system_administrator'), async (req, res) => {
+  const tokenToRevoke = SF.refreshToken || _cachedToken;
+  try {
+    if (tokenToRevoke) {
+      const params = new URLSearchParams({ token: tokenToRevoke });
+      await axios.post(`${SF.loginUrl}/services/oauth2/revoke`, params.toString(), {
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        timeout: 30000
+      });
+    }
+  } catch (err) {
+    console.error('SF logout warning:', err.response?.data || err.message);
+  }
+  SF.refreshToken = '';
+  _cachedToken = null;
+  _tokenExpires = 0;
+  activeOrg().refreshToken = '';
+  persistActiveOrgTokens();
+  res.json({ success: true });
+});
+
+app.get('/api/me', checkAuth, async (req, res) => {
+  try {
+    const data = await sfGet('/chatter/users/me');
+    res.json({
+      id: data.id,
+      name: data.name,
+      email: data.email,
+      username: data.username,
+      title: data.title,
+      photo: data.photo?.smallPhotoUrl || null
+    });
+  } catch (err) {
+    handleSFError(err, res, 'GET current user');
+  }
+});
+
+// Start OAuth login to generate a fresh refresh token
+app.get('/auth/salesforce', (req, res) => {
+  if (req.query.org) {
+    try {
+      switchActiveOrg(req.query.org);
+    } catch (err) {
+      return res.status(400).send(err.message);
+    }
+  }
+
+  if (!SF.clientId || !SF.loginUrl) {
+    return res.status(500).send('Missing SF_CLIENT_ID or SF_LOGIN_URL in .env');
+  }
+
+  const state = crypto.randomBytes(16).toString('hex');
+  const pkce = createPkcePair();
+  const redirectUri = requestRedirectUri(req);
+  const returnTo = safeReturnPath(req.query.returnTo || req.get('referer'), req);
+  SF.redirectUri = redirectUri;
+  oauthStates.set(state, {
+    orgKey: orgStore.activeOrgKey,
+    redirectUri,
+    codeVerifier: pkce.verifier,
+    returnTo,
+    createdAt: Date.now()
+  });
+
+  const params = new URLSearchParams({
+    response_type: 'code',
+    client_id: SF.clientId,
+    redirect_uri: redirectUri,
+    scope: 'api refresh_token offline_access',
+    state,
+    code_challenge: pkce.challenge,
+    code_challenge_method: 'S256'
+  });
+
+  res.redirect(`${SF.loginUrl}/services/oauth2/authorize?${params.toString()}`);
+});
+
+async function metadataAwareSfGet(endpoint, params = {}, config = {}) {
+  const describeMatch = String(endpoint || '').match(/^\/sobjects\/([^/]+)\/describe$/);
+  if (describeMatch && (!params || !Object.keys(params).length)) {
+    return getObjectDescribe(describeMatch[1]);
+  }
+  return sfGet(endpoint, params, config);
+}
+
+app.use('/api/reports', createReportsRouter({
+  checkAuth,
+  deps: {
+    objects: OBJECTS,
+    getObjectConfig,
+    getReportRelationshipMap,
+    sfGet: metadataAwareSfGet,
+    escapeSOQL,
+    getObjectFieldSet,
+    getEffectivePermissions,
+    getEffectiveFieldPerms,
+    buildReadableRecordScopeFilter,
+    hydrateRecordOwners,
+    applyRecordVisibility,
+    applyFieldSecurity,
+    permissionDeniedMessage,
+    queryBatchHeaders: QUERY_BATCH_HEADERS
+  }
+}));
+
+app.use('/api/dashboards', createDashboardsRouter({
+  checkAuth,
+  deps: {
+    objects: OBJECTS,
+    getObjectConfig,
+    getReportRelationshipMap,
+    sfGet,
+    escapeSOQL,
+    getObjectFieldSet,
+    getEffectivePermissions,
+    getEffectiveFieldPerms,
+    buildReadableRecordScopeFilter,
+    hydrateRecordOwners,
+    applyRecordVisibility,
+    applyFieldSecurity,
+    permissionDeniedMessage,
+    queryBatchHeaders: QUERY_BATCH_HEADERS
+  }
+}));
+
+// Salesforce redirects here after login
+app.get('/oauth/callback', async (req, res) => {
+  const { code, error, error_description, state } = req.query;
+  if (error) {
+    return res.status(400).send(`<h1>Salesforce connection failed</h1><p>${error}: ${error_description || ''}</p>`);
+  }
+
+  if (!code) {
+    return res.status(400).send('<h1>Salesforce connection failed</h1><p>No authorization code received.</p>');
+  }
+
+  try {
+    const oauthState = oauthStates.get(state);
+    oauthStates.delete(state);
+
+    if (!oauthState) {
+      throw new Error('OAuth state was not found. Start again from /auth/salesforce.');
+    }
+    switchActiveOrg(oauthState.orgKey);
+    SF.redirectUri = oauthState.redirectUri || requestRedirectUri(req);
+
+    const params = new URLSearchParams({
+      grant_type: 'authorization_code',
+      client_id: SF.clientId,
+      client_secret: SF.clientSecret,
+      redirect_uri: SF.redirectUri,
+      code,
+      code_verifier: oauthState.codeVerifier
+    });
+
+    const tokenRes = await axios.post(
+      `${SF.loginUrl}/services/oauth2/token`,
+      params.toString(),
+      {
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        timeout: 30000
+      }
+    );
+
+    if (!tokenRes.data.refresh_token) {
+      throw new Error('Salesforce did not return a refresh token. Check the Connected App OAuth scopes include refresh_token/offline_access.');
+    }
+
+    SF.refreshToken = tokenRes.data.refresh_token;
+    SF.instanceUrl = normalizeUrl(tokenRes.data.instance_url || SF.instanceUrl);
+    _cachedToken = tokenRes.data.access_token || null;
+    _tokenExpires = _cachedToken ? Date.now() + 55 * 60 * 1000 : 0;
+
+    persistActiveOrgTokens();
+    res.redirect(oauthState.returnTo || '/');
+  } catch (err) {
+    const detail = err.response?.data;
+    const msg = detail?.error_description || err.message || 'OAuth callback failed';
+    console.error('OAuth callback error:', detail || err.message);
+    res.status(500).send(`<h1>Salesforce connection failed</h1><p>${msg}</p>`);
+  }
+});
+
+app.get('/api/lookup/:object', checkAuth, async (req, res) => {
+  const { object } = req.params;
+  const search = String(req.query.search || '').trim().replace(/'/g, "\\'");
+  const requestId = `lookup-${++securityPerfSeq}`;
+  const requestStartedAt = performance.now();
+
+  if (!OBJECTS[object]) return res.status(400).json({ error: `Unknown object: ${object}` });
+
+  try {
+    if (!isFullAccessUser(req.user)) {
+      const perms = permissionsFromRequestContext(req, object) ||
+        await getEffectivePermissions(req.user.id, object);
+      if (!perms?.can_read) {
+        return res.status(403).json({
+          error: permissionDeniedMessage(),
+          code: 'PERMISSION_DENIED'
+        });
+      }
+    }
+
+    const availableFields = await getObjectFieldSet(object);
+    const searchFields = OBJECTS[object].searchFields || ['Name'];
+    const where = search
+      ? `WHERE ${searchFields.filter((field) => availableFields.has(field)).map((field) => `${field} LIKE '%${search}%'`).join(' OR ')}`
+      : '';
+    const fields = {
+      Case: 'Id, CaseNumber, Subject, AccountId, Account.Name',
+      Contact: 'Id, Name, Email, AccountId, Account.Name',
+      Lead: 'Id, Name, Email, Company',
+      User: 'Id, Name, Email, Username',
+      Opportunity: 'Id, Name, AccountId, Account.Name',
+      Quote: 'Id, Name, QuoteNumber, Status, AccountId, Account.Name, OpportunityId, Opportunity.Name',
+      Product2: 'Id, Name, ProductCode, Family, IsActive',
+      OpportunityLineItem: 'Id, OpportunityId, Opportunity.Name, Product2Id, Product2.Name, Quantity, TotalPrice',
+      QuoteLineItem: 'Id, LineNumber, QuoteId, Quote.Name, Product2Id, Product2.Name, Quantity, TotalPrice'
+    }[object] || OBJECTS[object].fields;
+    const selectFields = await fieldsCsvForObject(object, fields);
+    const sfStartedAt = performance.now();
+    const data = await sfGet('/query', {
+      q: `SELECT ${selectFields} FROM ${object} ${where === 'WHERE ' ? '' : where} ORDER BY ${OBJECTS[object].orderBy} LIMIT 25`
+    });
+    const sfMs = msSince(sfStartedAt);
+    const visibleRecords = await applyRecordVisibility(
+      data.records || [],
+      req.user.id,
+      req.user.role,
+      object,
+      req.user.isSystemAdmin,
+      requestId
+    );
+    res.json({
+      records: visibleRecords.map((record) => ({
+        ...record,
+        Name: record.Name || record.Subject || record.CaseNumber || record.Id
+      }))
+    });
+    securityPerfLog(requestId, 'GET lookup', {
+      object,
+      sfRecords: data.records?.length || 0,
+      evaluated: data.records?.length || 0,
+      visible: visibleRecords.length,
+      sfMs,
+      totalMs: msSince(requestStartedAt)
+    });
+  } catch (err) {
+    handleSFError(err, res, `Lookup ${object}`);
+  }
+});
+
+app.get('/api/:object/listviews', checkAuth, async (req, res) => {
+  const { object } = req.params;
+  if (!OBJECTS[object]) return res.status(400).json({ error: `Unknown object: ${object}` });
+
+  try {
+    const data = await sfGet(`/sobjects/${object}/listviews`);
+    res.json(data);
+  } catch (err) {
+    handleSFError(err, res, `List views ${object}`);
+  }
+});
+
+function developerNameFromLabel(label) {
+  const base = String(label || 'Portal List View')
+    .replace(/[^A-Za-z0-9_]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .replace(/_{2,}/g, '_')
+    .slice(0, 35) || 'Portal_List_View';
+  const safeBase = /^[A-Za-z]/.test(base) ? base : `List_${base}`;
+  return `${safeBase}_${Date.now().toString(36)}`.slice(0, 40);
+}
+
+function salesforceListViewOperation(operator) {
+  return ({
+    equals: 'Equals',
+    not_equals: 'NotEqual',
+    contains: 'Contains',
+    not_contains: 'NotContains',
+    starts_with: 'StartsWith',
+    ends_with: 'EndsWith',
+    gt: 'GreaterThan',
+    gte: 'GreaterOrEqual',
+    lt: 'LessThan',
+    lte: 'LessOrEqual',
+    blank: 'Equals',
+    not_blank: 'NotEqual',
+    true: 'Equals',
+    false: 'Equals',
+    today: 'Equals',
+    yesterday: 'Equals',
+    last_7_days: 'Equals',
+    last_30_days: 'Equals',
+    this_month: 'Equals',
+    last_month: 'Equals'
+  })[operator] || 'Equals';
+}
+
+function salesforceListViewFilterValue(filter) {
+  const operator = filter?.operator;
+  if (operator === 'blank' || operator === 'not_blank') return '';
+  if (operator === 'true') return 'true';
+  if (operator === 'false') return 'false';
+  if (operator === 'today') return 'TODAY';
+  if (operator === 'yesterday') return 'YESTERDAY';
+  if (operator === 'last_7_days') return 'LAST_N_DAYS:7';
+  if (operator === 'last_30_days') return 'LAST_N_DAYS:30';
+  if (operator === 'this_month') return 'THIS_MONTH';
+  if (operator === 'last_month') return 'LAST_MONTH';
+  return String(filter?.value ?? '');
+}
+
+function buildSalesforceListViewPayload(object, body = {}) {
+  const label = String(body.name || body.label || '').trim();
+  const columns = Array.isArray(body.columns) ? body.columns : [];
+  if (!label) throw new Error('List view name is required');
+  if (!columns.length) throw new Error('Select at least one visible field');
+
+  const filteredByInfo = (Array.isArray(body.filters) ? body.filters : [])
+    .filter((filter) => filter?.field)
+    .map((filter) => ({
+      fieldApiName: filter.field,
+      operandLabels: [salesforceListViewFilterValue(filter)],
+      operator: salesforceListViewOperation(filter.operator)
+    }));
+
+  let filterLogicString = undefined;
+  if (filteredByInfo.length > 1) {
+    const logic = String(body.filterLogic || 'AND').trim().toUpperCase();
+    if (logic === 'AND' || logic === 'OR') {
+      filterLogicString = filteredByInfo.map((_, index) => String(index + 1)).join(` ${logic} `);
+    } else {
+      filterLogicString = body.filterLogic;
+    }
+  }
+
+  return {
+    displayColumns: columns,
+    filteredByInfo,
+    ...(filterLogicString ? { filterLogicString } : {}),
+    label,
+    listViewApiName: developerNameFromLabel(label),
+    visibility: String(body.visibility || '').toLowerCase() === 'public' ? 'Public' : 'Private'
+  };
+}
+
+app.post('/api/:object/listviews', checkAuth, async (req, res) => {
+  const { object } = req.params;
+  if (!OBJECTS[object]) return res.status(400).json({ error: `Unknown object: ${object}` });
+
+  try {
+    const payload = buildSalesforceListViewPayload(object, req.body || {});
+    const created = await sfUiPost(`/ui-api/list-info/${object}`, payload);
+    const listData = await sfGet(`/sobjects/${object}/listviews`);
+    const listviews = listData.listviews || [];
+    const createdView = listviews.find((view) =>
+      view.developerName === payload.listViewApiName ||
+      view.name === payload.listViewApiName ||
+      view.label === payload.label
+    ) || null;
+
+    res.json({
+      synced: true,
+      listView: createdView || {
+        id: created?.id || created?.listViewId || created?.listViewReference?.id,
+        label: payload.label,
+        developerName: payload.listViewApiName
+      },
+      salesforce: created
+    });
+  } catch (err) {
+    handleSFError(err, res, `Create list view ${object}`);
+  }
+});
+
+app.patch('/api/:object/listviews/:apiName', checkAuth, async (req, res) => {
+  const { object, apiName } = req.params;
+  if (!OBJECTS[object]) return res.status(400).json({ error: `Unknown object: ${object}` });
+
+  try {
+    const body = req.body || {};
+    const label = String(body.name || body.label || '').trim();
+    const columns = Array.isArray(body.columns) ? body.columns : [];
+    if (!label) return res.status(400).json({ error: 'List view name is required' });
+    if (!columns.length) return res.status(400).json({ error: 'Select at least one visible field' });
+
+    const filteredByInfo = (Array.isArray(body.filters) ? body.filters : [])
+      .filter((filter) => filter?.field)
+      .map((filter) => ({
+        fieldApiName: filter.field,
+        operandLabels: [salesforceListViewFilterValue(filter)],
+        operator: salesforceListViewOperation(filter.operator)
+      }));
+
+    let filterLogicString = undefined;
+    if (filteredByInfo.length > 1) {
+      const logic = String(body.filterLogic || 'AND').trim().toUpperCase();
+      if (logic === 'AND' || logic === 'OR') {
+        filterLogicString = filteredByInfo.map((_, index) => String(index + 1)).join(` ${logic} `);
+      } else {
+        filterLogicString = body.filterLogic;
+      }
+    }
+
+    const payload = {
+      displayColumns: columns,
+      filteredByInfo,
+      ...(filterLogicString ? { filterLogicString } : {}),
+      label,
+      visibility: String(body.visibility || '').toLowerCase() === 'public' ? 'Public' : 'Private'
+    };
+
+    const updated = await sfUiPatch(`/ui-api/list-info/${object}/${apiName}`, payload);
+    const listData = await sfGet(`/sobjects/${object}/listviews`);
+    const listviews = listData.listviews || [];
+    const matchedView = listviews.find((view) =>
+      view.developerName === apiName || view.label === label
+    ) || null;
+
+    res.json({
+      synced: true,
+      listView: matchedView || {
+        id: updated?.id || updated?.listViewId,
+        label,
+        developerName: apiName
+      },
+      salesforce: updated
+    });
+  } catch (err) {
+    handleSFError(err, res, `Update list view ${object}/${apiName}`);
+  }
+});
+
+app.delete('/api/:object/listviews/:apiName', checkAuth, async (req, res) => {
+  const { object, apiName } = req.params;
+  if (!OBJECTS[object]) return res.status(400).json({ error: `Unknown object: ${object}` });
+
+  try {
+    await sfUiDelete(`/ui-api/list-info/${object}/${apiName}`);
+    res.json({ deleted: true });
+  } catch (err) {
+    handleSFError(err, res, `Delete list view ${object}/${apiName}`);
+  }
+});
+
+app.get('/api/:object/listviews/:id/describe', checkAuth, async (req, res) => {
+  const { object, id } = req.params;
+  if (!OBJECTS[object]) return res.status(400).json({ error: `Unknown object: ${object}` });
+
+  try {
+    const data = await sfUiGet(`/ui-api/list-info/${id}`);
+    res.json(data);
+  } catch (err) {
+    handleSFError(err, res, `Describe list view ${object}/${id}`);
+  }
+});
+
+app.get('/api/:object/count', checkAuth, async (req, res, next) => {
+  const { object } = req.params;
+  if (OBJECTS[object]) return checkPermission(object, 'can_read')(req, res, next);
+  next();
+}, async (req, res) => {
+  const { object } = req.params;
+  if (!OBJECTS[object]) return res.status(400).json({ error: `Unknown object: ${object}` });
+
+  try {
+    const owdAccess = await getOrgWideDefaultAccess(object);
+    if (!isFullAccessUser(req.user) && !['public_read', 'public_read_write'].includes(owdAccess)) {
+      return res.json({
+        object,
+        totalSize: null,
+        filtered: true,
+        message: 'Counts are hidden when role hierarchy filtering is active.'
+      });
+    }
+
+    const soql = await buildCountSOQL(object, req.query.search, req.query.where);
+    const data = await sfGet(req.query.all === 'true' ? '/queryAll' : '/query', { q: soql });
+    const countValue = Number(data.records?.[0]?.expr0 ?? data.totalSize ?? 0);
+    res.json({
+      object,
+      totalSize: countValue,
+      org: publicOrg(activeOrg()),
+      queryAll: req.query.all === 'true'
+    });
+  } catch (err) {
+    handleSFError(err, res, `Count ${object}`);
+  }
+});
+
+app.get('/api/debug/data-source', checkAuth, requireAdminPanel, async (req, res) => {
+  try {
+    const results = {};
+    for (const objectName of PRIMARY_CRM_OBJECTS) {
+      const soql = await buildCountSOQL(objectName);
+      const data = await sfGet('/query', { q: soql });
+      results[objectName] = Number(data.records?.[0]?.expr0 ?? data.totalSize ?? 0);
+    }
+    res.json({
+      org: publicOrg(activeOrg()),
+      instance: SF.instanceUrl,
+      counts: results
+    });
+  } catch (err) {
+    handleSFError(err, res, 'Data source debug');
+  }
+});
+
+app.get('/api/:object/listviews/:id/results', checkAuth, async (req, res, next) => {
+  const obj = req.params.object;
+  if (OBJECTS[obj]) return attachFieldPerms(obj)(req, res, next);
+  next();
+}, async (req, res) => {
+  const { object, id } = req.params;
+  if (!OBJECTS[object]) return res.status(400).json({ error: `Unknown object: ${object}` });
+  const requestId = `listview-${++securityPerfSeq}`;
+  const requestStartedAt = performance.now();
+
+  try {
+    if (req.query.cursor) {
+      const sfStartedAt = performance.now();
+      const data = await sfGet(queryMoreEndpoint(req.query.cursor), {}, { headers: QUERY_BATCH_HEADERS });
+      const sfMs = msSince(sfStartedAt);
+      const ownerStartedAt = performance.now();
+      const ownedRecords = await hydrateRecordOwners(data.records || [], object);
+      const ownerMs = msSince(ownerStartedAt);
+      const visibleRecords = await applyRecordVisibility(
+        ownedRecords,
+        req.user.id,
+        req.user.role,
+        object,
+        req.user.isSystemAdmin,
+        requestId
+      );
+      const records = visibleRecords.map(record => applyFieldSecurity(record, req.fieldPerms));
+      const owdAccess = await getOrgWideDefaultAccess(object);
+      const canUseSalesforceTotal = req.user.isSystemAdmin || ['public_read', 'public_read_write'].includes(owdAccess);
+      securityPerfLog(requestId, 'GET listview cursor', {
+        object,
+        sfRecords: data.records?.length || 0,
+        evaluated: ownedRecords.length,
+        visible: records.length,
+        sfMs,
+        ownerMs,
+        totalMs: msSince(requestStartedAt)
+      });
+      return res.json({
+        records,
+        totalSize: canUseSalesforceTotal ? (data.totalSize || 0) : records.length,
+        done: Boolean(data.done),
+        nextRecordsUrl: data.nextRecordsUrl || null,
+        hiddenFields: [...(req.fieldPerms?.hiddenFields || [])]
+      });
+    }
+
+    const describeStartedAt = performance.now();
+    const detail = await sfGet(`/sobjects/${object}/listviews/${id}/describe`);
+    let displayColumnNames = null;
+    try {
+      const uiInfo = await sfUiGet(`/ui-api/list-info/${id}`);
+      if (uiInfo && Array.isArray(uiInfo.displayColumns)) {
+        displayColumnNames = new Set(uiInfo.displayColumns.map(c => c.fieldApiName));
+      }
+    } catch (e) {
+      // Fallback if UI API fails
+    }
+
+    const scope = await buildReadableRecordScopeFilter(object, req.user, requestId);
+    const scopedQuery = appendExtraWhereToSOQL(detail.query, scope.clause);
+    const sfStartedAt = performance.now();
+    const data = await sfGet('/query', { q: scopedQuery }, { headers: QUERY_BATCH_HEADERS });
+    const sfMs = msSince(sfStartedAt);
+    const ownerStartedAt = performance.now();
+    const ownedRecords = await hydrateRecordOwners(data.records || [], object);
+    const ownerMs = msSince(ownerStartedAt);
+    const visibleRecords = await applyRecordVisibility(
+      ownedRecords,
+      req.user.id,
+      req.user.role,
+      object,
+      req.user.isSystemAdmin,
+      requestId
+    );
+    const records = visibleRecords.map(record => applyFieldSecurity(record, req.fieldPerms));
+    const hiddenFields = new Set(req.fieldPerms?.hiddenFields || []);
+    const owdAccess = await getOrgWideDefaultAccess(object);
+    const canUseSalesforceTotal = req.user.isSystemAdmin || ['public_read', 'public_read_write'].includes(owdAccess);
+
+    const returnedColumns = (detail.columns || []).filter(column => {
+      if (hiddenFields.has(column.fieldNameOrPath)) return false;
+      if (displayColumnNames && !displayColumnNames.has(column.fieldNameOrPath)) return false;
+      return true;
+    });
+
+    res.json({
+      label: detail.label,
+      columns: returnedColumns,
+      query: detail.query,
+      records,
+      totalSize: canUseSalesforceTotal ? (data.totalSize || 0) : records.length,
+      done: Boolean(data.done),
+      nextRecordsUrl: data.nextRecordsUrl || null,
+      hiddenFields: [...hiddenFields]
+    });
+    securityPerfLog(requestId, 'GET listview', {
+      object,
+      scope: scope.reason,
+      sfRecords: data.records?.length || 0,
+      evaluated: ownedRecords.length,
+      visible: records.length,
+      describeMs: msSince(describeStartedAt),
+      sfMs,
+      ownerMs,
+      totalMs: msSince(requestStartedAt)
+    });
+  } catch (err) {
+    handleSFError(err, res, `List view results ${object}/${id}`);
+  }
+});
+
+app.get('/api/:object/fields', checkAuth, async (req, res, next) => {
+  const obj = req.params.object;
+  if (OBJECTS[obj]) return attachFieldPerms(obj)(req, res, next);
+  next();
+}, async (req, res) => {
+  const { object } = req.params;
+  if (!OBJECTS[object]) return res.status(400).json({ error: `Unknown object: ${object}` });
+
+  try {
+    const data = await getObjectDescribe(object);
+    const fields = data.fields
+      .filter(field => !field.deprecatedAndHidden)
+      .map(field => ({
+        name: field.name,
+        label: field.label,
+        type: field.type,
+        updateable: field.updateable,
+        createable: field.createable,
+        nillable: field.nillable,
+        referenceTo: field.referenceTo || [],
+        controllerName: field.controllerName || '',
+        controllerValues: field.controllerValues || {},
+        picklistValues: normalizePicklistValues(field)
+      }));
+    res.json({
+      fields: fields.filter(field => !req.fieldPerms?.hiddenFields?.has(field.name)),
+      hiddenFields: [...(req.fieldPerms?.hiddenFields || [])]
+    });
+  } catch (err) {
+    handleSFError(err, res, `Fields ${object}`);
+  }
+});
+
+app.get('/api/:object/layouts', checkAuth, async (req, res) => {
+  const { object } = req.params;
+  if (!OBJECTS[object]) {
+    return res.status(400).json({ error: `Unknown object: ${object}` });
+  }
+
+  try {
+    const data = await sfGet(`/sobjects/${object}/describe/layouts`);
+    const layout = data.layouts && data.layouts[0];
+    if (!layout) {
+      return res.status(404).json({ error: `Layout not found for object: ${object}` });
+    }
+
+    const detailSections = layout.detailLayoutSections || [];
+    const mappedLayout = detailSections.map(section => {
+      const fields = [];
+      const layoutRows = section.layoutRows || [];
+      for (const row of layoutRows) {
+        const layoutItems = row.layoutItems || [];
+        for (const item of layoutItems) {
+          const layoutComponents = item.layoutComponents || [];
+          for (const component of layoutComponents) {
+            if (component.componentType === 'Field') {
+              const fieldName = component.value || (component.details && component.details.name);
+              if (fieldName) {
+                const readOnly = item.editableForUpdate === false || item.editableForNew === false;
+                if (readOnly) {
+                  fields.push({ name: fieldName, readOnly: true });
+                } else {
+                  fields.push(fieldName);
+                }
+              }
+            }
+          }
+        }
+      }
+      return {
+        title: section.heading || "Information",
+        fields: fields
+      };
+    }).filter(s => s.fields.length > 0);
+
+    res.json({ layouts: mappedLayout });
+  } catch (err) {
+    handleSFError(err, res, `Layouts ${object}`);
+  }
+});
+
+// GET user custom layout from Supabase
+app.get('/api/portal/layouts/:object', checkAuth, async (req, res) => {
+  const { object } = req.params;
+  try {
+    const payload = await getCachedLayoutJson('layout', object, req.user.id, async () => {
+      const { data, error } = await supabase
+        .from('portal_custom_layouts')
+        .select('layout_data')
+        .eq('user_id', req.user.id)
+        .eq('object_name', object)
+        .maybeSingle();
+
+      if (error) {
+        console.error('[GET /api/portal/layouts/:object] Supabase lookup error:', error);
+        const lookupError = new Error('Failed to retrieve layout from database');
+        lookupError.statusCode = 500;
+        throw lookupError;
+      }
+
+      return { layout: data ? data.layout_data : null };
+    });
+    res.json(payload);
+  } catch (err) {
+    console.error('[GET /api/portal/layouts/:object] Exception:', err);
+    res.status(err.statusCode || 500).json({ error: err.message || 'Server error retrieving layout' });
+  }
+});
+
+// POST user custom layout to Supabase (save/upsert)
+app.post('/api/portal/layouts/:object', checkAuth, async (req, res) => {
+  const { object } = req.params;
+  const { layout } = req.body;
+
+  if (!layout || !Array.isArray(layout)) {
+    return res.status(400).json({ error: 'Invalid layout data' });
+  }
+
+  try {
+    const { error } = await supabase
+      .from('portal_custom_layouts')
+      .upsert({
+        user_id: req.user.id,
+        object_name: object,
+        layout_data: layout,
+        updated_at: new Date()
+      }, {
+        onConflict: 'user_id,object_name'
+      });
+
+    if (error) {
+      console.error('[POST /api/portal/layouts/:object] Supabase upsert error:', error);
+      return res.status(500).json({ error: 'Failed to save layout to database' });
+    }
+
+    invalidateLayoutJson('layout', object, req.user.id);
+    res.json({ success: true });
+  } catch (err) {
+    console.error('[POST /api/portal/layouts/:object] Exception:', err);
+    res.status(500).json({ error: 'Server error saving layout' });
+  }
+});
+
+// DELETE user custom layout from Supabase (reset to default)
+app.delete('/api/portal/layouts/:object', checkAuth, async (req, res) => {
+  const { object } = req.params;
+  try {
+    const { error } = await supabase
+      .from('portal_custom_layouts')
+      .delete()
+      .eq('user_id', req.user.id)
+      .eq('object_name', object);
+
+    if (error) {
+      console.error('[DELETE /api/portal/layouts/:object] Supabase delete error:', error);
+      return res.status(500).json({ error: 'Failed to delete layout from database' });
+    }
+
+    invalidateLayoutJson('layout', object, req.user.id);
+    res.json({ success: true });
+  } catch (err) {
+    console.error('[DELETE /api/portal/layouts/:object] Exception:', err);
+    res.status(500).json({ error: 'Server error deleting layout' });
+  }
+});
+
+// GET user custom compact layout from Supabase
+app.get('/api/portal/compact-layouts/:object', checkAuth, async (req, res) => {
+  const { object } = req.params;
+  try {
+    const payload = await getCachedLayoutJson('compact-layout', object, req.user.id, async () => {
+      const { data, error } = await supabase
+        .from('portal_compact_layouts')
+        .select('fields')
+        .eq('user_id', req.user.id)
+        .eq('object_name', object)
+        .maybeSingle();
+
+      if (error) {
+        console.error('[GET /api/portal/compact-layouts/:object] Supabase lookup error:', error);
+        const lookupError = new Error('Failed to retrieve compact layout from database');
+        lookupError.statusCode = 500;
+        throw lookupError;
+      }
+
+      return { fields: data ? data.fields : null };
+    });
+    res.json(payload);
+  } catch (err) {
+    console.error('[GET /api/portal/compact-layouts/:object] Exception:', err);
+    res.status(err.statusCode || 500).json({ error: err.message || 'Server error retrieving compact layout' });
+  }
+});
+
+// POST user custom compact layout to Supabase (save/upsert)
+app.post('/api/portal/compact-layouts/:object', checkAuth, async (req, res) => {
+  const { object } = req.params;
+  const { fields } = req.body;
+
+  if (!fields || !Array.isArray(fields)) {
+    return res.status(400).json({ error: 'Invalid compact layout fields' });
+  }
+
+  try {
+    const { error } = await supabase
+      .from('portal_compact_layouts')
+      .upsert({
+        user_id: req.user.id,
+        object_name: object,
+        fields: fields,
+        updated_at: new Date()
+      }, {
+        onConflict: 'user_id,object_name'
+      });
+
+    if (error) {
+      console.error('[POST /api/portal/compact-layouts/:object] Supabase upsert error:', error);
+      return res.status(500).json({ error: 'Failed to save compact layout to database' });
+    }
+
+    invalidateLayoutJson('compact-layout', object, req.user.id);
+    res.json({ success: true });
+  } catch (err) {
+    console.error('[POST /api/portal/compact-layouts/:object] Exception:', err);
+    res.status(500).json({ error: 'Server error saving compact layout' });
+  }
+});
+
+// DELETE user custom compact layout from Supabase (reset to default)
+app.delete('/api/portal/compact-layouts/:object', checkAuth, async (req, res) => {
+  const { object } = req.params;
+  try {
+    const { error } = await supabase
+      .from('portal_compact_layouts')
+      .delete()
+      .eq('user_id', req.user.id)
+      .eq('object_name', object);
+
+    if (error) {
+      console.error('[DELETE /api/portal/compact-layouts/:object] Supabase delete error:', error);
+      return res.status(500).json({ error: 'Failed to delete compact layout from database' });
+    }
+
+    invalidateLayoutJson('compact-layout', object, req.user.id);
+    res.json({ success: true });
+  } catch (err) {
+    console.error('[DELETE /api/portal/compact-layouts/:object] Exception:', err);
+    res.status(500).json({ error: 'Server error deleting compact layout' });
+  }
+});
+
+// GET custom record page layout from Supabase
+app.get('/api/portal/record-pages/:object', checkAuth, async (req, res) => {
+  const { object } = req.params;
+  try {
+    const payload = await getCachedLayoutJson('record-page', object, '', async () => {
+      const { data, error } = await supabase
+        .from('portal_record_pages')
+        .select('layout, regions, updated_at')
+        .eq('object_name', object)
+        .maybeSingle();
+
+      if (error) {
+        if (error.code === 'PGRST205' || (error.message && error.message.includes('relation "portal_record_pages" does not exist'))) {
+          console.warn(`[GET /api/portal/record-pages/:object] Table not yet created. Falling back to default.`);
+          return { layout: null };
+        }
+        console.error('[GET /api/portal/record-pages/:object] Supabase lookup error:', error);
+        const lookupError = new Error('Failed to retrieve record page layout from database');
+        lookupError.statusCode = 500;
+        throw lookupError;
+      }
+
+      return { layout: data ? { layout: data.layout, regions: data.regions, updated_at: data.updated_at } : null };
+    });
+    res.json(payload);
+  } catch (err) {
+    console.error('[GET /api/portal/record-pages/:object] Exception:', err);
+    res.status(err.statusCode || 500).json({ error: err.message || 'Server error retrieving record page layout' });
+  }
+});
+
+// POST custom record page layout to Supabase (save/upsert)
+app.post('/api/portal/record-pages/:object', checkAuth, requireAdmin, async (req, res) => {
+  const { object } = req.params;
+  const { layout, regions } = req.body;
+
+  if (!layout || !regions) {
+    return res.status(400).json({ error: 'Invalid record page layout data' });
+  }
+
+  try {
+    const { error } = await supabase
+      .from('portal_record_pages')
+      .upsert({
+        object_name: object,
+        layout,
+        regions,
+        updated_at: new Date()
+      }, {
+        onConflict: 'object_name'
+      });
+
+    if (error) {
+      console.error('[POST /api/portal/record-pages/:object] Supabase upsert error:', error);
+      return res.status(500).json({ error: 'Failed to save record page layout to database' });
+    }
+
+    invalidateLayoutJson('record-page', object);
+    res.json({ success: true });
+  } catch (err) {
+    console.error('[POST /api/portal/record-pages/:object] Exception:', err);
+    res.status(500).json({ error: 'Server error saving record page layout' });
+  }
+});
+
+// DELETE custom record page layout from Supabase (reset to default)
+app.delete('/api/portal/record-pages/:object', checkAuth, requireAdmin, async (req, res) => {
+  const { object } = req.params;
+  try {
+    const { error } = await supabase
+      .from('portal_record_pages')
+      .delete()
+      .eq('object_name', object);
+
+    if (error) {
+      console.error('[DELETE /api/portal/record-pages/:object] Supabase delete error:', error);
+      return res.status(500).json({ error: 'Failed to delete record page layout from database' });
+    }
+
+    invalidateLayoutJson('record-page', object);
+    res.json({ success: true });
+  } catch (err) {
+    console.error('[DELETE /api/portal/record-pages/:object] Exception:', err);
+    res.status(500).json({ error: 'Server error deleting record page layout' });
+  }
+});
+
+// Global SOSL search
+app.get('/api/search/global', checkAuth, async (req, res) => {
+  const q = (req.query.q || '').trim();
+  if (!q) return res.json({ searchRecords: [] });
+  const requestId = `search-${++securityPerfSeq}`;
+  const requestStartedAt = performance.now();
+
+  const safe = q.replace(/['"\\{}[\]()^~*:!?&|+]/g, ' ').trim().replace(/\s+/g, ' ');
+  if (!safe) return res.json({ searchRecords: [] });
+
+  const sosl = [
+    `FIND {${safe}*} IN ALL FIELDS`,
+    `RETURNING`,
+    `Account(Id, Name, Type),`,
+    `Contact(Id, Name, Email, Title),`,
+    `Opportunity(Id, Name, StageName, Amount),`,
+    `Case(Id, CaseNumber, Subject, Status),`,
+    `Lead(Id, Name, Email, Company),`,
+    `Campaign(Id, Name, Status, Type),`,
+    `Quote(Id, Name, QuoteNumber, Status),`,
+    `Product2(Id, Name, ProductCode, Family)`,
+    `LIMIT 40`
+  ].join(' ');
+
+  try {
+    const sfStartedAt = performance.now();
+    const data = await sfGet('/search', { q: sosl });
+    const sfMs = msSince(sfStartedAt);
+    const securityStartedAt = performance.now();
+    const searchRecords = await filterSearchRecordsByVisibility(data.searchRecords || [], req);
+    const securityMs = msSince(securityStartedAt);
+    res.json({ ...data, searchRecords });
+    securityPerfLog(requestId, 'GET global-search', {
+      sfRecords: data.searchRecords?.length || 0,
+      evaluated: data.searchRecords?.length || 0,
+      visible: searchRecords.length,
+      sfMs,
+      securityMs,
+      totalMs: msSince(requestStartedAt)
+    });
+  } catch (err) {
+    handleSFError(err, res, 'Global search');
+  }
+});
+
+app.get('/api/debug/performance-audit', checkAuth, requireAdminPanel, (req, res) => {
+  res.json(perfAudit.report());
+});
+
+app.post('/api/debug/performance-audit/reset', checkAuth, requireAdminPanel, (req, res) => {
+  perfAudit.reset();
+  res.json({ reset: true, at: new Date().toISOString() });
+});
+
+app.get('/api/debug/user-context-cache', checkAuth, requireAdminPanel, (req, res) => {
+  res.json(getUserContextCacheStats());
+});
+
+app.get('/api/debug/request-context', checkAuth, requireAdminPanel, (req, res) => {
+  res.json(getRequestContextStats());
+});
+
+app.get('/api/debug/metadata-cache', checkAuth, requireAdminPanel, (req, res) => {
+  res.json(getMetadataCacheStats());
+});
+
+app.get('/api/debug/composite', checkAuth, requireAdminPanel, (req, res) => {
+  res.json(compositeClient.getStats());
+});
+
+app.post('/api/debug/composite/reset', checkAuth, requireAdminPanel, (req, res) => {
+  compositeClient.resetStats();
+  res.json({ reset: true, at: new Date().toISOString() });
+});
+
+app.post('/api/debug/metadata-cache/invalidate', checkAuth, requireAdminPanel, (req, res) => {
+  const objectName = req.body?.objectName || req.query.objectName;
+  if (objectName) {
+    invalidateMetadata(objectName);
+    return res.json({ invalidated: objectName, stats: getMetadataCacheStats() });
+  }
+  invalidateAllMetadata();
+  res.json({ invalidated: 'all', stats: getMetadataCacheStats() });
+});
+
+app.get('/api/debug/layout-cache', checkAuth, requireAdminPanel, (req, res) => {
+  res.json(getLayoutJsonCacheStats());
+});
+
+app.post('/api/debug/layout-cache/invalidate', checkAuth, requireAdminPanel, (req, res) => {
+  const objectName = req.body?.objectName || req.query.objectName;
+  if (objectName) {
+    invalidateLayoutJson('', objectName);
+    return res.json({ invalidated: objectName, stats: getLayoutJsonCacheStats() });
+  }
+  invalidateAllLayoutJson();
+  res.json({ invalidated: 'all', stats: getLayoutJsonCacheStats() });
+});
+
+app.get('/api/debug/record-detail-cache', checkAuth, requireAdminPanel, (req, res) => {
+  res.json(getRecentRecordDetailStats());
+});
+
+// Get picklist values for a field (helper for dropdowns)
+app.get('/api/meta/:object/picklist/:field', checkAuth, async (req, res) => {
+  const { object, field } = req.params;
+  try {
+    const data = await getObjectDescribe(object);
+    const fieldMeta = data.fields.find(f => f.name === field);
+    const values = fieldMeta?.picklistValues?.filter(p => p.active).map(p => p.value) || [];
+    res.json({ values });
+  } catch (err) {
+    res.json({ values: [] });
+  }
+});
+
+app.get('/api/campaigns/:id/members', checkAuth, async (req, res) => {
+  const campaignId = escapeSOQL(req.params.id);
+  try {
+    const soql = `
+      SELECT Id, Status, ContactId, LeadId,
+        Contact.Id, Contact.FirstName, Contact.LastName, Contact.Name, Contact.Email, Contact.Phone, Contact.Title, Contact.AccountId, Contact.Account.Name,
+        Lead.Id, Lead.FirstName, Lead.LastName, Lead.Name, Lead.Email, Lead.Phone, Lead.Title, Lead.Company
+      FROM CampaignMember
+      WHERE CampaignId = '${campaignId}'
+      ORDER BY CreatedDate DESC
+      LIMIT 500
+    `;
+    const data = await sfGet('/query', { q: soql.replace(/\s+/g, ' ').trim() });
+    res.json({ records: (data.records || []).map(normalizeCampaignMember), totalSize: data.totalSize || 0 });
+  } catch (err) {
+    handleSFError(err, res, `Campaign members ${req.params.id}`);
+  }
+});
+
+app.delete('/api/campaigns/:id/members/:memberId', async (req, res) => {
+  const { id, memberId } = req.params;
+  try {
+    const data = await sfGet('/query', {
+      q: `SELECT Id FROM CampaignMember WHERE Id = '${escapeSOQL(memberId)}' AND CampaignId = '${escapeSOQL(id)}' LIMIT 1`
+    });
+    if (!data.records?.length) return res.status(404).json({ error: 'Campaign member not found' });
+
+    await sfDelete(`/sobjects/CampaignMember/${memberId}`);
+    invalidateCampaignMemberIdCache(id);
+    res.json({ success: true });
+  } catch (err) {
+    handleSFError(err, res, `Delete campaign member ${memberId}`);
+  }
+});
+
+app.get('/api/:object/:id/activity', checkAuth, async (req, res, next) => {
+  return checkPermission(req.params.object, 'can_read')(req, res, next);
+}, async (req, res) => {
+  const { object, id } = req.params;
+  if (!OBJECTS[object]) return res.status(400).json({ error: `Unknown object: ${object}` });
+
+  const recordId = escapeSOQL(id);
+  const isPersonRecord = ['Contact', 'Lead'].includes(object);
+  const taskEventWhere = isPersonRecord ? `WhoId = '${recordId}'` : `WhatId = '${recordId}'`;
+  const emailWhere = `RelatedToId = '${recordId}'`;
+
+  try {
+    const queries = [
+      {
+        source: 'EmailMessage',
+        q: `
+          SELECT Id, Subject, FromName, FromAddress, ToAddress, MessageDate, CreatedDate, Status, TextBody
+          FROM EmailMessage
+          WHERE ${emailWhere}
+          ORDER BY MessageDate DESC, CreatedDate DESC
+          LIMIT 50
+        `
+      },
+      {
+        source: 'Task',
+        q: `
+          SELECT Id, Subject, Status, IsClosed, Priority, ActivityDate, CreatedDate, TaskSubtype, Description,
+            WhoId, Who.Name, WhatId, Owner.Name
+          FROM Task
+          WHERE ${taskEventWhere}
+          ORDER BY CreatedDate DESC
+          LIMIT 50
+        `
+      },
+      {
+        source: 'Event',
+        q: `
+          SELECT Id, Subject, StartDateTime, EndDateTime, CreatedDate, Location, Description,
+            WhoId, Who.Name, WhatId, Owner.Name
+          FROM Event
+          WHERE ${taskEventWhere}
+          ORDER BY StartDateTime DESC
+          LIMIT 50
+        `
+      }
+    ];
+    const resultWarnings = [];
+    const results = await sfCompositeGet(queries.map((item, index) => {
+      const params = { q: item.q.replace(/\s+/g, ' ').trim() };
+      return {
+        referenceId: `activity${index + 1}`,
+        endpoint: '/query',
+        params,
+        fallback: () => sfGet('/query', params).catch((err) => {
+          const warning = formatSalesforceError(err?.response?.data) || err?.message;
+          if (warning) resultWarnings.push(warning);
+          return { records: [] };
+        })
+      };
+    }));
+    let records = results.flatMap((result, index) => {
+      return (result.records || []).map((record) => normalizeActivity(record, queries[index].source));
+    });
+    records = dedupeEmailActivities(records);
+
+    records.sort((a, b) => new Date(b.when || 0) - new Date(a.when || 0));
+    res.json({
+      records: records.slice(0, 50),
+      warnings: resultWarnings
+    });
+  } catch (err) {
+    handleSFError(err, res, `${object} activity ${id}`);
+  }
+});
+
+app.get('/api/:object/:id/related', checkAuth, async (req, res, next) => {
+  return checkPermission(req.params.object, 'can_read')(req, res, next);
+}, async (req, res) => {
+
+  const { object, id } = req.params;
+  const requestId = `related-${++securityPerfSeq}`;
+  const requestStartedAt = performance.now();
+  if (!OBJECTS[object]) return res.status(400).json({ error: `Unknown object: ${object}` });
+
+  try {
+    const sfStartedAt = performance.now();
+    const record = await sfGet(`/sobjects/${object}/${id}?fields=${PORTAL_OWNER_FIELD}`);
+    const parentSfMs = msSince(sfStartedAt);
+    if (!(await canSeeRecord(record, req.user.id, req.user.role, object, req.user.isSystemAdmin))) {
+      return res.status(403).json({
+        error: 'You do not have access to this record.',
+        code: 'RECORD_ACCESS_DENIED'
+      });
+    }
+
+    let customRelatedLists = [];
+    let hasCustom = false;
+    try {
+      const { data, error } = await supabase
+        .from('portal_record_pages')
+        .select('regions')
+        .eq('object_name', object)
+        .maybeSingle();
+      
+      if (!error && data && data.regions) {
+        for (const r of Object.keys(data.regions)) {
+          const list = data.regions[r] || [];
+          list.forEach(c => {
+            if (c && typeof c === 'object') {
+              if (c.name === 'related-lists') {
+                hasCustom = true;
+                if (c.relatedLists && c.relatedLists.length > 0) {
+                  customRelatedLists.push(...c.relatedLists.filter(rl => rl && rl.enabled));
+                }
+              } else if (c.name === 'related-list-single') {
+                hasCustom = true;
+                if (c.config && c.config.childObject && c.config.relationshipName) {
+                  const key = c.config.key || `${c.config.relationshipName.toLowerCase()}_single_${r}`;
+                  customRelatedLists.push({
+                    key: key,
+                    objectName: c.config.childObject,
+                    relationshipName: c.config.relationshipName,
+                    field: c.config.field,
+                    title: c.config.title || c.title || c.config.relationshipName,
+                    fields: c.config.fields || [],
+                    limit: c.config.limit || 5,
+                    sortBy: c.config.sortBy,
+                    sortDir: c.config.sortDir || 'ASC'
+                  });
+                }
+              }
+            }
+          });
+        }
+      }
+    } catch (dbErr) {
+      console.warn('DB error checking record page custom related lists:', dbErr);
+    }
+
+    let lists;
+    if (hasCustom) {
+      customRelatedLists = ensureRequiredRelatedListConfigs(object, customRelatedLists);
+      lists = await getCustomRelatedListForRecord(object, id, customRelatedLists);
+    } else {
+      lists = await getRelatedListsForRecord(object, id);
+    }
+
+    const visibleLists = await filterRelatedListsByVisibility(lists, req, requestId);
+    res.json({ object, id, lists: visibleLists });
+    securityPerfLog(requestId, 'GET related', {
+      object,
+      lists: visibleLists.length,
+      parentSfMs,
+      totalMs: msSince(requestStartedAt)
+    });
+  } catch (err) {
+    handleSFError(err, res, `Related lists ${object}/${id}`);
+  }
+});
+
+app.get('/api/:object/child-relationships', checkAuth, async (req, res) => {
+  const { object } = req.params;
+  if (!OBJECTS[object]) return res.status(400).json({ error: `Unknown object: ${object}` });
+  try {
+    const rels = await getObjectChildRelationships(object);
+    res.json({ relationships: rels });
+  } catch (err) {
+    handleSFError(err, res, `Child relationships for ${object}`);
+  }
+});
+
+app.get('/api/:object/:id/chatter', checkAuth, async (req, res) => {
+  const { object, id } = req.params;
+  if (!OBJECTS[object]) return res.status(400).json({ error: `Unknown object: ${object}` });
+
+  try {
+    const data = await sfGet(`/chatter/feeds/record/${encodeURIComponent(id)}/feed-elements`, {
+      pageSize: 20
+    });
+    res.json({
+      items: (data.elements || data.items || []).map(normalizeChatterItem),
+      nextPageUrl: data.nextPageUrl || data.nextPageToken || null
+    });
+  } catch (err) {
+    handleSFError(err, res, `Chatter feed ${object}/${id}`);
+  }
+});
+
+app.post('/api/:object/:id/chatter', checkAuth, async (req, res) => {
+  const { object, id } = req.params;
+  if (!OBJECTS[object]) return res.status(400).json({ error: `Unknown object: ${object}` });
+
+  const type = String(req.body?.type || 'post').toLowerCase();
+  const body = chatterBodyFromSegments(req.body?.segments);
+  const payload = {
+    subjectId: id,
+    feedElementType: 'FeedItem',
+    body
+  };
+
+  if (type === 'poll') {
+    const choices = (req.body?.choices || []).map((choice) => String(choice || '').trim()).filter(Boolean).slice(0, 10);
+    if (choices.length < 2) return res.status(400).json({ error: 'Poll requires at least two choices' });
+    payload.capabilities = {
+      poll: {
+        choices
+      }
+    };
+  }
+
+  try {
+    const item = await sfPost('/chatter/feed-elements', payload);
+    res.json({ item: normalizeChatterItem(item) });
+  } catch (err) {
+    handleSFError(err, res, `Create Chatter ${object}/${id}`);
+  }
+});
+
+app.post('/api/chatter/feed-elements/:feedElementId/comments', async (req, res) => {
+  const text = String(req.body?.text || '').trim();
+  if (!text) return res.status(400).json({ error: 'Comment is required' });
+
+  try {
+    const comment = await sfPost(
+      `/chatter/feed-elements/${encodeURIComponent(req.params.feedElementId)}/capabilities/comments/items`,
+      { body: { messageSegments: [{ type: 'Text', text }] } }
+    );
+    res.json({ comment });
+  } catch (err) {
+    handleSFError(err, res, `Chatter comment ${req.params.feedElementId}`);
+  }
+});
+
+app.post('/api/chatter/feed-elements/:feedElementId/likes', async (req, res) => {
+  try {
+    const like = await sfPost(
+      `/chatter/feed-elements/${encodeURIComponent(req.params.feedElementId)}/capabilities/chatter-likes/items`,
+      {}
+    );
+    res.json({ like });
+  } catch (err) {
+    handleSFError(err, res, `Chatter like ${req.params.feedElementId}`);
+  }
+});
+
+app.post('/api/chatter/feed-elements/:feedElementId/poll-vote', async (req, res) => {
+  const submittedChoiceId = String(req.body?.choiceId || '').trim();
+  if (!submittedChoiceId) return res.status(400).json({ error: 'Poll choice is required' });
+
+  try {
+    const choiceId = await resolveChatterPollChoiceId(req.params.feedElementId, submittedChoiceId);
+    if (!salesforceIdFromValue(choiceId)) return res.status(400).json({ error: 'Poll choice id is missing. Refresh Chatter and try again.' });
+    const vote = await sfPatch(
+      `/chatter/feed-elements/${encodeURIComponent(req.params.feedElementId)}/capabilities/poll`,
+      { myChoiceId: choiceId },
+      { params: { myChoiceId: choiceId } }
+    );
+    res.json({ vote });
+  } catch (err) {
+    handleSFError(err, res, `Chatter poll vote ${req.params.feedElementId}`);
+  }
+});
+
+app.post('/api/:object/:id/activity', checkAuth, async (req, res, next) => {
+  return checkPermission(req.params.object, 'can_create')(req, res, next);
+}, async (req, res) => {
+  const { object, id } = req.params;
+  if (!OBJECTS[object]) return res.status(400).json({ error: `Unknown object: ${object}` });
+
+  const type = String(req.body?.type || '').toLowerCase();
+  const relation = activityRelationFromBody(object, id, req.body);
+  const owner = req.body?.ownerId ? { OwnerId: req.body.ownerId } : {};
+
+  try {
+    if (type === 'task') {
+      const subject = String(req.body.subject || '').trim();
+      if (!subject) return res.status(400).json({ error: 'Subject is required' });
+      const result = await createTaskActivity({
+        Subject: subject,
+        ActivityDate: req.body.dueDate || null,
+        Status: req.body.status || 'Not Started',
+        Priority: req.body.priority || 'Normal',
+        Description: req.body.comments || '',
+        ...owner,
+        ...relation
+      });
+      return res.json({ success: true, result });
+    }
+
+    if (type === 'call') {
+      const result = await createTaskActivity({
+        Subject: String(req.body.subject || 'Call').trim() || 'Call',
+        Status: 'Completed',
+        Priority: req.body.priority || 'Normal',
+        ActivityDate: req.body.date || new Date().toISOString().slice(0, 10),
+        Description: req.body.comments || '',
+        ...owner,
+        ...relation
+      }, 'Call');
+      return res.json({ success: true, result });
+    }
+
+    if (type === 'event') {
+      const subject = String(req.body.subject || '').trim();
+      if (!subject) return res.status(400).json({ error: 'Subject is required' });
+      const isAllDay = Boolean(req.body.isAllDay);
+      const startDate = req.body.startDate || new Date().toISOString().slice(0, 10);
+      const endDate = req.body.endDate || startDate;
+      const eventBody = {
+        Subject: subject,
+        IsAllDayEvent: isAllDay,
+        StartDateTime: toSalesforceDateTime(startDate, isAllDay ? '00:00' : req.body.startTime || '09:00'),
+        EndDateTime: toSalesforceDateTime(endDate, isAllDay ? '23:59' : req.body.endTime || '10:00'),
+        Location: req.body.location || '',
+        Description: req.body.comments || '',
+        ...owner,
+        ...relation
+      };
+      const result = await sfPost('/sobjects/Event', eventBody);
+      return res.json({ success: true, result });
+    }
+
+    if (type === 'email') {
+      const subject = String(req.body.subject || '').trim();
+      const body = String(req.body.body || '').trim();
+      if (!subject) return res.status(400).json({ error: 'Subject is required' });
+      if (!body) return res.status(400).json({ error: 'Email body is required' });
+
+      let to = String(req.body.to || '').trim();
+      const toRecipients = Array.isArray(req.body.toRecipients) ? req.body.toRecipients : [];
+      const primaryRecipient = toRecipients.find((item) => item?.id);
+      let recipientId = primaryRecipient?.id || req.body.whoId || (['Contact', 'Lead'].includes(object) ? id : '');
+      if (!to && recipientId) {
+        const personObject = objectFromId(recipientId);
+        const person = ['Contact', 'Lead', 'User'].includes(personObject)
+          ? await sfGet(`/sobjects/${personObject}/${recipientId}`)
+          : {};
+        to = person.Email || '';
+      }
+      if (!to) return res.status(400).json({ error: 'Recipient email is required' });
+
+      const from = req.body.from || {};
+      const toAddresses = parseEmailAddressList(to);
+      const ccAddresses = parseEmailAddressList(req.body.cc);
+      const bccAddresses = parseEmailAddressList(req.body.bcc);
+      const attachmentParentId = req.body.whatId || id;
+      const uploadedAttachments = await uploadEmailAttachments(
+        Array.isArray(req.body.attachments) ? req.body.attachments : [],
+        attachmentParentId
+      );
+      const relatedRecordId = req.body.whatId || (!recipientId || recipientId !== id ? id : '');
+      const emailInput = {
+        emailAddressesArray: toAddresses,
+        emailSubject: subject,
+        emailBody: body,
+        sendRichBody: true,
+        useLineBreaks: false,
+        senderType: from.type === 'orgwide' ? 'OrgWideEmailAddress' : 'CurrentUser',
+        ...(from.type === 'orgwide' && from.email ? { senderAddress: from.email } : {}),
+        ...(ccAddresses.length ? { ccRecipientAddressCollection: ccAddresses } : {}),
+        ...(bccAddresses.length ? { bccRecipientAddressCollection: bccAddresses } : {}),
+        ...(uploadedAttachments.length ? { attachmentIdCollection: uploadedAttachments.map((file) => file.id) } : {}),
+        ...(recipientId ? { recipientId } : {}),
+        ...(relatedRecordId ? { relatedRecordId } : {}),
+        logEmailOnSend: true
+      };
+      const emailResult = await sfPost('/actions/standard/emailSimple', {
+        inputs: [emailInput]
+      });
+      const failures = extractActionFailures(emailResult);
+      if (failures.length) return res.status(400).json({ error: failures.join('; '), result: emailResult });
+
+      return res.json({ success: true, result: emailResult });
+    }
+
+    res.status(400).json({ error: 'Activity type must be task, call, event, or email' });
+  } catch (err) {
+    handleSFError(err, res, `Create ${type || 'activity'} for ${object}/${id}`);
+  }
+});
+
+// ─── Candidate Explorer: Caching, Metadata & Advanced Filters ────
+const CANDIDATE_CACHE = new Map();
+const CANDIDATE_COUNT_CACHE = new Map();
+const CAMPAIGN_MEMBER_ID_CACHE = new Map();
+const CANDIDATE_CACHE_TTL = 30000;
+
+const objectFieldDetailsCache = new Map();
+
+async function getObjectFieldDetails(objectName) {
+  const cacheKey = `${orgStore.activeOrgKey}:${objectName}`;
+  if (objectFieldDetailsCache.has(cacheKey)) return objectFieldDetailsCache.get(cacheKey);
+  const meta = await getObjectDescribe(objectName);
+  const fields = (meta.fields || [])
+    .filter(f => !f.deprecatedAndHidden)
+    .filter(f => !['address', 'location'].includes(f.type))
+    .map(f => ({ name: f.name, label: f.label, type: f.type, filterable: f.filterable, picklistValues: (f.picklistValues || []).filter(p => p.active).map(p => ({ label: p.label, value: p.value })) }))
+    .sort((a, b) => a.label.localeCompare(b.label));
+  objectFieldDetailsCache.set(cacheKey, fields);
+  return fields;
+}
+
+function invalidateCampaignMemberIdCache(campaignId) {
+  CAMPAIGN_MEMBER_ID_CACHE.delete(campaignId);
+}
+
+function getCachedOr(cache, key, ttl) {
+  const hit = cache.get(key);
+  if (hit && (Date.now() - hit.ts < ttl)) return hit.data;
+  return undefined;
+}
+
+app.get('/api/metadata/filterable-fields/:object', async (req, res) => {
+  const { object } = req.params;
+  if (!['Contact', 'Lead'].includes(object)) return res.status(400).json({ error: 'Object must be Contact or Lead' });
+  try {
+    const allFields = await getObjectFieldDetails(object);
+    const filterable = allFields.filter(f => f.filterable !== false && ['string', 'picklist', 'email', 'phone', 'url', 'boolean', 'double', 'integer', 'currency', 'percent', 'date', 'datetime', 'textarea', 'reference', 'id'].includes(f.type));
+    res.json({ fields: filterable });
+  } catch (err) {
+    handleSFError(err, res, `Filterable fields ${object}`);
+  }
+});
+
+app.get('/api/campaigns/:id/candidates/:object', async (req, res) => {
+  const { id, object } = req.params;
+  if (!['Contact', 'Lead'].includes(object)) return res.status(400).json({ error: 'Object must be Contact or Lead' });
+
+  try {
+    const search = String(req.query.search || '').trim();
+    const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 50, 1), 200);
+    const offset = Math.max(parseInt(req.query.offset, 10) || 0, 0);
+    let filters = [];
+    if (req.query.filters) { try { filters = JSON.parse(req.query.filters); } catch (_) {} }
+
+    const allFieldDetails = await getObjectFieldDetails(object);
+    const detailsMap = new Map(allFieldDetails.map(f => [f.name, f]));
+    detailsMap.set('Account.Name', { name: 'Account.Name', type: 'string', label: 'Account Name' });
+    detailsMap.set('Account.Industry', { name: 'Account.Industry', type: 'string', label: 'Account Industry' });
+    const availableFields = await getObjectFieldSet(object);
+    const cfg = OBJECTS[object];
+    const conditions = [];
+
+    if (search) {
+      const safe = escapeSOQL(search);
+      const parts = cfg.searchFields.filter(f => availableFields.has(f)).map(f => `${f} LIKE '%${safe}%'`);
+      if (parts.length) conditions.push(`(${parts.join(' OR ')})`);
+    }
+    if (object === 'Lead' && availableFields.has('IsConverted')) conditions.push('IsConverted = false');
+
+    if (Array.isArray(filters)) {
+      for (const { field, operator, value } of filters) {
+        if (!field || !operator) continue;
+        const meta = detailsMap.get(field);
+        if (!meta && !isSelectableField(field, availableFields)) continue;
+        const type = meta ? meta.type : 'string';
+        const sv = escapeSOQL(String(value || '').trim());
+        let cond = '';
+        if (operator === 'equals' || operator === 'eq') {
+          if (type === 'boolean') cond = `${field} = ${String(value).toLowerCase() === 'true' ? 'true' : 'false'}`;
+          else if (['double','integer','currency','percent'].includes(type)) cond = `${field} = ${parseFloat(sv) || 0}`;
+          else if (['date','datetime'].includes(type)) { if (sv) cond = `${field} = ${sv}`; }
+          else cond = `${field} = '${sv}'`;
+        } else if (operator === 'not_equal' || operator === 'ne') {
+          if (type === 'boolean') cond = `${field} != ${String(value).toLowerCase() === 'true' ? 'true' : 'false'}`;
+          else if (['double','integer','currency','percent'].includes(type)) cond = `${field} != ${parseFloat(sv) || 0}`;
+          else if (['date','datetime'].includes(type)) { if (sv) cond = `${field} != ${sv}`; }
+          else cond = `${field} != '${sv}'`;
+        } else if (operator === 'contains') { cond = `${field} LIKE '%${sv}%'`; }
+        else if (operator === 'starts_with') { cond = `${field} LIKE '${sv}%'`; }
+        else if (operator === 'ends_with') { cond = `${field} LIKE '%${sv}'`; }
+        else if (operator === 'greater_than' || operator === 'gt') {
+          if (['double','integer','currency','percent'].includes(type)) cond = `${field} > ${parseFloat(sv) || 0}`;
+          else if (['date','datetime'].includes(type)) { if (sv) cond = `${field} > ${sv}`; }
+          else cond = `${field} > '${sv}'`;
+        } else if (operator === 'less_than' || operator === 'lt') {
+          if (['double','integer','currency','percent'].includes(type)) cond = `${field} < ${parseFloat(sv) || 0}`;
+          else if (['date','datetime'].includes(type)) { if (sv) cond = `${field} < ${sv}`; }
+          else cond = `${field} < '${sv}'`;
+        } else if (operator === 'is_null') {
+          if (['string', 'textarea', 'picklist', 'phone', 'email', 'url', 'id', 'reference'].includes(type)) {
+            cond = `(${field} = null OR ${field} = '')`;
+          } else {
+            cond = `${field} = null`;
+          }
+        } else if (operator === 'is_not_null') {
+          if (['string', 'textarea', 'picklist', 'phone', 'email', 'url', 'id', 'reference'].includes(type)) {
+            cond = `(${field} != null AND ${field} != '')`;
+          } else {
+            cond = `${field} != null`;
+          }
+        }
+        if (cond) conditions.push(cond);
+      }
+    }
+
+    const where = conditions.length ? ` WHERE ${conditions.join(' AND ')}` : '';
+    const dataSoql = `SELECT ${await fieldsCsvForObject(object)} FROM ${object}${where} ORDER BY ${cfg.orderBy} LIMIT ${limit} OFFSET ${offset}`;
+    const countSoql = `SELECT COUNT() FROM ${object}${where}`;
+
+    // Cache layer: campaign member IDs
+    let memberIds = getCachedOr(CAMPAIGN_MEMBER_ID_CACHE, id, CANDIDATE_CACHE_TTL);
+    if (!memberIds) {
+      const md = await sfGet('/query', { q: `SELECT ContactId, LeadId FROM CampaignMember WHERE CampaignId = '${escapeSOQL(id)}' LIMIT 10000` });
+      memberIds = new Set((md.records || []).map(r => r.ContactId || r.LeadId).filter(Boolean));
+      CAMPAIGN_MEMBER_ID_CACHE.set(id, { data: memberIds, ts: Date.now() });
+    }
+
+    // Cache layer: people records
+    let records = getCachedOr(CANDIDATE_CACHE, dataSoql, CANDIDATE_CACHE_TTL);
+    if (!records) {
+      const d = await sfGet('/query', { q: dataSoql });
+      records = d.records || [];
+      CANDIDATE_CACHE.set(dataSoql, { data: records, ts: Date.now() });
+    }
+
+    // Cache layer: total count
+    let totalSize = getCachedOr(CANDIDATE_COUNT_CACHE, countSoql, CANDIDATE_CACHE_TTL);
+    if (totalSize === undefined) {
+      const d = await sfGet('/query', { q: countSoql });
+      totalSize = d.totalSize || 0;
+      CANDIDATE_COUNT_CACHE.set(countSoql, { data: totalSize, ts: Date.now() });
+    }
+
+    res.json({
+      records: records.map(record => ({ ...record, alreadyMember: memberIds.has(record.Id) })),
+      totalSize
+    });
+  } catch (err) {
+    handleSFError(err, res, `Campaign ${req.params.id} candidates ${object}`);
+  }
+});
+
+app.post('/api/campaigns/:id/members', async (req, res) => {
+  const { id } = req.params;
+  const { object, ids = [], status } = req.body || {};
+  if (!['Contact', 'Lead'].includes(object)) return res.status(400).json({ error: 'Object must be Contact or Lead' });
+
+  const uniqueIds = [...new Set(ids.map(String).filter(Boolean))].slice(0, 200);
+  if (!uniqueIds.length) return res.status(400).json({ error: 'Select at least one record' });
+
+  try {
+    const idList = uniqueIds.map((recordId) => `'${escapeSOQL(recordId)}'`).join(',');
+    const idField = object === 'Contact' ? 'ContactId' : 'LeadId';
+    const existingData = await sfGet('/query', {
+      q: `SELECT ${idField} FROM CampaignMember WHERE CampaignId = '${escapeSOQL(id)}' AND ${idField} IN (${idList})`
+    });
+    const existing = new Set((existingData.records || []).map((record) => record[idField]).filter(Boolean));
+    const records = uniqueIds
+      .filter((recordId) => !existing.has(recordId))
+      .map((recordId) => ({
+        attributes: { type: 'CampaignMember' },
+        CampaignId: id,
+        [idField]: recordId,
+        ...(status ? { Status: status } : {})
+      }));
+
+    if (!records.length) {
+      return res.json({ success: true, created: 0, skipped: uniqueIds.length, results: [] });
+    }
+
+    const result = await sfPost('/composite/sobjects', { allOrNone: false, records });
+    const results = Array.isArray(result) ? result : result.results || [];
+    invalidateCampaignMemberIdCache(id);
+    res.json({
+      success: true,
+      created: results.filter((item) => item.success).length,
+      skipped: existing.size,
+      results
+    });
+  } catch (err) {
+    handleSFError(err, res, `Add campaign members ${id}`);
+  }
+});
+
+app.get('/api/campaigns/:id/email-templates', async (req, res) => {
+  try {
+    const records = await queryClassicEmailTemplates(req.query.limit || 500);
+    res.json({ records });
+  } catch (err) {
+    handleSFError(err, res, `Email templates for campaign ${req.params.id}`);
+  }
+});
+
+app.post('/api/campaigns/:id/email-preview', async (req, res) => {
+  const { templateId, memberIds = [] } = req.body || {};
+  if (!templateId) return res.status(400).json({ error: 'Select an email template' });
+
+  try {
+    const [campaign, template, context] = await Promise.all([
+      sfGet(`/sobjects/Campaign/${req.params.id}`),
+      sfGet(`/sobjects/EmailTemplate/${templateId}`),
+      getEmailMergeContext()
+    ]);
+    let recipient = {};
+    if (memberIds.length) {
+      const memberData = await sfGet('/query', {
+        q: `
+          SELECT Id, Status, ContactId, LeadId,
+            Contact.FirstName, Contact.LastName, Contact.Name, Contact.Email,
+            Lead.FirstName, Lead.LastName, Lead.Name, Lead.Email
+          FROM CampaignMember
+          WHERE Id = '${escapeSOQL(memberIds[0])}'
+          LIMIT 1
+        `.replace(/\s+/g, ' ').trim()
+      });
+      recipient = normalizeCampaignMember(memberData.records?.[0] || {});
+    }
+
+    const html = emailTemplateBody(template);
+    const mergedHtml = mergeTemplate(html, recipient, campaign, context.sender, context.organization);
+    const subject = mergeTemplate(emailTemplateSubject(template), recipient, campaign, context.sender, context.organization);
+    res.json({
+      subject,
+      html: mergedHtml,
+      text: stripHtml(mergedHtml),
+      recipient
+    });
+  } catch (err) {
+    handleSFError(err, res, `Email preview ${req.params.id}`);
+  }
+});
+
+app.post('/api/campaigns/:id/send-email', async (req, res) => {
+  const { templateId, memberIds = [] } = req.body || {};
+  const selectedIds = [...new Set(memberIds.map(String).filter(Boolean))].slice(0, 100);
+  if (!templateId) return res.status(400).json({ error: 'Select an email template' });
+  if (!selectedIds.length) return res.status(400).json({ error: 'Select at least one campaign member' });
+
+  try {
+    const [campaign, template, context] = await Promise.all([
+      sfGet(`/sobjects/Campaign/${req.params.id}`),
+      sfGet(`/sobjects/EmailTemplate/${templateId}`),
+      getEmailMergeContext()
+    ]);
+    const memberIdList = selectedIds.map((id) => `'${escapeSOQL(id)}'`).join(',');
+    const memberData = await sfGet('/query', {
+      q: `
+        SELECT Id, Status, ContactId, LeadId,
+          Contact.FirstName, Contact.LastName, Contact.Name, Contact.Email,
+          Lead.FirstName, Lead.LastName, Lead.Name, Lead.Email
+        FROM CampaignMember
+        WHERE Id IN (${memberIdList})
+      `.replace(/\s+/g, ' ').trim()
+    });
+    const members = (memberData.records || []).map(normalizeCampaignMember).filter((member) => member.email);
+    if (!members.length) return res.status(400).json({ error: 'Selected members do not have email addresses' });
+
+    const templateBody = emailTemplateBody(template);
+    const isHtmlTemplate = Boolean(template.HtmlValue);
+    const mergedMessages = members.map((member) => {
+      const mergedBody = mergeTemplate(templateBody, member, campaign, context.sender, context.organization);
+      const subject = mergeTemplate(emailTemplateSubject(template) || campaign.Name || 'Campaign email', member, campaign, context.sender, context.organization);
+      return {
+        member,
+        subject,
+        body: mergedBody,
+        textBody: stripHtml(mergedBody),
+        input: {
+          emailAddresses: member.email,
+          emailSubject: subject,
+          emailBody: isHtmlTemplate ? mergedBody : stripHtml(mergedBody),
+          sendRichBody: isHtmlTemplate,
+          useLineBreaks: !isHtmlTemplate,
+          senderType: 'CurrentUser',
+          recipientId: member.personId,
+          relatedRecordId: campaign.Id,
+          logEmailOnSend: true
+        }
+      };
+    });
+    const inputs = mergedMessages.map((message) => message.input);
+
+    const result = await sfPost('/actions/standard/emailSimple', { inputs });
+    const failures = extractActionFailures(result);
+    if (failures.length) {
+      return res.status(400).json({ error: failures.join('; '), result });
+    }
+
+    res.json({
+      success: true,
+      sent: inputs.length,
+      logged: inputs.length,
+      logWarning: '',
+      result
+    });
+  } catch (err) {
+    handleSFError(err, res, `Send campaign email ${req.params.id}`);
+  }
+});
+
+// Bulk API 2.0 query for export-scale reads
+app.post('/api/bulk/query', checkAuth, requireAdminPanel, async (req, res) => {
+  const { soql, wait = true, includeRecords = true, maxRecords, maxWaitMs } = req.body || {};
+
+  try {
+    const job = await createBulkQueryJob(soql);
+    const finalJob = wait ? await pollBulkQueryJob(job.id, maxWaitMs) : job;
+    const response = { success: finalJob.state === 'JobComplete', job: finalJob };
+
+    if (includeRecords && finalJob.state === 'JobComplete') {
+      const page = await getBulkQueryResults(job.id, { maxRecords: maxRecords || BULK_QUERY_PAGE_SIZE });
+      response.records = page.records;
+      response.locator = page.locator;
+      response.numberOfRecords = page.numberOfRecords;
+      response.done = !page.locator;
+    }
+
+    res.json(response);
+  } catch (err) {
+    handleSFError(err, res, 'Bulk query');
+  }
+});
+
+app.get('/api/bulk/query/:jobId', checkAuth, requireAdminPanel, async (req, res) => {
+  try {
+    res.json({ job: await getBulkQueryJob(req.params.jobId) });
+  } catch (err) {
+    handleSFError(err, res, `Bulk query job ${req.params.jobId}`);
+  }
+});
+
+app.get('/api/bulk/query/:jobId/results', checkAuth, requireAdminPanel, async (req, res) => {
+  try {
+    const page = await getBulkQueryResults(req.params.jobId, {
+      locator: req.query.locator,
+      maxRecords: req.query.maxRecords || BULK_QUERY_PAGE_SIZE
+    });
+
+    if (req.query.format === 'csv') {
+      res.type('text/csv');
+      res.set('Sforce-Locator', page.locator || 'null');
+      return res.send(page.csv);
+    }
+
+    res.json({
+      records: page.records,
+      locator: page.locator,
+      numberOfRecords: page.numberOfRecords,
+      done: !page.locator
+    });
+  } catch (err) {
+    handleSFError(err, res, `Bulk query results ${req.params.jobId}`);
+  }
+});
+
+app.post('/api/bulk/:object/query', checkAuth, async (req, res, next) => {
+  const { object } = req.params;
+  if (OBJECTS[object]) return checkPermission(object, 'can_read')(req, res, next);
+  next();
+}, async (req, res) => {
+  const { object } = req.params;
+  if (!OBJECTS[object]) return res.status(400).json({ error: `Unknown object: ${object}` });
+
+  try {
+    const soql = req.body?.soql || await buildBulkSOQL(object, req.body?.search, req.body?.where);
+    const job = await createBulkQueryJob(soql);
+    const finalJob = req.body?.wait === false ? job : await pollBulkQueryJob(job.id, req.body?.maxWaitMs);
+    const response = { success: finalJob.state === 'JobComplete', job: finalJob, soql };
+
+    if (req.body?.includeRecords !== false && finalJob.state === 'JobComplete') {
+      const page = await getBulkQueryResults(job.id, { maxRecords: req.body?.maxRecords || BULK_QUERY_PAGE_SIZE });
+      response.records = page.records;
+      response.locator = page.locator;
+      response.numberOfRecords = page.numberOfRecords;
+      response.done = !page.locator;
+    }
+
+    res.json(response);
+  } catch (err) {
+    handleSFError(err, res, `Bulk ${object} query`);
+  }
+});
+
+// Bulk API 2.0 ingest for large create/update/upsert/delete jobs
+app.post('/api/bulk/:object/:operation', checkAuth, async (req, res, next) => {
+  const { object, operation } = req.params;
+  if (!OBJECTS[object]) return next();
+  const action = bulkOperationAction(operation);
+  if (action) return checkPermission(object, action)(req, res, next);
+  next();
+}, async (req, res, next) => {
+  const { object, operation } = req.params;
+  if (OBJECTS[object] && ['insert', 'update', 'upsert'].includes(operation)) {
+    return attachFieldPerms(object)(req, res, next);
+  }
+  next();
+}, async (req, res) => {
+  const { object, operation } = req.params;
+  if (!OBJECTS[object]) return res.status(400).json({ error: `Unknown object: ${object}` });
+  if (!['insert', 'update', 'upsert', 'delete'].includes(operation)) {
+    return res.status(400).json({ error: 'Bulk operation must be insert, update, upsert, or delete' });
+  }
+
+  try {
+    let records = Array.isArray(req.body) ? req.body : req.body?.records;
+    if (Array.isArray(records) && ['insert', 'update', 'upsert'].includes(operation)) {
+      records = records.map(record => {
+        const clean = flattenRecord(record);
+        if (operation === 'insert') return applyFieldWriteSecurity(clean, req.fieldPerms);
+        const { Id, ...fields } = clean;
+        return { Id, ...applyFieldWriteSecurity(fields, req.fieldPerms) };
+      });
+    }
+
+    if (!isFullAccessUser(req.user) && ['update', 'upsert', 'delete'].includes(operation)) {
+      const rows = Array.isArray(records) ? records : [];
+      const ids = rows.map(record => record?.Id).filter(Boolean);
+      if (!rows.length || ids.length !== rows.length) {
+        return res.status(403).json({
+          error: 'Bulk update, upsert, and delete require record Id values for record-level security checks.',
+          code: 'RECORD_ACCESS_CHECK_REQUIRED'
+        });
+      }
+
+      const ownedRecords = await hydrateRecordOwners(ids.map(Id => ({ Id })), object);
+      const denied = [];
+      for (const record of ownedRecords) {
+        if (!(await canEditRecord(record, req.user.id, req.user.role, object, req.user.isSystemAdmin))) {
+          denied.push(record.Id);
+        }
+      }
+      if (denied.length) {
+        return res.status(403).json({
+          error: permissionDeniedMessage(),
+          code: operation === 'delete' ? 'RECORD_DELETE_DENIED' : 'RECORD_EDIT_DENIED',
+          deniedIds: denied
+        });
+      }
+    }
+
+    const result = await runBulkIngest(object, operation, records, {
+      externalIdFieldName: req.body?.externalIdFieldName,
+      wait: req.body?.wait,
+      maxWaitMs: req.body?.maxWaitMs,
+      includeResults: req.body?.includeResults
+    });
+    res.json(result);
+  } catch (err) {
+    handleSFError(err, res, `Bulk ${operation} ${object}`);
+  }
+});
+
+// List records
+app.get('/api/:object', checkAuth,
+
+  async (req, res, next) => {
+    const obj = req.params.object;
+    if (OBJECTS[obj]) {
+      return checkPermission(obj, 'can_read')(req, res, next);
+    }
+    next();
+  },
+
+  async (req, res, next) => {
+    const obj = req.params.object;
+    if (OBJECTS[obj]) {
+      return attachFieldPerms(obj)(req, res, next);
+    }
+    next();
+  },
+
+  async (req, res) => {
+    const { object } = req.params;
+    const requestId = `list-${++securityPerfSeq}`;
+    const requestStartedAt = performance.now();
+
+    if (!OBJECTS[object]) {
+      return res.status(400).json({
+        error: `Unknown object: ${object}`
+      });
+    }
+
+    try {
+
+      // Pagination (queryMore)
+      if (req.query.cursor) {
+        const sfStartedAt = performance.now();
+        const data = await sfGet(
+          queryMoreEndpoint(req.query.cursor),
+          {},
+          { headers: QUERY_BATCH_HEADERS }
+        );
+        const sfMs = msSince(sfStartedAt);
+
+        const ownerStartedAt = performance.now();
+        const ownedRecords = await hydrateRecordOwners(data.records || [], object);
+        const ownerMs = msSince(ownerStartedAt);
+        const visibleRecords = await applyRecordVisibility(
+          ownedRecords,
+          req.user.id,
+          req.user.role,
+          object,
+          req.user.isSystemAdmin,
+          requestId
+        );
+        const records = visibleRecords.map(record =>
+          applyFieldSecurity(record, req.fieldPerms)
+        );
+        const canUseSalesforceTotal = await canUseSalesforceTotalForList(object, req.user);
+
+        securityPerfLog(requestId, 'GET list cursor', {
+          object,
+          sfRecords: data.records?.length || 0,
+          evaluated: ownedRecords.length,
+          visible: records.length,
+          sfMs,
+          ownerMs,
+          totalMs: msSince(requestStartedAt)
+        });
+        return res.json({
+          records,
+          totalSize: canUseSalesforceTotal ? (data.totalSize || 0) : records.length,
+          done: Boolean(data.done),
+          nextRecordsUrl: data.nextRecordsUrl || null,
+          hiddenFields: [...(req.fieldPerms?.hiddenFields || [])]
+        });
+      }
+
+      // Initial query
+      const availableFields = await getObjectFieldSet(object);
+      const scope = await buildReadableRecordScopeFilter(object, req.user, requestId, availableFields);
+      const soql = await buildSOQL(
+        object,
+        req.query.search,
+        [req.query.where, scope.clause].filter(Boolean).join(' AND '),
+        null,
+        0,
+        availableFields
+      );
+
+      const sfStartedAt = performance.now();
+      const data = await sfGet(
+        '/query',
+        { q: soql },
+        { headers: QUERY_BATCH_HEADERS }
+      );
+      const sfMs = msSince(sfStartedAt);
+
+      const ownerStartedAt = performance.now();
+      const canTrustScopedQuery = listScopeEnforcesVisibility(scope, req.user);
+      const ownedRecords = canTrustScopedQuery
+        ? (data.records || [])
+        : await hydrateRecordOwners(data.records || [], object);
+      const ownerMs = msSince(ownerStartedAt);
+
+      // Apply record visibility only when the Salesforce query was not already scoped.
+      const visibleRecords = canTrustScopedQuery
+        ? ownedRecords
+        : await applyRecordVisibility(
+            ownedRecords,
+            req.user.id,
+            req.user.role,
+            object,
+            req.user.isSystemAdmin,
+            requestId
+          );
+      const records = visibleRecords.map(record =>
+        applyFieldSecurity(record, req.fieldPerms)
+      );
+      const canUseSalesforceTotal = await canUseSalesforceTotalForList(object, req.user, scope);
+
+      res.json({
+        ...data,
+        records,
+        totalSize: canUseSalesforceTotal ? (data.totalSize || 0) : records.length,
+        done: Boolean(data.done),
+        nextRecordsUrl: data.nextRecordsUrl || null,
+        hiddenFields: [...(req.fieldPerms?.hiddenFields || [])]
+      });
+      securityPerfLog(requestId, 'GET list', {
+        object,
+        scope: scope.reason,
+        sfRecords: data.records?.length || 0,
+        evaluated: ownedRecords.length,
+        visible: records.length,
+        sfMs,
+        ownerMs,
+        totalMs: msSince(requestStartedAt)
+      });
+
+    } catch (err) {
+      handleSFError(err, res, `GET ${object}`);
+    }
+  }
+);
+
+app.get('/api/:object/:id', checkAuth,
+
+  async (req, res, next) => {
+    const obj = req.params.object;
+    if (OBJECTS[obj]) {
+      return checkPermission(obj, 'can_read')(req, res, next);
+    }
+    next();
+  },
+
+  async (req, res, next) => {
+    const obj = req.params.object;
+    if (OBJECTS[obj]) {
+      return attachFieldPerms(obj)(req, res, next);
+    }
+    next();
+  },
+
+  async (req, res) => {
+    const { object, id } = req.params;
+    const requestId = `detail-${++securityPerfSeq}`;
+    const requestStartedAt = performance.now();
+
+    if (!OBJECTS[object]) {
+      return res.status(400).json({
+        error: `Unknown object: ${object}`
+      });
+    }
+
+    try {
+      const cached = getRecentRecordDetail(object, id, req.user.id);
+      if (cached) return res.json(cached);
+
+      const cacheKey = recordDetailCacheKey(object, id, req.user.id);
+      if (recentRecordDetailInflight.has(cacheKey)) {
+        recentRecordDetailStats.deduped += 1;
+        return res.json(cloneMetadata(await recentRecordDetailInflight.get(cacheKey)));
+      }
+
+      recentRecordDetailStats.rebuilds += 1;
+      const payloadPromise = (async () => {
+        const sfStartedAt = performance.now();
+        const [record, meta] = await getRecordAndDescribe(object, id);
+        const sfMs = msSince(sfStartedAt);
+
+        const fields = meta.fields
+          .filter(field => !field.deprecatedAndHidden)
+          .map(field => ({
+            name: field.name,
+            label: field.label,
+            type: field.type,
+            updateable: field.updateable,
+            createable: field.createable,
+            nillable: field.nillable,
+            referenceTo: field.referenceTo || [],
+            relationshipName: field.relationshipName || '',
+            controllerName: field.controllerName || '',
+            controllerValues: field.controllerValues || {},
+            picklistValues: normalizePicklistValues(field),
+
+            // Field-level security
+            fieldSecurityReadOnly:
+              req.fieldPerms?.readonlyFields?.has(field.name) || false
+          }))
+          .filter(field =>
+            !req.fieldPerms?.hiddenFields?.has(field.name)
+          );
+
+        const cleanRecord = applyFieldSecurity(record, req.fieldPerms);
+        // Check if user can see this specific record and return record-level access to the UI.
+        const securityStartedAt = performance.now();
+        const recordAccess = await evaluateRecordAccess(
+          record,
+          req.user.id,
+          req.user.role,
+          object,
+          req.user.isSystemAdmin
+        );
+        const securityMs = msSince(securityStartedAt);
+        if (!recordAccess.allowed) {
+          const denied = new Error('You do not have access to this record.');
+          denied.statusCode = 403;
+          denied.code = 'RECORD_ACCESS_DENIED';
+          throw denied;
+        }
+
+        const lookupLabels = await buildLookupLabels(
+          cleanRecord,
+          fields
+        );
+
+        const payload = {
+          record: cleanRecord,
+          fields,
+          lookupLabels,
+          recordAccess
+        };
+        setRecentRecordDetail(object, id, req.user.id, payload);
+        securityPerfLog(requestId, 'GET detail', {
+          object,
+          sfRecords: 1,
+          evaluated: 1,
+          visible: 1,
+          access: recordAccess.accessLevel,
+          via: recordAccess.via,
+          sfMs,
+          securityMs,
+          totalMs: msSince(requestStartedAt)
+        });
+        return payload;
+      })().finally(() => recentRecordDetailInflight.delete(cacheKey));
+
+      recentRecordDetailInflight.set(cacheKey, payloadPromise);
+      res.json(cloneMetadata(await payloadPromise));
+
+    } catch (err) {
+      if (err.statusCode === 403) {
+        return res.status(403).json({
+          error: err.message,
+          code: err.code || 'RECORD_ACCESS_DENIED'
+        });
+      }
+      handleSFError(err, res, `GET ${object}/${id}`);
+    }
+  }
+);
+
+// Create record
+app.post('/api/:object', checkAuth, async (req, res, next) => {
+  const obj = req.params.object;
+  if (OBJECTS[obj]) return checkPermission(obj, 'can_create')(req, res, next);
+  next();
+}, async (req, res, next) => {
+  const obj = req.params.object;
+  if (OBJECTS[obj]) return attachFieldPerms(obj)(req, res, next);
+  next();
+}, async (req, res) => {
+  const { object } = req.params;
+  if (!OBJECTS[object]) return res.status(400).json({ error: `Unknown object: ${object}` });
+
+  try {
+    const records = Array.isArray(req.body) ? req.body : req.body?.records;
+    if (Array.isArray(records)) {
+      if (!records.length) return res.status(400).json({ error: 'Create requires at least one record' });
+      const securedRecords = records.map(record => applyFieldWriteSecurity(flattenRecord(record), req.fieldPerms));
+      if (records.length >= BULK_AUTO_THRESHOLD || req.query.bulk === 'true' || req.body?.bulk === true) {
+        const result = await runBulkIngest(object, 'insert', securedRecords, {
+          wait: req.body?.wait,
+          includeResults: req.body?.includeResults
+        });
+        return res.json({ ...result, bulk: true });
+      }
+
+      const result = await sfPost('/composite/sobjects', {
+        allOrNone: false,
+        // Bulk create - stamp ownership
+        records: securedRecords.map(record => ({
+          attributes: { type: object },
+          ...record,
+          Portal_Owner__c: req.user.id,
+          Portal_Created_By__c: req.user.id,
+          Portal_Last_Modified_By__c: req.user.id
+        }))
+      });
+      return res.json({ bulk: false, result });
+    }
+
+    // Stamp portal ownership fields on create
+    const bodyWithOwner = {
+      ...applyFieldWriteSecurity(req.body, req.fieldPerms),
+      Portal_Owner__c: req.user.id,
+      Portal_Created_By__c: req.user.id,
+      Portal_Last_Modified_By__c: req.user.id,
+    };
+    const result = await sfPost(`/sobjects/${object}`, bodyWithOwner);
+    res.json(result);
+  } catch (err) {
+    handleSFError(err, res, `POST ${object}`);
+  }
+});
+
+// Bulk-aware update route for array payloads: { records: [{ Id, ...fields }] }
+app.patch('/api/:object', checkAuth, async (req, res, next) => {
+  const { object } = req.params;
+  if (OBJECTS[object]) return checkPermission(object, 'can_edit')(req, res, next);
+  next();
+}, async (req, res, next) => {
+  const { object } = req.params;
+  if (OBJECTS[object]) return attachFieldPerms(object)(req, res, next);
+  next();
+}, async (req, res) => {
+  const { object } = req.params;
+  if (!OBJECTS[object]) return res.status(400).json({ error: `Unknown object: ${object}` });
+
+  try {
+    const records = Array.isArray(req.body) ? req.body : req.body?.records;
+    if (!Array.isArray(records) || !records.length) {
+      return res.status(400).json({ error: 'Update requires records with Id values' });
+    }
+
+    if (!isFullAccessUser(req.user)) {
+      const ids = records.map(record => record?.Id).filter(Boolean);
+      if (ids.length !== records.length) {
+        return res.status(400).json({ error: 'Update requires Id on every record' });
+      }
+
+      const ownedRecords = await hydrateRecordOwners(ids.map(Id => ({ Id })), object);
+      const denied = [];
+      for (const record of ownedRecords) {
+        if (!(await canEditRecord(record, req.user.id, req.user.role, object, req.user.isSystemAdmin))) {
+          denied.push(record.Id);
+        }
+      }
+      if (denied.length) {
+        return res.status(403).json({
+          error: permissionDeniedMessage(),
+          code: 'RECORD_EDIT_DENIED',
+          deniedIds: denied
+        });
+      }
+    }
+
+    if (records.length >= BULK_AUTO_THRESHOLD || req.query.bulk === 'true' || req.body?.bulk === true) {
+      const securedRecords = records.map(record => {
+        const clean = flattenRecord(record);
+        const { Id, ...fields } = clean;
+        return { Id, ...applyFieldWriteSecurity(fields, req.fieldPerms) };
+      });
+      const result = await runBulkIngest(object, 'update', securedRecords, {
+        wait: req.body?.wait,
+        includeResults: req.body?.includeResults
+      });
+      securedRecords.forEach((record) => invalidateRecentRecordDetail(object, record.Id));
+      return res.json({ ...result, bulk: true });
+    }
+
+    const results = await Promise.allSettled(records.map((record) => {
+      const clean = flattenRecord(record);
+      const { Id, ...fields } = clean;
+      if (!Id) throw new Error('Update requires Id on every record');
+      return sfPatch(`/sobjects/${object}/${Id}`, applyFieldWriteSecurity(fields, req.fieldPerms));
+    }));
+    records.forEach((record) => {
+      if (record?.Id) invalidateRecentRecordDetail(object, record.Id);
+    });
+    res.json({
+      bulk: false,
+      success: results.every((item) => item.status === 'fulfilled'),
+      results: results.map((item, index) => ({
+        id: records[index].Id,
+        success: item.status === 'fulfilled',
+        error: item.status === 'rejected' ? formatSalesforceError(item.reason?.response?.data) || item.reason?.message : ''
+      }))
+    });
+  } catch (err) {
+    handleSFError(err, res, `PATCH ${object}`);
+  }
+});
+
+// Update record
+app.patch('/api/:object/:id', checkAuth,
+
+  async (req, res, next) => {
+    const obj = req.params.object;
+
+    if (OBJECTS[obj]) {
+      return checkPermission(obj, 'can_edit')(req, res, next);
+    }
+
+    next();
+  },
+
+  // Record-level edit security
+  async (req, res, next) => {
+    const { object, id } = req.params;
+    req.securityPerfId = `patch-${++securityPerfSeq}`;
+    req.securityPerfStartedAt = performance.now();
+
+    if (!OBJECTS[object]) return next();
+    if (isFullAccessUser(req.user)) return next();
+
+    try {
+      const sfStartedAt = performance.now();
+      const record = await sfGet(
+        `/sobjects/${object}/${id}?fields=Portal_Owner__c`
+      );
+      record.Id = record.Id || id;
+      const sfMs = msSince(sfStartedAt);
+
+      const securityStartedAt = performance.now();
+      const allowed = await canEditRecord(
+        record,
+        req.user.id,
+        req.user.role,
+        object,
+        req.user.isSystemAdmin
+      );
+      const securityMs = msSince(securityStartedAt);
+
+      if (!allowed) {
+        return res.status(403).json({
+          error: permissionDeniedMessage(),
+          code: 'RECORD_EDIT_DENIED'
+        });
+      }
+
+      securityPerfLog(req.securityPerfId, 'PATCH edit-check', {
+        object,
+        sfRecords: 1,
+        evaluated: 1,
+        visible: 1,
+        sfMs,
+        securityMs,
+        totalMs: msSince(req.securityPerfStartedAt)
+      });
+      next();
+
+    } catch (err) {
+      console.error(`[record-visibility] edit check failed for ${object}/${id}:`, err.message);
+      return res.status(403).json({
+        error: permissionDeniedMessage(),
+        code: 'RECORD_EDIT_CHECK_FAILED'
+      });
+    }
+  },
+
+  async (req, res, next) => {
+    const { object } = req.params;
+    if (OBJECTS[object]) return attachFieldPerms(object)(req, res, next);
+    next();
+  },
+
+  async (req, res) => {
+    const { object, id } = req.params;
+
+    if (!OBJECTS[object]) {
+      return res.status(400).json({
+        error: `Unknown object: ${object}`
+      });
+    }
+
+    try {
+      const bodyWithModifier = {
+        ...applyFieldWriteSecurity(req.body, req.fieldPerms),
+        Portal_Last_Modified_By__c: req.user.id
+      };
+
+      const sfStartedAt = performance.now();
+      await sfPatch(
+        `/sobjects/${object}/${id}`,
+        bodyWithModifier
+      );
+      const sfMs = msSince(sfStartedAt);
+      invalidateRecentRecordDetail(object, id);
+
+      res.json({
+        success: true
+      });
+      securityPerfLog(req.securityPerfId || `patch-${++securityPerfSeq}`, 'PATCH sf-update', {
+        object,
+        sfRecords: 1,
+        evaluated: 1,
+        visible: 1,
+        sfMs,
+        totalMs: req.securityPerfStartedAt ? msSince(req.securityPerfStartedAt) : sfMs
+      });
+
+    } catch (err) {
+      handleSFError(
+        err,
+        res,
+        `PATCH ${object}/${id}`
+      );
+    }
+  }
+);
+
+// Bulk-aware delete route for array payloads: { ids: [] } or { records: [{ Id }] }
+app.delete('/api/:object', checkAuth, async (req, res, next) => {
+  const { object } = req.params;
+  if (OBJECTS[object]) return checkPermission(object, 'can_delete')(req, res, next);
+  next();
+}, async (req, res) => {
+  const { object } = req.params;
+  if (!OBJECTS[object]) return res.status(400).json({ error: `Unknown object: ${object}` });
+
+  try {
+    const ids = Array.isArray(req.body?.ids)
+      ? req.body.ids
+      : (Array.isArray(req.body?.records) ? req.body.records.map((record) => record.Id) : []);
+    const records = [...new Set(ids.map(String).filter(Boolean))].map((Id) => ({ Id }));
+    if (!records.length) return res.status(400).json({ error: 'Delete requires ids or records with Id values' });
+
+    if (!isFullAccessUser(req.user)) {
+      const ownedRecords = await hydrateRecordOwners(records, object);
+      const denied = [];
+      for (const record of ownedRecords) {
+        if (!(await canEditRecord(record, req.user.id, req.user.role, object, req.user.isSystemAdmin))) {
+          denied.push(record.Id);
+        }
+      }
+      if (denied.length) {
+        return res.status(403).json({
+          error: permissionDeniedMessage(),
+          code: 'RECORD_DELETE_DENIED',
+          deniedIds: denied
+        });
+      }
+    }
+
+    if (records.length >= BULK_AUTO_THRESHOLD || req.query.bulk === 'true' || req.body?.bulk === true) {
+      const result = await runBulkIngest(object, 'delete', records, {
+        wait: req.body?.wait,
+        includeResults: req.body?.includeResults
+      });
+      records.forEach((record) => invalidateRecentRecordDetail(object, record.Id));
+      return res.json({ ...result, bulk: true });
+    }
+
+    const results = await Promise.allSettled(records.map((record) => sfDelete(`/sobjects/${object}/${record.Id}`)));
+    records.forEach((record) => invalidateRecentRecordDetail(object, record.Id));
+    res.json({
+      bulk: false,
+      success: results.every((item) => item.status === 'fulfilled'),
+      results: results.map((item, index) => ({
+        id: records[index].Id,
+        success: item.status === 'fulfilled',
+        error: item.status === 'rejected' ? formatSalesforceError(item.reason?.response?.data) || item.reason?.message : ''
+      }))
+    });
+  } catch (err) {
+    handleSFError(err, res, `DELETE ${object}`);
+  }
+});
+
+// Delete record
+app.delete('/api/:object/:id', checkAuth, async (req, res, next) => {
+  const obj = req.params.object;
+  if (OBJECTS[obj]) return checkPermission(obj, 'can_delete')(req, res, next);
+  next();
+}, async (req, res) => {
+  const { object, id } = req.params;
+  if (!OBJECTS[object]) return res.status(400).json({ error: `Unknown object: ${object}` });
+
+  try {
+    if (!isFullAccessUser(req.user)) {
+      const [record] = await hydrateRecordOwners([{ Id: id }], object);
+      const allowed = await canEditRecord(record, req.user.id, req.user.role, object, req.user.isSystemAdmin);
+      if (!allowed) {
+        return res.status(403).json({
+          error: permissionDeniedMessage(),
+          code: 'RECORD_DELETE_DENIED'
+        });
+      }
+    }
+
+    await sfDelete(`/sobjects/${object}/${id}`);
+    invalidateRecentRecordDetail(object, id);
+    res.json({ success: true });
+  } catch (err) {
+    handleSFError(err, res, `DELETE ${object}/${id}`);
+  }
+});
+
+// Global SOSL search
+app.get('/api/search/global', checkAuth, async (req, res) => {
+  const q = (req.query.q || '').trim();
+  if (!q) return res.json({ searchRecords: [] });
+
+  // Sanitize for SOSL — remove reserved chars
+  const safe = q.replace(/['"\\{}[\]()^~*:!?&|+]/g, ' ').trim().replace(/\s+/g, ' ');
+  if (!safe) return res.json({ searchRecords: [] });
+
+  const sosl = [
+    `FIND {${safe}*} IN ALL FIELDS`,
+    `RETURNING`,
+    `Account(Id, Name, Type),`,
+    `Contact(Id, Name, Email, Title),`,
+    `Opportunity(Id, Name, StageName, Amount),`,
+    `Case(Id, CaseNumber, Subject, Status),`,
+    `Lead(Id, Name, Email, Company),`,
+    `Campaign(Id, Name, Status, Type),`,
+    `Quote(Id, Name, QuoteNumber, Status),`,
+    `Product2(Id, Name, ProductCode, Family)`,
+    `LIMIT 40`
+  ].join(' ');
+
+  try {
+    const data = await sfGet('/search', { q: sosl });
+    const searchRecords = await filterSearchRecordsByVisibility(data.searchRecords || [], req);
+    res.json({ ...data, searchRecords });
+  } catch (err) {
+    handleSFError(err, res, 'Global search');
+  }
+});
+
+// Get picklist values for a field (helper for dropdowns)
+app.get('/api/meta/:object/picklist/:field', checkAuth, async (req, res) => {
+  const { object, field } = req.params;
+  try {
+    const data = await getObjectDescribe(object);
+    const fieldMeta = data.fields.find(f => f.name === field);
+    const values = fieldMeta?.picklistValues?.filter(p => p.active).map(p => p.value) || [];
+    res.json({ values });
+  } catch (err) {
+    res.json({ values: [] });
+  }
+});
+
+
+app.get('/admin', (req, res) => {
+  sendVersionedHtml(res, 'admin.html');
+});
+app.get('/admin.html', (req, res) => {
+  sendVersionedHtml(res, 'admin.html');
+});
+app.get('/admin/*', (req, res) => {
+  sendVersionedHtml(res, 'admin.html');
+});
+// Serve frontend for all unmatched routes
+app.use((req, res) => {
+  sendVersionedHtml(res, 'index.html');
+});
+
+// ─── Start ────────────────────────────────────────────────────
+async function warmStartup() {
+  try {
+    await ensurePrimaryCrmObjectsRegistered();
+    await getAccessToken();
+  } catch (e) {
+    console.error(`Auth failed: ${e.message}\n`);
+  }
+}
+
+function createApp() {
+  return app;
+}
+
+function startServer(port = PORT) {
+  return app.listen(port, async () => {
+    console.info(`SaaSRAY CRM server running at http://localhost:${port}`);
+    await warmStartup();
+  });
+}
+
+module.exports = {
+  app,
+  createApp,
+  startServer,
+  warmStartup
+};

@@ -15,7 +15,10 @@
     dedupedRequests: 0,
     networkRequests: 0,
     staleResponses: 0,
+    apiTimings: [],
+    renderTimings: [],
   };
+  let interactionVersion = 0;
 
   const isDev =
     location.hostname === "localhost" ||
@@ -26,6 +29,12 @@
   function log(...args) {
     if (debugEnabled) console.debug("[client-perf]", ...args);
   }
+
+  ["keydown", "pointerdown", "wheel", "touchstart", "scroll"].forEach((eventName) => {
+    window.addEventListener(eventName, () => {
+      interactionVersion += 1;
+    }, { passive: true });
+  });
 
   function idle(callback, options = {}) {
     if ("requestIdleCallback" in window) {
@@ -140,6 +149,14 @@
     metrics.networkRequests += 1;
     const startedAt = performance.now();
     const request = fetch(path, buildFetchOptions(options)).then(async (response) => {
+      const elapsed = Math.round(performance.now() - startedAt);
+      metrics.apiTimings.push({
+        path: normalizeKey(path),
+        status: response.status,
+        durationMs: elapsed,
+        transferSize: Number(response.headers.get("content-length") || 0),
+      });
+      if (metrics.apiTimings.length > 120) metrics.apiTimings.shift();
       const text = await response.text();
       let data = {};
       if (text) {
@@ -199,8 +216,14 @@
     const key = options.cacheKey || normalizeKey(path);
     const type = options.cacheType || (isMetadataPath(path) ? "metadata" : "resource");
     if (prefetched.has(`${type}:${key}`) || getCacheValue(key, type)) return;
-    prefetched.add(`${type}:${key}`);
+    const scheduledAtInteraction = interactionVersion;
     idle(() => {
+      if (scheduledAtInteraction !== interactionVersion) {
+        log("prefetch canceled after interaction", key);
+        return;
+      }
+      if (prefetched.has(`${type}:${key}`) || getCacheValue(key, type)) return;
+      prefetched.add(`${type}:${key}`);
       fetchJson(path, { ...options, cacheType: type }).catch((err) => {
         if (!err?.stale) log("prefetch skipped", key, err.message);
       });
@@ -216,6 +239,16 @@
 
   function markModuleInitialized(name) {
     initializedModules.add(name);
+  }
+
+  function recordRenderTiming(name, durationMs, metadata = {}) {
+    metrics.renderTimings.push({
+      name,
+      durationMs: Math.round(durationMs * 100) / 100,
+      metadata,
+      at: Date.now(),
+    });
+    if (metrics.renderTimings.length > 120) metrics.renderTimings.shift();
   }
 
   function isModuleInitialized(name) {
@@ -239,7 +272,50 @@
       metadataEntries: metadataCache.size,
       inFlightEntries: inFlight.size,
     }),
+    recordRenderTiming,
   };
+
+  if (isDev) {
+    window.getPerformanceStats = () => {
+      const resources = performance.getEntriesByType("resource");
+      const transferredBytes = resources.reduce((sum, entry) => sum + (entry.transferSize || 0), 0);
+      const decodedBytes = resources.reduce((sum, entry) => sum + (entry.decodedBodySize || 0), 0);
+      const encodedBytes = resources.reduce((sum, entry) => sum + (entry.encodedBodySize || 0), 0);
+      const apiTimings = metrics.apiTimings.slice(-25);
+      const renderTimings = metrics.renderTimings.slice(-25);
+      return {
+        cache: {
+          hits: metrics.cacheHits,
+          misses: metrics.cacheMisses,
+          dedupedRequests: metrics.dedupedRequests,
+          resourceEntries: resourceCache.size,
+          metadataEntries: metadataCache.size,
+          inFlightEntries: inFlight.size,
+        },
+        requests: {
+          networkRequests: metrics.networkRequests,
+          staleResponses: metrics.staleResponses,
+          transferredBytes,
+          encodedBytes,
+          decodedBytes,
+          compressionRatio: decodedBytes ? Number((encodedBytes / decodedBytes).toFixed(4)) : null,
+        },
+        timings: {
+          api: apiTimings,
+          render: renderTimings,
+          domContentLoadedMs: performance.timing ? performance.timing.domContentLoadedEventEnd - performance.timing.navigationStart : null,
+          loadMs: performance.timing ? performance.timing.loadEventEnd - performance.timing.navigationStart : null,
+        },
+        memory: performance.memory ? {
+          usedJSHeapSize: performance.memory.usedJSHeapSize,
+          totalJSHeapSize: performance.memory.totalJSHeapSize,
+          jsHeapSizeLimit: performance.memory.jsHeapSizeLimit,
+        } : null,
+        modules: Array.from(initializedModules),
+        generatedAt: new Date().toISOString(),
+      };
+    };
+  }
 
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", () => idle(() => lazyImages(document), { timeout: 1000 }), { once: true });
