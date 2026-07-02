@@ -204,8 +204,22 @@
           </svg>
           <span id="activeOrgLabel">Default Org</span>
         </button>
+        <button class="theme-toggle notification-bell" id="notificationBell" title="Notifications" aria-label="Open notifications"
+          onclick="toggleCommunicationDrawer()">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M18 8a6 6 0 10-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9"/>
+            <path d="M13.73 21a2 2 0 01-3.46 0"/>
+          </svg>
+          <span class="notification-dot" id="notificationUnreadDot" style="display:none"></span>
+        </button>
         <div class="profile-menu">
-          <button class="avatar" id="profileButton" onclick="toggleProfileMenu()">SF</button>
+          <button class="profile-trigger" id="profileButton" onclick="toggleProfileMenu()" aria-label="Open profile menu">
+            <span class="avatar" id="profileAvatarFace">SF</span>
+            <span class="profile-trigger-copy">
+              <strong id="profileTopName">Salesforce User</strong>
+              <small id="profileTopRole">Connected</small>
+            </span>
+          </button>
           <div class="profile-popover" id="profilePopover">
             <div class="profile-name" id="profileName">Salesforce User</div>
             <div class="profile-email" id="profileEmail">Connected</div>
@@ -337,6 +351,52 @@
       </div>
 
     </main>
+  </div>
+
+  <aside class="communication-drawer" id="communicationDrawer" aria-label="Notifications" aria-hidden="true">
+    <div class="communication-drawer-head">
+      <div>
+        <h2>Notifications</h2>
+        <p>Communication Center</p>
+      </div>
+      <button class="communication-close-btn" type="button" onclick="closeCommunicationDrawer()" aria-label="Close notifications">
+        <svg viewBox="0 0 20 20" aria-hidden="true">
+          <path d="M5 5l10 10M15 5 5 15"/>
+        </svg>
+      </button>
+    </div>
+    <div class="communication-tabs" role="tablist" aria-label="Notification filters">
+      <button class="active" type="button" onclick="setNotificationFilter('all')">All</button>
+      <button type="button" onclick="setNotificationFilter('unread')">Unread <span id="notificationUnreadCount">0</span></button>
+      <button type="button" onclick="setNotificationFilter('mentions')">Mentions</button>
+      <button type="button" onclick="setNotificationFilter('approval')">Approval</button>
+      <button type="button" onclick="setNotificationFilter('assignments')">Assignments</button>
+      <button type="button" onclick="setNotificationFilter('timeline')">Timeline</button>
+    </div>
+    <div class="communication-list" id="communicationNotificationList">
+      <div class="communication-empty">No notifications yet</div>
+    </div>
+  </aside>
+
+  <div class="communication-quick-rail" aria-label="Communication shortcuts">
+    <button class="communication-rail-btn" type="button" onclick="toggleWorkspacePanel()" aria-label="Open Workspace" title="Workspace">
+      <span aria-hidden="true">
+        <svg viewBox="0 0 24 24"><path d="M4 4h7v7H4V4Zm9 0h7v7h-7V4ZM4 13h7v7H4v-7Zm9 0h7v7h-7v-7Z"/></svg>
+      </span>
+      <small>Workspace</small>
+    </button>
+    <button class="communication-rail-btn" type="button" onclick="toggleCommunicationDrawer()" aria-label="Open notifications" title="Notifications">
+      <span aria-hidden="true">
+        <svg viewBox="0 0 24 24"><path d="M18 8a6 6 0 1 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9Z"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/></svg>
+      </span>
+      <small>Notifications</small>
+    </button>
+    <button class="communication-rail-btn" type="button" onclick="openCreate()" aria-label="Quick create" title="Quick Create">
+      <span aria-hidden="true">
+        <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
+      </span>
+      <small>Quick Create</small>
+    </button>
   </div>
 
   <div class="overlay" id="listViewOverlay" onclick="overlayClick(event, 'listViewOverlay', closeListViewModal)">

@@ -36,9 +36,19 @@ function avatarButtonContent(user, fallback = "U") {
 }
 
 function setTopbarAvatar(user, fallback = "U") {
-  const button = $("profileButton");
-  if (!button) return;
-  button.innerHTML = avatarButtonContent(user, fallback);
+  const face = $("profileAvatarFace") || $("profileButton");
+  if (face) face.innerHTML = avatarButtonContent(user, fallback);
+  const topName = $("profileTopName");
+  const topRole = $("profileTopRole");
+  if (topName) topName.textContent = user?.name || "Salesforce User";
+  if (topRole) topRole.textContent = profileRoleLabel(user);
+}
+
+function profileRoleLabel(user = {}) {
+  if (user?.isSystemAdmin || user?.profile?.is_system_admin || user?.profile?.isSystemAdmin) {
+    return "System Administrator";
+  }
+  return user?.profile?.name || user?.roleLabel || user?.role || user?.email || "Connected";
 }
 
 function readProfileImageFile(file) {
@@ -915,6 +925,8 @@ let supabaseAuthClient = null;
 let supabaseAuthClientPromise = null;
 let listViewDraft = null;
 let greetingAssetsPromise = null;
+let communicationNotifications = [];
+let communicationNotificationFilter = "all";
 
 // Token storage helpers
 function getAuthToken() {
@@ -2430,6 +2442,7 @@ async function completePortalLogin(data) {
   setStoredPerms(data.permissions || {});
   window.portalUser = data.user;
   renderCrmGreeting();
+  loadCommunicationNotifications().catch(() => {});
   const route = crmRouteFromLocation();
   currentObject = initialReadableObject();
   if (route?.view !== "record") writeCrmHistory(currentObject, true);
@@ -2606,6 +2619,217 @@ function renderCrmGreeting() {
   ensureGreetingAssets().then(() => {
     window.SaaSRAYGreeting?.render?.("crmGreetingMount", window.portalUser || {});
   }).catch(() => {});
+}
+
+function notificationTimeLabel(value) {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  const diff = Date.now() - date.getTime();
+  const minute = 60 * 1000;
+  const hour = 60 * minute;
+  const day = 24 * hour;
+  if (diff < minute) return "Just now";
+  if (diff < hour) return `${Math.floor(diff / minute)} min ago`;
+  if (diff < day) return `${Math.floor(diff / hour)} hour${Math.floor(diff / hour) === 1 ? "" : "s"} ago`;
+  return date.toLocaleDateString();
+}
+
+async function loadCommunicationNotifications() {
+  try {
+    const data = await api("/api/portal/notifications");
+    communicationNotifications = Array.isArray(data.notifications) ? data.notifications : [];
+  } catch {
+    communicationNotifications = [];
+  }
+  renderCommunicationNotifications();
+}
+
+function notificationMatchesFilter(item) {
+  if (communicationNotificationFilter === "unread") return item.unread;
+  if (communicationNotificationFilter === "mentions") return item.type === "mention";
+  if (communicationNotificationFilter === "approval") return item.type === "approval";
+  if (communicationNotificationFilter === "assignments") return item.type === "assignment";
+  if (communicationNotificationFilter === "timeline") return ["timeline", "activity"].includes(item.type);
+  return true;
+}
+
+function renderCommunicationNotifications() {
+  const list = $("communicationNotificationList");
+  if (!list) return;
+  const sourceNotifications = communicationNotifications.length ? communicationNotifications : defaultNotificationPreviewItems();
+  const unreadCount = sourceNotifications.filter((item) => item.unread).length;
+  const unreadBadge = $("notificationUnreadCount");
+  const unreadDot = $("notificationUnreadDot");
+  if (unreadBadge) unreadBadge.textContent = String(unreadCount);
+  if (unreadDot) unreadDot.style.display = unreadCount ? "" : "none";
+  const filtered = communicationNotifications.filter(notificationMatchesFilter);
+  if (!filtered.length) {
+    const previewItems = defaultNotificationPreviewItems().filter(notificationMatchesFilter);
+    if (!previewItems.length) {
+      list.innerHTML = '<div class="communication-empty">No notifications to show</div>';
+      return;
+    }
+    list.innerHTML = groupedNotifications(previewItems).map((group) => `
+      <section class="communication-notification-group" aria-label="${escapeHtml(group.label)}">
+        <h3>${escapeHtml(group.label)}</h3>
+        ${group.items.map((item) => communicationNotificationMarkup(item)).join("")}
+      </section>
+    `).join("") + '<button class="communication-view-all" type="button" onclick="setNotificationFilter(\'all\')">View All Notifications -></button>';
+    return;
+  }
+  list.innerHTML = groupedNotifications(filtered).map((group) => `
+    <section class="communication-notification-group" aria-label="${escapeHtml(group.label)}">
+      <h3>${escapeHtml(group.label)}</h3>
+      ${group.items.map((item) => communicationNotificationMarkup(item)).join("")}
+    </section>
+  `).join("") + '<button class="communication-view-all" type="button" onclick="setNotificationFilter(\'all\')">View All Notifications -></button>';
+  return;
+  list.innerHTML = filtered.map((item) => `
+    <button class="communication-notification" type="button" onclick="openCommunicationNotification('${escapeJs(item.relatedObject || "")}', '${escapeJs(item.relatedRecordId || "")}')">
+      <span class="communication-notification-icon">${escapeHtml(notificationIcon(item.type))}</span>
+      <span>
+        <strong>${escapeHtml(item.title)}</strong>
+        <span>${escapeHtml(item.subtitle || "")}</span>
+        <time>${escapeHtml(notificationTimeLabel(item.timestamp))}</time>
+      </span>
+      ${item.unread ? '<span class="communication-unread-dot"></span>' : '<span></span>'}
+    </button>
+  `).join("");
+}
+
+function communicationNotificationMarkup(item) {
+  return `
+    <button class="communication-notification" type="button" onclick="openCommunicationNotification('${escapeJs(item.relatedObject || "")}', '${escapeJs(item.relatedRecordId || "")}')">
+      <span class="communication-notification-icon communication-notification-${escapeHtml(item.type || "info")}">${notificationIconClean(item.type)}</span>
+      <span>
+        <strong>${escapeHtml(item.title)}</strong>
+        <span>${escapeHtml(item.subtitle || "")}</span>
+        <time>${escapeHtml(notificationTimeLabel(item.timestamp))}</time>
+      </span>
+      ${item.unread ? '<span class="communication-unread-dot"></span>' : '<span></span>'}
+    </button>
+  `;
+}
+
+function notificationIcon(type) {
+  return {
+    mention: "@",
+    approval: "✓",
+    assignment: "+",
+    alert: "!",
+    timeline: "•",
+    activity: "•"
+  }[type] || "i";
+}
+
+function notificationIconClean(type) {
+  return {
+    mention: '<svg viewBox="0 0 24 24"><path d="M16 8a5 5 0 1 0-2.2 4.1L16 15V8Z"/><path d="M19 15a8 8 0 1 1 1-3"/></svg>',
+    approval: '<svg viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"/></svg>',
+    assignment: '<svg viewBox="0 0 24 24"><path d="M9 6h11M9 12h11M9 18h11"/><path d="m4 6 .01 0M4 12l.01 0M4 18l.01 0"/></svg>',
+    alert: '<svg viewBox="0 0 24 24"><path d="M12 3 21 20H3L12 3Z"/><path d="M12 9v5"/><path d="M12 17h.01"/></svg>',
+    timeline: '<svg viewBox="0 0 24 24"><path d="M12 6v6l4 2"/><circle cx="12" cy="12" r="9"/></svg>',
+    activity: '<svg viewBox="0 0 24 24"><path d="M4 13h4l3-8 4 14 3-6h2"/></svg>'
+  }[type] || '<svg viewBox="0 0 24 24"><path d="M12 8h.01"/><path d="M11 12h1v5h1"/><circle cx="12" cy="12" r="9"/></svg>';
+}
+
+function groupedNotifications(items) {
+  const now = new Date();
+  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  const groups = [
+    { label: "Unread", items: [] },
+    { label: "Today", items: [] },
+    { label: "Earlier", items: [] }
+  ];
+  items.forEach((item) => {
+    if (item.unread) {
+      groups[0].items.push(item);
+      return;
+    }
+    const timestamp = new Date(item.timestamp || item.createdAt || 0).getTime();
+    if (timestamp >= startOfToday) groups[1].items.push(item);
+    else groups[2].items.push(item);
+  });
+  return groups.filter((group) => group.items.length);
+}
+
+function defaultNotificationPreviewItems() {
+  const now = Date.now();
+  return [
+    {
+      type: "assignment",
+      title: "New Task Assigned",
+      subtitle: "You have a new task assigned by John Doe.",
+      timestamp: new Date(now - 2 * 60 * 1000).toISOString(),
+      unread: true
+    },
+    {
+      type: "timeline",
+      title: "Opportunity Update",
+      subtitle: "Nimbus Expansion 4498 stage changed to Negotiation.",
+      timestamp: new Date(now - 15 * 60 * 1000).toISOString(),
+      unread: true
+    },
+    {
+      type: "alert",
+      title: "Case Escalated",
+      subtitle: "Case #CAS-10293 has been escalated.",
+      timestamp: new Date(now - 60 * 60 * 1000).toISOString(),
+      unread: true
+    },
+    {
+      type: "approval",
+      title: "Approval Request",
+      subtitle: "Request for Quote: Q-2026-001 requires your approval.",
+      timestamp: new Date(now - 2 * 60 * 60 * 1000).toISOString(),
+      unread: false
+    },
+    {
+      type: "mention",
+      title: "New Mention",
+      subtitle: "Priya Abebe mentioned you in a comment.",
+      timestamp: new Date(now - 24 * 60 * 60 * 1000).toISOString(),
+      unread: false
+    }
+  ];
+}
+
+function setNotificationFilter(filter) {
+  communicationNotificationFilter = filter || "all";
+  document.querySelectorAll(".communication-tabs button").forEach((btn) => {
+    btn.classList.toggle("active", btn.textContent.toLowerCase().startsWith(communicationNotificationFilter));
+  });
+  const allBtn = document.querySelector(".communication-tabs button");
+  if (communicationNotificationFilter === "all" && allBtn) allBtn.classList.add("active");
+  renderCommunicationNotifications();
+}
+
+function toggleCommunicationDrawer() {
+  const drawer = $("communicationDrawer");
+  if (!drawer) return;
+  const open = !drawer.classList.contains("open");
+  drawer.classList.toggle("open", open);
+  drawer.setAttribute("aria-hidden", open ? "false" : "true");
+  document.body.classList.toggle("communication-drawer-open", open);
+  document.querySelector('.communication-rail-btn[aria-label="Open notifications"]')?.classList.toggle("is-active", open);
+  if (open) loadCommunicationNotifications();
+}
+
+function closeCommunicationDrawer() {
+  const drawer = $("communicationDrawer");
+  if (!drawer) return;
+  drawer.classList.remove("open");
+  drawer.setAttribute("aria-hidden", "true");
+  document.body.classList.remove("communication-drawer-open");
+  document.querySelector('.communication-rail-btn[aria-label="Open notifications"]')?.classList.remove("is-active");
+}
+
+function openCommunicationNotification(objectName, recordId) {
+  if (objectName && recordId && OBJECT_META[objectName]) {
+    closeCommunicationDrawer();
+    openRecordDetail(objectName, recordId);
+  }
 }
 
 function ensureGreetingAssets() {
@@ -10330,6 +10554,7 @@ function handleWorkspaceKeydown(event) {
     return;
   }
   if (event.key === "Escape") {
+    closeCommunicationDrawer();
     if (workspaceState.panelOpen) {
       workspaceState.panelOpen = false;
       localStorage.setItem("saasray_workspace_panel_collapsed", "1");

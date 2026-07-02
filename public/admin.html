@@ -2238,7 +2238,7 @@
         <path d="M4 15V9a2 2 0 0 1 2-2h3l5-3v16l-5-3H6a2 2 0 0 1-2-2z" />
         <path d="M18 9a3 3 0 0 1 0 6" />
       </svg>
-      System Announcements
+      Communication Center
     </button>
     <button class="nav-item" onclick="showPanel('audit')">
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -2508,7 +2508,7 @@
       <div class="panel" id="panel-announcements">
         <div class="page-header">
           <div>
-            <h1>System Announcements</h1>
+            <h1>Communication Center</h1>
             <p>Manage permanent greetings separately from temporary administrator announcements</p>
           </div>
         </div>
@@ -2575,6 +2575,68 @@
                 </thead>
                 <tbody id="announcementsBody">
                   <tr><td colspan="7"><div class="spinner"></div></td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+        <div class="card" style="margin-top:20px">
+          <div class="toolbar">
+            <div>
+              <div style="font-weight:800;color:var(--text-primary)">What's New</div>
+              <div style="font-size:13px;color:var(--text-secondary);margin-top:3px">Product capability updates and CRM release communication.</div>
+            </div>
+            <div class="toolbar-right">
+              <button class="btn btn-ghost btn-sm" onclick="loadWhatsNew()">Refresh</button>
+              <button class="btn btn-primary btn-sm" onclick="openCommunicationModal('whatsNew')">New</button>
+            </div>
+          </div>
+          <div class="card-body">
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Title</th>
+                    <th>Enabled</th>
+                    <th>Priority</th>
+                    <th>Start</th>
+                    <th>End</th>
+                    <th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody id="whatsNewBody">
+                  <tr><td colspan="6"><div class="spinner"></div></td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+        <div class="card" style="margin-top:20px">
+          <div class="toolbar">
+            <div>
+              <div style="font-weight:800;color:var(--text-primary)">Important Alerts</div>
+              <div style="font-size:13px;color:var(--text-secondary);margin-top:3px">Highest-priority operational, security, and system communications.</div>
+            </div>
+            <div class="toolbar-right">
+              <button class="btn btn-ghost btn-sm" onclick="loadAlerts()">Refresh</button>
+              <button class="btn btn-primary btn-sm" onclick="openCommunicationModal('alerts')">New</button>
+            </div>
+          </div>
+          <div class="card-body">
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Title</th>
+                    <th>Enabled</th>
+                    <th>Priority</th>
+                    <th>Start</th>
+                    <th>End</th>
+                    <th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody id="alertsBody">
+                  <tr><td colspan="6"><div class="spinner"></div></td></tr>
                 </tbody>
               </table>
             </div>
@@ -3436,7 +3498,10 @@
     let confirmLoadingLabel = 'Working...';
     let greetingAssetsPromise = null;
     let allAnnouncements = [];
+    let allWhatsNew = [];
+    let allAlerts = [];
     let editingAnnouncementId = null;
+    let editingCommunicationKind = 'announcements';
     let allGreetings = [];
     let editingGreetingPeriod = null;
 
@@ -3954,13 +4019,94 @@
       `).join('');
     }
 
+    function communicationEndpoint(kind) {
+      return kind === 'whatsNew' ? '/api/portal/admin/whats-new'
+        : kind === 'alerts' ? '/api/portal/admin/alerts'
+        : '/api/portal/admin/announcements';
+    }
+
+    function communicationCollection(kind) {
+      if (kind === 'whatsNew') return allWhatsNew;
+      if (kind === 'alerts') return allAlerts;
+      return allAnnouncements;
+    }
+
+    function setCommunicationCollection(kind, items) {
+      if (kind === 'whatsNew') allWhatsNew = items;
+      else if (kind === 'alerts') allAlerts = items;
+      else allAnnouncements = items;
+    }
+
+    async function loadCommunicationItems(kind, bodyId) {
+      const tbody = $(bodyId);
+      if (tbody) tbody.innerHTML = '<tr><td colspan="6"><div class="spinner"></div></td></tr>';
+      try {
+        const data = await api(communicationEndpoint(kind));
+        const items = Array.isArray(data.items) ? data.items : (Array.isArray(data.announcements) ? data.announcements : []);
+        setCommunicationCollection(kind, items);
+        renderCommunicationItems(kind, bodyId);
+      } catch (err) {
+        if (tbody) tbody.innerHTML = `<tr><td colspan="6" style="color:var(--danger)">Failed to load: ${esc(err.message)}</td></tr>`;
+      }
+    }
+
+    function renderCommunicationItems(kind, bodyId) {
+      const tbody = $(bodyId);
+      if (!tbody) return;
+      const items = communicationCollection(kind);
+      if (!items.length) {
+        tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--text-muted);padding:26px">No records yet.</td></tr>';
+        return;
+      }
+      tbody.innerHTML = items.map((item) => `
+        <tr>
+          <td>
+            <strong>${esc(item.title)}</strong>
+            ${item.subtitle ? `<div style="font-size:12px;color:var(--text-muted);margin-top:3px">${esc(item.subtitle)}</div>` : ''}
+          </td>
+          <td><span class="badge ${item.enabled ? 'success' : ''}">${item.enabled ? 'Enabled' : 'Disabled'}</span></td>
+          <td>${esc(item.priority)}</td>
+          <td>${esc(formatAnnouncementDate(item.startDate))}</td>
+          <td>${esc(formatAnnouncementDate(item.endDate))}</td>
+          <td>
+            <div class="action-buttons">
+              <button class="icon-btn" title="Edit" onclick="openCommunicationModal('${esc(kind)}','${esc(item.id)}')">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z"/></svg>
+              </button>
+              <button class="icon-btn" title="${item.enabled ? 'Disable' : 'Enable'}" onclick="toggleCommunicationItem('${esc(kind)}','${esc(item.id)}')">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v10"/><path d="M18.36 6.64a9 9 0 1 1-12.72 0"/></svg>
+              </button>
+              <button class="icon-btn danger" title="Delete" onclick="deleteCommunicationItem('${esc(kind)}','${esc(item.id)}')">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/></svg>
+              </button>
+            </div>
+          </td>
+        </tr>
+      `).join('');
+    }
+
+    function loadWhatsNew() {
+      return loadCommunicationItems('whatsNew', 'whatsNewBody');
+    }
+
+    function loadAlerts() {
+      return loadCommunicationItems('alerts', 'alertsBody');
+    }
+
+    function openCommunicationModal(kind, id = null) {
+      editingCommunicationKind = kind || 'announcements';
+      openAnnouncementModal(id);
+    }
+
     function openAnnouncementModal(id = null) {
+      editingCommunicationKind = editingCommunicationKind || 'announcements';
       editingAnnouncementId = id;
-      const item = id ? allAnnouncements.find((announcement) => announcement.id === id) : null;
-      $('announcementModalTitle').textContent = item ? 'Edit Announcement' : 'New Announcement';
+      const item = id ? communicationCollection(editingCommunicationKind).find((announcement) => announcement.id === id) : null;
+      const label = editingCommunicationKind === 'whatsNew' ? "What's New" : editingCommunicationKind === 'alerts' ? 'Important Alert' : 'Announcement';
+      $('announcementModalTitle').textContent = item ? `Edit ${label}` : `New ${label}`;
       $('ann-title').value = item?.title || '';
       $('ann-subtitle').value = item?.subtitle || '';
-      $('ann-type').value = item?.type || 'general';
+      $('ann-type').value = editingCommunicationKind === 'whatsNew' ? 'release' : editingCommunicationKind === 'alerts' ? 'warning' : (item?.type || 'general');
       $('ann-priority').value = item?.priority ?? 1;
       $('ann-enabled').checked = item ? Boolean(item.enabled) : true;
       $('ann-start').value = toDateTimeLocal(item?.startDate);
@@ -3972,6 +4118,7 @@
     function closeAnnouncementModal() {
       $('announcementModal')?.classList.remove('open');
       editingAnnouncementId = null;
+      editingCommunicationKind = 'announcements';
     }
 
     async function saveAnnouncement() {
@@ -3987,17 +4134,16 @@
         saveBtn.innerHTML = '<span class="spinner sm"></span> Saving...';
       }
       try {
-        const path = editingAnnouncementId
-          ? `/api/portal/admin/announcements/${editingAnnouncementId}`
-          : '/api/portal/admin/announcements';
+        const endpoint = communicationEndpoint(editingCommunicationKind);
+        const path = editingAnnouncementId ? `${endpoint}/${editingAnnouncementId}` : endpoint;
         await api(path, {
           method: editingAnnouncementId ? 'PATCH' : 'POST',
           body: JSON.stringify(payload)
         });
         closeAnnouncementModal();
-        await loadAnnouncements();
+        await Promise.all([loadAnnouncements(), loadWhatsNew(), loadAlerts()]);
         await refreshAdminGreetingBanner();
-        toast('Announcement saved', 'success');
+        toast('Communication saved', 'success');
       } catch (err) {
         toast(err.message || 'Failed to save announcement', 'error');
       } finally {
@@ -4023,6 +4169,41 @@
       }
     }
 
+    async function toggleCommunicationItem(kind, id) {
+      const item = communicationCollection(kind).find((entry) => entry.id === id);
+      if (!item) return;
+      try {
+        await api(`${communicationEndpoint(kind)}/${id}`, {
+          method: 'PATCH',
+          body: JSON.stringify(payloadFromAnnouncement(item, { enabled: !item.enabled }))
+        });
+        if (kind === 'whatsNew') await loadWhatsNew();
+        else if (kind === 'alerts') await loadAlerts();
+        else await loadAnnouncements();
+        await refreshAdminGreetingBanner();
+      } catch (err) {
+        toast(err.message || 'Failed to update communication', 'error');
+      }
+    }
+
+    async function deleteCommunicationItem(kind, id) {
+      const item = communicationCollection(kind).find((entry) => entry.id === id);
+      if (!item) return;
+      openConfirm(
+        'Delete communication?',
+        `Delete "${item.title}"? This cannot be undone.`,
+        async () => {
+          await api(`${communicationEndpoint(kind)}/${id}`, { method: 'DELETE' });
+          if (kind === 'whatsNew') await loadWhatsNew();
+          else if (kind === 'alerts') await loadAlerts();
+          else await loadAnnouncements();
+          await refreshAdminGreetingBanner();
+          toast('Communication deleted', 'success');
+        },
+        'Delete'
+      );
+    }
+
     async function deleteAnnouncement(id) {
       const item = allAnnouncements.find((announcement) => announcement.id === id);
       if (!item) return;
@@ -4042,7 +4223,7 @@
     const PANEL_TITLES = {
       users: 'User Management', profiles: 'Profiles',
       permsets: 'Permission Sets', audit: 'Audit Log',
-      announcements: 'System Announcements',
+      announcements: 'Communication Center',
       fieldsecurity: 'Field Security', owd: 'Org-Wide Defaults',
       sharing: 'Sharing Rules', psggroups: 'Permission Set Groups',
       orgroles: 'Role Hierarchy',
@@ -4115,7 +4296,7 @@
       loadedPanels.add(name);
       try {
         if (name === 'audit') await loadAuditLog();
-        if (name === 'announcements') await Promise.all([loadGreetings(), loadAnnouncements()]);
+        if (name === 'announcements') await Promise.all([loadGreetings(), loadAnnouncements(), loadWhatsNew(), loadAlerts()]);
         if (name === 'fieldsecurity') await initFieldSecurity();
         if (name === 'owd') await loadOWD();
         if (name === 'sharing') await loadSharingRules();

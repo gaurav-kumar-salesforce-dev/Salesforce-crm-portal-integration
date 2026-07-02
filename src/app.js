@@ -55,6 +55,7 @@ const {
 const { createCompositeClient } = require('./salesforce/composite.client');
 const { createAuthMiddleware } = require('./middleware/auth.middleware');
 const { createFieldSecurityService } = require('./services/field-security.service');
+const { createCommunicationService } = require('./services/communication.service');
 const {
   RESERVED_API_OBJECT_NAMES,
   requireAdminPanel,
@@ -71,6 +72,7 @@ const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '8h';
 
 const { Resend } = require('resend');
 const resend = new Resend(process.env.RESEND_API_KEY);
+const communicationService = createCommunicationService({ supabase });
 
 const INVITATION_TOKEN_TYPE = 'user_invitation';
 const PASSWORD_RESET_TOKEN_TYPE = 'password_reset';
@@ -5461,10 +5463,14 @@ async function getActiveAnnouncement() {
 
 app.get('/api/portal/announcement/active', checkAuth, async (req, res) => {
   try {
-    const announcement = await getActiveAnnouncement();
+    const state = await communicationService.resolveBanner();
+    const announcement = state.banner ? {
+      ...state.banner,
+      type: state.banner.type === 'alert' ? 'security' : state.banner.type
+    } : null;
     res.json({
       announcement,
-      greetingConfig: announcement ? {} : await getGreetingConfig()
+      greetingConfig: announcement ? {} : state.greetingConfig
     });
   } catch (err) {
     console.error('GET /api/portal/announcement/active error:', err.message);
@@ -5472,15 +5478,27 @@ app.get('/api/portal/announcement/active', checkAuth, async (req, res) => {
   }
 });
 
+app.get('/api/portal/communication/banner', checkAuth, async (req, res) => {
+  try {
+    res.json(await communicationService.resolveBanner());
+  } catch (err) {
+    console.error('GET /api/portal/communication/banner error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/portal/notifications', checkAuth, async (req, res) => {
+  try {
+    res.json({ notifications: await communicationService.getNotifications(req.user?.id) });
+  } catch (err) {
+    console.error('GET /api/portal/notifications error:', err.message);
+    res.json({ notifications: [] });
+  }
+});
+
 app.get('/api/portal/admin/announcements', checkAuth, checkRole('system_administrator'), async (req, res) => {
   try {
-    const { data, error } = await supabase
-      .from('portal_announcements')
-      .select('*')
-      .order('priority', { ascending: false })
-      .order('updated_at', { ascending: false });
-    if (error) throw error;
-    res.json({ announcements: (data || []).map(normalizeAnnouncement) });
+    res.json({ announcements: await communicationService.listItems('announcements') });
   } catch (err) {
     console.error('GET /api/portal/admin/announcements error:', err.message);
     res.status(500).json({ error: err.message });
@@ -5489,17 +5507,7 @@ app.get('/api/portal/admin/announcements', checkAuth, checkRole('system_administ
 
 app.get('/api/portal/admin/greetings', checkAuth, checkRole('system_administrator'), async (req, res) => {
   try {
-    const { data, error } = await supabase
-      .from('portal_greeting_config')
-      .select('*')
-      .in('period', GREETING_PERIODS);
-    if (error) throw error;
-    const order = new Map(GREETING_PERIODS.map((period, index) => [period, index]));
-    const greetings = (data || [])
-      .map(normalizeGreetingConfig)
-      .filter(Boolean)
-      .sort((a, b) => (order.get(a.period) ?? 99) - (order.get(b.period) ?? 99));
-    res.json({ greetings });
+    res.json({ greetings: await communicationService.getGreetings() });
   } catch (err) {
     console.error('GET /api/portal/admin/greetings error:', err.message);
     res.status(500).json({ error: err.message });
@@ -5508,63 +5516,111 @@ app.get('/api/portal/admin/greetings', checkAuth, checkRole('system_administrato
 
 app.patch('/api/portal/admin/greetings/:period', checkAuth, checkRole('system_administrator'), async (req, res) => {
   try {
-    const period = GREETING_PERIODS.find((item) => item.toLowerCase() === String(req.params.period || '').toLowerCase());
-    if (!period) return res.status(400).json({ error: 'Invalid greeting period' });
-    const payload = greetingConfigPayloadFromBody(req.body);
-    if (!payload.title) return res.status(400).json({ error: 'Title is required' });
-    if (!payload.subtitle) return res.status(400).json({ error: 'Subtitle is required' });
-    const { data, error } = await supabase
-      .from('portal_greeting_config')
-      .update(payload)
-      .eq('period', period)
-      .select('*')
-      .single();
-    if (error) throw error;
-    invalidateGreetingConfigCache();
-    res.json({ greeting: normalizeGreetingConfig(data) });
+    res.json({ greeting: await communicationService.updateGreeting(req.params.period, req.body) });
   } catch (err) {
     console.error('PATCH /api/portal/admin/greetings/:period error:', err.message);
-    res.status(500).json({ error: err.message });
+    res.status(err.status || 500).json({ error: err.message });
   }
 });
 
 app.post('/api/portal/admin/announcements', checkAuth, checkRole('system_administrator'), async (req, res) => {
   try {
-    const payload = announcementPayloadFromBody(req.body, req.user?.id);
-    if (!payload.title) return res.status(400).json({ error: 'Title is required' });
-    const { data, error } = await supabase.from('portal_announcements').insert(payload).select('*').single();
-    if (error) throw error;
-    invalidateAnnouncementCache();
-    res.json({ announcement: normalizeAnnouncement(data) });
+    res.json({ announcement: await communicationService.createItem('announcements', req.body, req.user?.id) });
   } catch (err) {
     console.error('POST /api/portal/admin/announcements error:', err.message);
-    res.status(500).json({ error: err.message });
+    res.status(err.status || 500).json({ error: err.message });
   }
 });
 
 app.patch('/api/portal/admin/announcements/:id', checkAuth, checkRole('system_administrator'), async (req, res) => {
   try {
-    const payload = announcementPayloadFromBody(req.body);
-    delete payload.created_by;
-    if (!payload.title) return res.status(400).json({ error: 'Title is required' });
-    const { data, error } = await supabase.from('portal_announcements').update(payload).eq('id', req.params.id).select('*').single();
-    if (error) throw error;
-    invalidateAnnouncementCache();
-    res.json({ announcement: normalizeAnnouncement(data) });
+    res.json({ announcement: await communicationService.updateItem('announcements', req.params.id, req.body) });
   } catch (err) {
     console.error('PATCH /api/portal/admin/announcements/:id error:', err.message);
-    res.status(500).json({ error: err.message });
+    res.status(err.status || 500).json({ error: err.message });
   }
 });
 
 app.delete('/api/portal/admin/announcements/:id', checkAuth, checkRole('system_administrator'), async (req, res) => {
   try {
-    const { error } = await supabase.from('portal_announcements').delete().eq('id', req.params.id);
-    if (error) throw error;
-    invalidateAnnouncementCache();
+    await communicationService.deleteItem('announcements', req.params.id);
     res.json({ success: true });
   } catch (err) {
     console.error('DELETE /api/portal/admin/announcements/:id error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/portal/admin/whats-new', checkAuth, checkRole('system_administrator'), async (req, res) => {
+  try {
+    res.json({ items: await communicationService.listItems('whatsNew') });
+  } catch (err) {
+    console.error('GET /api/portal/admin/whats-new error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/portal/admin/whats-new', checkAuth, checkRole('system_administrator'), async (req, res) => {
+  try {
+    res.json({ item: await communicationService.createItem('whatsNew', req.body, req.user?.id) });
+  } catch (err) {
+    console.error('POST /api/portal/admin/whats-new error:', err.message);
+    res.status(err.status || 500).json({ error: err.message });
+  }
+});
+
+app.patch('/api/portal/admin/whats-new/:id', checkAuth, checkRole('system_administrator'), async (req, res) => {
+  try {
+    res.json({ item: await communicationService.updateItem('whatsNew', req.params.id, req.body) });
+  } catch (err) {
+    console.error('PATCH /api/portal/admin/whats-new/:id error:', err.message);
+    res.status(err.status || 500).json({ error: err.message });
+  }
+});
+
+app.delete('/api/portal/admin/whats-new/:id', checkAuth, checkRole('system_administrator'), async (req, res) => {
+  try {
+    await communicationService.deleteItem('whatsNew', req.params.id);
+    res.json({ success: true });
+  } catch (err) {
+    console.error('DELETE /api/portal/admin/whats-new/:id error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/portal/admin/alerts', checkAuth, checkRole('system_administrator'), async (req, res) => {
+  try {
+    res.json({ items: await communicationService.listItems('alerts') });
+  } catch (err) {
+    console.error('GET /api/portal/admin/alerts error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/portal/admin/alerts', checkAuth, checkRole('system_administrator'), async (req, res) => {
+  try {
+    res.json({ item: await communicationService.createItem('alerts', req.body, req.user?.id) });
+  } catch (err) {
+    console.error('POST /api/portal/admin/alerts error:', err.message);
+    res.status(err.status || 500).json({ error: err.message });
+  }
+});
+
+app.patch('/api/portal/admin/alerts/:id', checkAuth, checkRole('system_administrator'), async (req, res) => {
+  try {
+    res.json({ item: await communicationService.updateItem('alerts', req.params.id, req.body) });
+  } catch (err) {
+    console.error('PATCH /api/portal/admin/alerts/:id error:', err.message);
+    res.status(err.status || 500).json({ error: err.message });
+  }
+});
+
+app.delete('/api/portal/admin/alerts/:id', checkAuth, checkRole('system_administrator'), async (req, res) => {
+  try {
+    await communicationService.deleteItem('alerts', req.params.id);
+    res.json({ success: true });
+  } catch (err) {
+    console.error('DELETE /api/portal/admin/alerts/:id error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
